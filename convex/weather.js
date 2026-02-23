@@ -1,3 +1,4 @@
+//convex/weather.js
 import {
   actionGeneric,
   internalMutationGeneric,
@@ -11,6 +12,8 @@ const COMPARISON_DAY_START_MINUTE = 51;
 const MILLIS_IN_DAY = 24 * 60 * 60 * 1000;
 const RETRY_DELAYS_MS = [1000, 3000, 10000];
 const OBS_INSERT_CHUNK_SIZE = 400;
+const NOAA_LATEST_METAR_BASE_URL =
+  "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
 const METAR_MODE = {
   OFFICIAL: "official",
   ALL: "all",
@@ -252,11 +255,79 @@ function extractTempInfo(rawMetar, tmpfField) {
   return null;
 }
 
+function getSourcePriority(source) {
+  if (!source || typeof source !== "string") {
+    return -1;
+  }
+  const pieces = source.split(":");
+  const key = pieces[pieces.length - 1];
+  return SOURCE_PRIORITY[key] ?? -1;
+}
+
 function isHighFrequencyGeneratedMetar(rawMetar) {
   if (!rawMetar) {
     return false;
   }
   return rawMetar.toUpperCase().includes("MADISHF");
+}
+
+function parseNoaaLatestTxt(rawText) {
+  const cleaned = String(rawText ?? "")
+    .replace(/\r/g, "")
+    .trim();
+  if (!cleaned) {
+    throw new Error("NOAA latest response was empty.");
+  }
+
+  const lines = cleaned
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let timestampLine = "";
+  let metarLine = "";
+
+  if (lines.length >= 2) {
+    timestampLine = lines[0];
+    metarLine = lines.slice(1).join(" ").trim();
+  } else {
+    const oneLineMatch = cleaned.match(
+      /^(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2})\s+(.+)$/,
+    );
+    if (!oneLineMatch) {
+      throw new Error(`Unexpected NOAA format: ${cleaned.slice(0, 120)}`);
+    }
+    timestampLine = oneLineMatch[1];
+    metarLine = oneLineMatch[2].trim();
+  }
+
+  const stampMatch = timestampLine.match(
+    /^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})$/,
+  );
+  if (!stampMatch) {
+    throw new Error(`Unexpected NOAA timestamp format: ${timestampLine}`);
+  }
+  if (!metarLine) {
+    throw new Error("NOAA latest response did not include a METAR line.");
+  }
+
+  const tsUtc = Date.UTC(
+    Number(stampMatch[1]),
+    Number(stampMatch[2]) - 1,
+    Number(stampMatch[3]),
+    Number(stampMatch[4]),
+    Number(stampMatch[5]),
+    0,
+    0,
+  );
+
+  return {
+    tsUtc,
+    rawMetar: metarLine,
+  };
+}
+
+function chicagoTodayDateKey() {
+  return formatChicagoDate(Date.now());
 }
 
 function parseCsv(csvText) {
@@ -443,8 +514,8 @@ function computeDailyMetarMax(observations, year, month, mode) {
 
     existing.metarObsCount += 1;
 
-    const existingPriority = SOURCE_PRIORITY[existing.metarMaxSource] ?? -1;
-    const candidatePriority = SOURCE_PRIORITY[tempInfo.source] ?? -1;
+    const existingPriority = getSourcePriority(existing.metarMaxSource);
+    const candidatePriority = getSourcePriority(tempInfo.source);
     const shouldReplace =
       tempC > existing.metarMaxC ||
       (tempC === existing.metarMaxC &&
@@ -572,6 +643,256 @@ function splitIntoChunks(values, chunkSize) {
   }
   return chunks;
 }
+
+export const upsertOfficialObservation = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+    tsUtc: v.number(),
+    tsLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    rawMetar: v.string(),
+    source: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!parseDateKey(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+
+    const tempC = roundToTenth(args.tempC);
+    const tempF = roundToTenth(args.tempF);
+    const now = Date.now();
+
+    const existing = await ctx.db
+      .query("metarObservations")
+      .withIndex("by_station_mode_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("mode", METAR_MODE.OFFICIAL)
+          .eq("date", args.date)
+          .eq("tsUtc", args.tsUtc),
+      )
+      .first();
+
+    if (existing) {
+      return { inserted: false };
+    }
+
+    await ctx.db.insert("metarObservations", {
+      stationIcao: args.stationIcao,
+      mode: METAR_MODE.OFFICIAL,
+      date: args.date,
+      tsUtc: args.tsUtc,
+      tsLocal: args.tsLocal,
+      tempC,
+      tempF,
+      rawMetar: args.rawMetar,
+      source: args.source,
+      updatedAt: now,
+    });
+
+    const existingComparison = await findDailyComparison(
+      ctx,
+      args.stationIcao,
+      args.date,
+    );
+    let comparison = existingComparison;
+    if (!comparison) {
+      const comparisonId = await ctx.db.insert("dailyComparisons", {
+        stationIcao: args.stationIcao,
+        date: args.date,
+        updatedAt: now,
+      });
+      comparison = await ctx.db.get(comparisonId);
+    }
+
+    if (!comparison) {
+      throw new Error("Failed to load daily comparison after insertion.");
+    }
+
+    const patch = {
+      metarObsCount: (comparison.metarObsCount ?? 0) + 1,
+      updatedAt: now,
+    };
+
+    const shouldReplaceMax =
+      comparison.metarMaxC === undefined ||
+      comparison.metarMaxC === null ||
+      tempC > comparison.metarMaxC ||
+      (tempC === comparison.metarMaxC &&
+        getSourcePriority(args.source) >
+          getSourcePriority(comparison.metarMaxSource));
+
+    if (shouldReplaceMax) {
+      patch.metarMaxC = tempC;
+      patch.metarMaxF = tempF;
+      patch.metarMaxAtUtc = args.tsUtc;
+      patch.metarMaxAtLocal = args.tsLocal;
+      patch.metarMaxRaw = args.rawMetar;
+      patch.metarMaxSource = args.source;
+
+      if (comparison.manualMaxC !== undefined && comparison.manualMaxC !== null) {
+        patch.deltaC = roundToTenth(comparison.manualMaxC - tempC);
+      }
+      if (comparison.manualMaxF !== undefined && comparison.manualMaxF !== null) {
+        patch.deltaF = roundToTenth(comparison.manualMaxF - tempF);
+      }
+    }
+
+    await ctx.db.patch(comparison._id, patch);
+
+    return { inserted: true };
+  },
+});
+
+export const pollLatestNoaaMetar = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao.trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const url = `${NOAA_LATEST_METAR_BASE_URL}/${stationIcao}.TXT`;
+    const response = await fetch(url, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+    });
+    if (!response.ok) {
+      throw new Error(`NOAA latest fetch failed (${response.status}).`);
+    }
+
+    const body = await response.text();
+    const { tsUtc, rawMetar } = parseNoaaLatestTxt(body);
+
+    if (isHighFrequencyGeneratedMetar(rawMetar)) {
+      return {
+        ok: false,
+        reason: "high_frequency_generated",
+        dateKey: formatChicagoDate(tsUtc),
+        tsUtc,
+      };
+    }
+
+    const tempInfo = extractTempInfo(rawMetar, undefined);
+    if (!tempInfo) {
+      return {
+        ok: false,
+        reason: "no_temp_in_metar",
+        dateKey: formatChicagoDate(tsUtc),
+        tsUtc,
+      };
+    }
+
+    const dateKey = formatChicagoDate(tsUtc);
+    const tempC = roundToTenth(tempInfo.tempC);
+    const tempF = toFahrenheit(tempC);
+    const tsLocal = formatChicagoDateTime(tsUtc);
+
+    const result = await ctx.runMutation("weather:upsertOfficialObservation", {
+      stationIcao,
+      date: dateKey,
+      tsUtc,
+      tsLocal,
+      tempC,
+      tempF,
+      rawMetar,
+      source: `noaa_latest:${tempInfo.source}`,
+    });
+
+    return {
+      ok: true,
+      inserted: result.inserted,
+      dateKey,
+      tsUtc,
+      tsLocal,
+      tempC,
+      tempF,
+    };
+  },
+});
+
+export const backfillTodayOfficialFromIem = actionGeneric({
+  args: {
+    stationIem: v.string(),
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIem = args.stationIem.trim().toUpperCase();
+    const stationIcao = args.stationIcao.trim().toUpperCase();
+    if (!stationIem || !stationIcao) {
+      throw new Error("stationIem and stationIcao are required.");
+    }
+
+    const params = new URLSearchParams();
+    params.set("station", stationIem);
+    params.append("report_type", "3");
+    params.append("report_type", "4");
+    params.append("data", "metar");
+    params.set("tz", "UTC");
+    params.set("format", "onlycomma");
+    params.set("hours", "24");
+
+    const csvText = await fetchCsvWithRetry(
+      `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?${params.toString()}`,
+    );
+    const observations = parseCsvObservations(csvText);
+    const todayKey = chicagoTodayDateKey();
+    let insertedCount = 0;
+    let consideredCount = 0;
+
+    for (const observation of observations) {
+      const utcEpoch = parseValidUtcEpoch(observation.valid);
+      if (utcEpoch === null) {
+        continue;
+      }
+
+      const dateKey = formatChicagoDate(utcEpoch);
+      if (dateKey !== todayKey) {
+        continue;
+      }
+
+      const rawMetar = observation.metar ?? "";
+      if (isHighFrequencyGeneratedMetar(rawMetar)) {
+        continue;
+      }
+
+      const tempInfo = extractTempInfo(rawMetar, undefined);
+      if (!tempInfo) {
+        continue;
+      }
+
+      consideredCount += 1;
+      const tempC = roundToTenth(tempInfo.tempC);
+      const tempF = toFahrenheit(tempC);
+      const result = await ctx.runMutation("weather:upsertOfficialObservation", {
+        stationIcao,
+        date: dateKey,
+        tsUtc: utcEpoch,
+        tsLocal: formatChicagoDateTime(utcEpoch),
+        tempC,
+        tempF,
+        rawMetar,
+        source: `iem_backfill:${tempInfo.source}`,
+      });
+
+      if (result.inserted) {
+        insertedCount += 1;
+      }
+    }
+
+    return {
+      ok: true,
+      dateKey: todayKey,
+      downloadedRows: observations.length,
+      consideredCount,
+      insertedCount,
+    };
+  },
+});
 
 export const getMonthComparison = queryGeneric({
   args: monthArgsValidator,

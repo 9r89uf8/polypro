@@ -1,3 +1,4 @@
+//convex/notes.js
 import { mutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 

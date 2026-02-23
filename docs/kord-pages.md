@@ -1,6 +1,15 @@
 # KORD Pages
 
-This document describes what the two KORD routes display and how they are intended to be used.
+This document describes what the KORD routes display and how they are intended to be used.
+
+## `/kord/today`
+
+Purpose: stable entrypoint for the live-today view.
+
+What this route does:
+
+- Server-side redirect to `/kord/day/[date]` where `[date]` is the current Chicago date (`America/Chicago`) in `YYYY-MM-DD`.
+- Avoids client-side date flicker and gives one bookmarkable URL for "today".
 
 ## `/kord/month`
 
@@ -40,26 +49,37 @@ Purpose: day-level diagnostics for observation-by-observation review.
 What this page displays:
 
 - Header with date and `Back to Month`.
+- If viewing today (Chicago date), a live badge (`Live polling every 3 minutes`) and `Refresh now` button.
 - Unit toggle (`C` / `F`) for day-level display.
 - Summary cards:
   - `Manual / WU Max`
   - `Official Max` (+ obs count)
-  - `All Max` (+ obs count)
+  - `All Max` (+ obs count) on non-today dates.
 - Line chart:
-  - Official observation temperature line.
-  - All observation temperature line.
+  - Today route date: official-only line (normal METAR/SPECI ingest).
+  - Non-today dates: official + all lines.
   - Horizontal annotation line for manual/WU max.
   - X-axis is local time (`America/Chicago`).
 - Raw observations table:
   - `Local Time`, `Mode`, `Temp`, `Source`, `Raw METAR`.
+  - Today route date: official rows only.
 
 Behavior details:
 
 - If no observations are stored for that date, the table shows a no-data message.
 - Day page expects a `YYYY-MM-DD` date segment.
+- If route date equals Chicago today:
+  - Runs one-time backfill action: `weather:backfillTodayOfficialFromIem` (IEM last 24h, report types 3/4, filtered to today local date).
+  - Runs immediate live poll action: `weather:pollLatestNoaaMetar` (NOAA latest station TXT).
+  - Starts a 3-minute interval to poll NOAA while the tab is visible.
+  - Inserts are deduped by `(stationIcao, mode=official, date, tsUtc)` via `weather:upsertOfficialObservation`.
+  - Official `dailyComparisons` max/count fields are updated incrementally when new rows are inserted.
 
 ## Data sources used by these pages
 
 - `dailyComparisons` table for daily aggregates (manual, official, and all fields).
 - `monthRuns` table for compute statuses and timestamps.
 - `metarObservations` table for per-observation day charting and raw review.
+- Live-today actions:
+  - NOAA latest TXT endpoint (`/data/observations/metar/stations/{ICAO}.TXT`) for incremental polling.
+  - IEM ASOS request endpoint (`hours=24`, `report_type=3,4`) for today backfill.

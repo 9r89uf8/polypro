@@ -1,5 +1,5 @@
 import Link from "next/link";
-
+//app/page.js
 export default function Home() {
   return (
     <main className="min-h-screen px-5 py-10 md:px-8">
@@ -20,6 +20,12 @@ export default function Home() {
             className="inline-flex items-center rounded-full border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-black"
           >
             Open KORD Month Tool
+          </Link>
+          <Link
+            href="/kord/today"
+            className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-5 py-2.5 text-sm font-semibold text-emerald-800 transition hover:-translate-y-0.5 hover:border-emerald-400"
+          >
+            Open KORD Live Today
           </Link>
           <Link
             href="/notes"

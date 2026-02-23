@@ -1,3 +1,4 @@
+//app/kord/day/[date]/page.js
 "use client";
 
 import {
@@ -13,8 +14,8 @@ import annotationPlugin from "chartjs-plugin-annotation";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Line } from "react-chartjs-2";
-import { useMemo, useState } from "react";
-import { useQuery } from "convex/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAction, useQuery } from "convex/react";
 
 ChartJS.register(
   LinearScale,
@@ -27,6 +28,9 @@ ChartJS.register(
 );
 
 const STATION_ICAO = "KORD";
+const STATION_IEM = "ORD";
+const CHICAGO_TIMEZONE = "America/Chicago";
+const LIVE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -60,6 +64,46 @@ function formatTemp(value, unit) {
     return "—";
   }
   return `${value.toFixed(1)}°${unit}`;
+}
+
+function getDateParts(formatter, date) {
+  const parts = formatter.formatToParts(date);
+  const values = {};
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+  return values;
+}
+
+function chicagoTodayKey() {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = getDateParts(formatter, new Date());
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatLivePollMessage(result, label) {
+  if (!result?.ok) {
+    return `${label} skipped (${result?.reason ?? "unknown"}).`;
+  }
+
+  if (result.inserted) {
+    return `${label}: saved ${result.tsLocal}.`;
+  }
+  return `${label}: no new report (${result.tsLocal}).`;
+}
+
+function formatBackfillMessage(result) {
+  if (!result?.ok) {
+    return "Live backfill skipped.";
+  }
+  return `Live backfill: inserted ${result.insertedCount} of ${result.consideredCount} today observations.`;
 }
 
 function buildLineDataset(rows, unit, label, color) {
@@ -124,7 +168,15 @@ export default function KordDayPage() {
   const rawDate = Array.isArray(params?.date) ? params.date[0] : params?.date;
   const date = rawDate || "";
   const [displayUnit, setDisplayUnit] = useState("F");
+  const [liveMessage, setLiveMessage] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const inFlightRef = useRef(false);
+  const backfilledDateRef = useRef("");
   const isDateValid = isValidDate(date);
+  const isToday = isDateValid && date === chicagoTodayKey();
+
+  const pollLatest = useAction("weather:pollLatestNoaaMetar");
+  const backfillToday = useAction("weather:backfillTodayOfficialFromIem");
 
   const dayData = useQuery(
     "weather:getDayObservations",
@@ -146,14 +198,113 @@ export default function KordDayPage() {
   const allMax =
     displayUnit === "C" ? comparison?.metarAllMaxC : comparison?.metarAllMaxF;
 
+  useEffect(() => {
+    if (!isToday) {
+      setLiveMessage("");
+      return;
+    }
+
+    let cancelled = false;
+    let intervalId;
+
+    async function safeCall(fn, onSuccess, options = {}) {
+      const skipWhenHidden = options.skipWhenHidden !== false;
+      if (
+        cancelled ||
+        inFlightRef.current ||
+        (skipWhenHidden && document.hidden)
+      ) {
+        return false;
+      }
+
+      inFlightRef.current = true;
+      try {
+        const result = await fn();
+        if (!cancelled && onSuccess) {
+          setLiveMessage(onSuccess(result));
+        }
+        return true;
+      } catch (error) {
+        console.error(error);
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error);
+          setLiveMessage(`Live sync failed: ${message}`);
+        }
+        return false;
+      } finally {
+        inFlightRef.current = false;
+      }
+    }
+
+    async function bootstrapLive() {
+      if (backfilledDateRef.current !== date) {
+        const backfillSucceeded = await safeCall(
+          () => backfillToday({ stationIem: STATION_IEM, stationIcao: STATION_ICAO }),
+          (result) => formatBackfillMessage(result),
+          { skipWhenHidden: false },
+        );
+        if (backfillSucceeded) {
+          backfilledDateRef.current = date;
+        }
+      }
+
+      await safeCall(
+        () => pollLatest({ stationIcao: STATION_ICAO }),
+        (result) => formatLivePollMessage(result, "Live poll"),
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      intervalId = setInterval(() => {
+        safeCall(
+          () => pollLatest({ stationIcao: STATION_ICAO }),
+          (result) => formatLivePollMessage(result, "Live poll"),
+        );
+      }, LIVE_POLL_INTERVAL_MS);
+    }
+
+    bootstrapLive();
+
+    return () => {
+      cancelled = true;
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [date, isToday, backfillToday, pollLatest]);
+
+  async function handleRefreshNow() {
+    if (!isToday || inFlightRef.current) {
+      return;
+    }
+
+    setIsRefreshing(true);
+    inFlightRef.current = true;
+    try {
+      const result = await pollLatest({ stationIcao: STATION_ICAO });
+      setLiveMessage(formatLivePollMessage(result, "Manual refresh"));
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : String(error);
+      setLiveMessage(`Manual refresh failed: ${message}`);
+    } finally {
+      inFlightRef.current = false;
+      setIsRefreshing(false);
+    }
+  }
+
   const chartData = useMemo(
     () => ({
-      datasets: [
-        buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
-        buildLineDataset(allRows, displayUnit, "All", "#111827"),
-      ],
+      datasets: isToday
+        ? [buildLineDataset(officialRows, displayUnit, "Official", "#0f766e")]
+        : [
+            buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
+            buildLineDataset(allRows, displayUnit, "All", "#111827"),
+          ],
     }),
-    [officialRows, allRows, displayUnit],
+    [officialRows, allRows, displayUnit, isToday],
   );
 
   const chartOptions = useMemo(() => {
@@ -234,8 +385,13 @@ export default function KordDayPage() {
   }, [manualMax, displayUnit]);
 
   const mergedRows = useMemo(
-    () => mergeObservationRows(officialRows, allRows, displayUnit),
-    [officialRows, allRows, displayUnit],
+    () =>
+      mergeObservationRows(
+        officialRows,
+        isToday ? [] : allRows,
+        displayUnit,
+      ),
+    [officialRows, allRows, displayUnit, isToday],
   );
 
   if (!isDateValid) {
@@ -267,6 +423,11 @@ export default function KordDayPage() {
           <h1 className="mt-3 text-2xl font-semibold text-foreground">
             Day Detail {date}
           </h1>
+          {isToday ? (
+            <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">
+              Live polling every 3 minutes
+            </p>
+          ) : null}
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Link
               href="/kord/month"
@@ -274,6 +435,24 @@ export default function KordDayPage() {
             >
               Back to Month
             </Link>
+            {!isToday ? (
+              <Link
+                href="/kord/today"
+                className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 hover:border-emerald-400"
+              >
+                Go to Live Today
+              </Link>
+            ) : null}
+            {isToday ? (
+              <button
+                type="button"
+                onClick={handleRefreshNow}
+                disabled={isRefreshing}
+                className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isRefreshing ? "Refreshing..." : "Refresh now"}
+              </button>
+            ) : null}
             {["C", "F"].map((unit) => (
               <button
                 key={unit}
@@ -289,6 +468,12 @@ export default function KordDayPage() {
               </button>
             ))}
           </div>
+          {isToday ? (
+            <p className="mt-3 text-xs text-black/65">
+              {liveMessage ||
+                "Live mode will backfill today once, then poll NOAA while this tab is visible."}
+            </p>
+          ) : null}
         </header>
 
         {dayData === undefined ? (
@@ -297,7 +482,7 @@ export default function KordDayPage() {
           </section>
         ) : (
           <>
-            <section className="grid gap-4 md:grid-cols-3">
+            <section className={`grid gap-4 ${isToday ? "md:grid-cols-2" : "md:grid-cols-3"}`}>
               <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
                   Manual / WU Max
@@ -317,17 +502,19 @@ export default function KordDayPage() {
                   Obs: {comparison?.metarObsCount ?? "—"}
                 </p>
               </article>
-              <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                  All Max
-                </p>
-                <p className="mt-2 text-xl font-semibold text-black">
-                  {formatTemp(allMax, displayUnit)}
-                </p>
-                <p className="mt-1 text-xs text-black/60">
-                  Obs: {comparison?.metarAllObsCount ?? "—"}
-                </p>
-              </article>
+              {!isToday ? (
+                <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                    All Max
+                  </p>
+                  <p className="mt-2 text-xl font-semibold text-black">
+                    {formatTemp(allMax, displayUnit)}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    Obs: {comparison?.metarAllObsCount ?? "—"}
+                  </p>
+                </article>
+              ) : null}
             </section>
 
             <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
@@ -335,8 +522,9 @@ export default function KordDayPage() {
                 Temperature Lines
               </h2>
               <p className="mt-2 text-sm text-black/65">
-                Official and All observation temperatures through the day. Red
-                dashed line is the manual/Wunderground max.
+                {isToday
+                  ? "Official METAR/SPECI temperatures for today (live). Red dashed line is the manual/Wunderground max."
+                  : "Official and All observation temperatures through the day. Red dashed line is the manual/Wunderground max."}
               </p>
               <div className="mt-4 h-[360px] rounded-2xl border border-black/10 bg-white/75 p-3">
                 <Line data={chartData} options={chartOptions} />
@@ -388,7 +576,9 @@ export default function KordDayPage() {
                     {mergedRows.length === 0 ? (
                       <tr>
                         <td className="px-3 py-4 text-sm text-black/60" colSpan={5}>
-                          No observations saved for this day yet. Run compute first.
+                          {isToday
+                            ? "No official observations saved for today yet. Leave this page open to continue live polling."
+                            : "No observations saved for this day yet. Run compute first."}
                         </td>
                       </tr>
                     ) : null}
