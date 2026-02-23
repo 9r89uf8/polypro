@@ -10,6 +10,7 @@ const CHICAGO_TIMEZONE = "America/Chicago";
 const COMPARISON_DAY_START_MINUTE = 51;
 const MILLIS_IN_DAY = 24 * 60 * 60 * 1000;
 const RETRY_DELAYS_MS = [1000, 3000, 10000];
+const OBS_INSERT_CHUNK_SIZE = 400;
 const METAR_MODE = {
   OFFICIAL: "official",
   ALL: "all",
@@ -387,6 +388,7 @@ async function fetchCsvWithRetry(url) {
 
 function computeDailyMetarMax(observations, year, month, mode) {
   const byDate = new Map();
+  const observationRows = [];
   let parsedObservationCount = 0;
 
   for (const observation of observations) {
@@ -412,13 +414,24 @@ function computeDailyMetarMax(observations, year, month, mode) {
       continue;
     }
 
+    const tempC = roundToTenth(tempInfo.tempC);
+    const tempF = toFahrenheit(tempC);
     parsedObservationCount += 1;
+    observationRows.push({
+      date: dateKey,
+      tsUtc: utcEpoch,
+      tsLocal: formatChicagoDateTime(utcEpoch),
+      tempC,
+      tempF,
+      rawMetar: observation.metar ?? "",
+      source: tempInfo.source,
+    });
 
     const existing = byDate.get(dateKey);
     if (!existing) {
       byDate.set(dateKey, {
         date: dateKey,
-        metarMaxC: tempInfo.tempC,
+        metarMaxC: tempC,
         metarMaxAtUtc: utcEpoch,
         metarMaxAtLocal: formatChicagoDateTime(utcEpoch),
         metarObsCount: 1,
@@ -433,12 +446,12 @@ function computeDailyMetarMax(observations, year, month, mode) {
     const existingPriority = SOURCE_PRIORITY[existing.metarMaxSource] ?? -1;
     const candidatePriority = SOURCE_PRIORITY[tempInfo.source] ?? -1;
     const shouldReplace =
-      tempInfo.tempC > existing.metarMaxC ||
-      (tempInfo.tempC === existing.metarMaxC &&
+      tempC > existing.metarMaxC ||
+      (tempC === existing.metarMaxC &&
         candidatePriority > existingPriority);
 
     if (shouldReplace) {
-      existing.metarMaxC = tempInfo.tempC;
+      existing.metarMaxC = tempC;
       existing.metarMaxAtUtc = utcEpoch;
       existing.metarMaxAtLocal = formatChicagoDateTime(utcEpoch);
       existing.metarMaxRaw = observation.metar ?? "";
@@ -449,9 +462,13 @@ function computeDailyMetarMax(observations, year, month, mode) {
   const rows = Array.from(byDate.values()).sort((a, b) =>
     a.date.localeCompare(b.date),
   );
+  observationRows.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.tsUtc - b.tsUtc,
+  );
 
   return {
     rows,
+    observationRows,
     parsedObservationCount,
   };
 }
@@ -548,6 +565,14 @@ function resolveManualDate(entry, year, month) {
   throw new Error("Each value entry must include either `day` or `date`.");
 }
 
+function splitIntoChunks(values, chunkSize) {
+  const chunks = [];
+  for (let i = 0; i < values.length; i += chunkSize) {
+    chunks.push(values.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
 export const getMonthComparison = queryGeneric({
   args: monthArgsValidator,
   handler: async (ctx, args) => {
@@ -579,6 +604,103 @@ export const getMonthComparison = queryGeneric({
       month: args.month,
       monthRun: monthRun ?? null,
       rows,
+    };
+  },
+});
+
+export const getMonthModeState = queryGeneric({
+  args: {
+    ...monthArgsValidator,
+    mode: metarModeValidator,
+  },
+  handler: async (ctx, args) => {
+    assertValidYearMonth(args.year, args.month);
+    const mode = normalizeMetarMode(args.mode);
+    const monthRun = await findMonthRun(
+      ctx,
+      args.stationIcao,
+      args.year,
+      args.month,
+    );
+    const start = monthStartDateKey(args.year, args.month);
+    const end = monthEndExclusiveDateKey(args.year, args.month);
+
+    const observationRows = await ctx.db
+      .query("metarObservations")
+      .withIndex("by_station_mode_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("mode", mode)
+          .gte("date", start)
+          .lt("date", end),
+      )
+      .collect();
+
+    const status =
+      mode === METAR_MODE.ALL
+        ? monthRun?.metarAllLastStatus ?? "idle"
+        : monthRun?.metarLastStatus ?? "idle";
+    const computedAt =
+      mode === METAR_MODE.ALL
+        ? monthRun?.metarAllLastComputedAt ?? null
+        : monthRun?.metarLastComputedAt ?? null;
+
+    return {
+      mode,
+      status,
+      computedAt,
+      observationCount: observationRows.length,
+      alreadyComputed:
+        status === "ok" &&
+        computedAt !== null &&
+        observationRows.length > 0,
+    };
+  },
+});
+
+export const getDayObservations = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const dateParts = parseDateKey(args.date);
+    if (!dateParts) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+
+    const comparison = await findDailyComparison(
+      ctx,
+      args.stationIcao,
+      args.date,
+    );
+
+    const officialRows = await ctx.db
+      .query("metarObservations")
+      .withIndex("by_station_mode_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("mode", METAR_MODE.OFFICIAL)
+          .eq("date", args.date),
+      )
+      .collect();
+
+    const allRows = await ctx.db
+      .query("metarObservations")
+      .withIndex("by_station_mode_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("mode", METAR_MODE.ALL)
+          .eq("date", args.date),
+      )
+      .collect();
+
+    return {
+      stationIcao: args.stationIcao,
+      date: args.date,
+      comparison: comparison ?? null,
+      officialRows,
+      allRows,
     };
   },
 });
@@ -710,6 +832,16 @@ const metarResultRowValidator = v.object({
   metarMaxSource: v.string(),
 });
 
+const metarObservationRowValidator = v.object({
+  date: v.string(),
+  tsUtc: v.number(),
+  tsLocal: v.string(),
+  tempC: v.number(),
+  tempF: v.number(),
+  rawMetar: v.string(),
+  source: v.string(),
+});
+
 export const upsertMetarMonthResults = internalMutationGeneric({
   args: {
     ...monthArgsValidator,
@@ -787,74 +919,195 @@ export const upsertMetarMonthResults = internalMutationGeneric({
   },
 });
 
-export const computeMetarMonth = actionGeneric({
+export const clearMonthObservations = internalMutationGeneric({
   args: {
     ...monthArgsValidator,
-    mode: v.optional(metarModeValidator),
+    mode: metarModeValidator,
   },
   handler: async (ctx, args) => {
     assertValidYearMonth(args.year, args.month);
     const mode = normalizeMetarMode(args.mode);
-    const stationIem = stationToIem(args.stationIcao);
+    const start = monthStartDateKey(args.year, args.month);
+    const end = monthEndExclusiveDateKey(args.year, args.month);
+
+    const existingRows = await ctx.db
+      .query("metarObservations")
+      .withIndex("by_station_mode_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("mode", mode)
+          .gte("date", start)
+          .lt("date", end),
+      )
+      .collect();
+
+    for (const row of existingRows) {
+      await ctx.db.delete(row._id);
+    }
+
+    return { removed: existingRows.length };
+  },
+});
+
+export const insertObservationChunk = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    mode: metarModeValidator,
+    rows: v.array(metarObservationRowValidator),
+  },
+  handler: async (ctx, args) => {
+    const mode = normalizeMetarMode(args.mode);
+    const now = Date.now();
+    let inserted = 0;
+
+    for (const row of args.rows) {
+      await ctx.db.insert("metarObservations", {
+        stationIcao: args.stationIcao,
+        mode,
+        date: row.date,
+        tsUtc: row.tsUtc,
+        tsLocal: row.tsLocal,
+        tempC: row.tempC,
+        tempF: row.tempF,
+        rawMetar: row.rawMetar,
+        source: row.source,
+        updatedAt: now,
+      });
+      inserted += 1;
+    }
+
+    return { inserted };
+  },
+});
+
+export const computeMetarMonth = actionGeneric({
+  args: {
+    ...monthArgsValidator,
+    mode: v.optional(metarModeValidator),
+    force: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const mode = normalizeMetarMode(args.mode);
+    return await computeAndPersistMode(ctx, args, mode, {
+      force: args.force ?? false,
+    });
+  },
+});
+
+async function computeAndPersistMode(ctx, args, mode, options = {}) {
+  assertValidYearMonth(args.year, args.month);
+  const force = options.force === true;
+  const stationIem = stationToIem(args.stationIcao);
+
+  const monthState = await ctx.runQuery("weather:getMonthModeState", {
+    stationIcao: args.stationIcao,
+    year: args.year,
+    month: args.month,
+    mode,
+  });
+  if (!force && monthState.alreadyComputed) {
+    return {
+      mode,
+      skipped: true,
+      reason: "already-computed",
+      daysUpdated: 0,
+      parsedObservationCount: 0,
+      downloadedRows: 0,
+      savedObservationRows: monthState.observationCount,
+    };
+  }
+
+  await ctx.runMutation("weather:setMonthRunStatus", {
+    stationIcao: args.stationIcao,
+    year: args.year,
+    month: args.month,
+    mode,
+    status: "computing",
+    error: "",
+  });
+
+  try {
+    const iemUrl = buildIemUrl(stationIem, args.year, args.month, mode);
+    const csvText = await fetchCsvWithRetry(iemUrl);
+    const observations = parseCsvObservations(csvText);
+    const { rows, observationRows, parsedObservationCount } = computeDailyMetarMax(
+      observations,
+      args.year,
+      args.month,
+      mode,
+    );
+
+    await ctx.runMutation("weather:clearMonthObservations", {
+      stationIcao: args.stationIcao,
+      year: args.year,
+      month: args.month,
+      mode,
+    });
+    const chunks = splitIntoChunks(observationRows, OBS_INSERT_CHUNK_SIZE);
+    for (const chunk of chunks) {
+      await ctx.runMutation("weather:insertObservationChunk", {
+        stationIcao: args.stationIcao,
+        mode,
+        rows: chunk,
+      });
+    }
+
+    const upsertResult = await ctx.runMutation(
+      "weather:upsertMetarMonthResults",
+      {
+        stationIcao: args.stationIcao,
+        year: args.year,
+        month: args.month,
+        mode,
+        rows,
+      },
+    );
 
     await ctx.runMutation("weather:setMonthRunStatus", {
       stationIcao: args.stationIcao,
       year: args.year,
       month: args.month,
       mode,
-      status: "computing",
+      status: "ok",
       error: "",
+      computedAt: Date.now(),
     });
 
-    try {
-      const iemUrl = buildIemUrl(stationIem, args.year, args.month, mode);
-      const csvText = await fetchCsvWithRetry(iemUrl);
-      const observations = parseCsvObservations(csvText);
-      const { rows, parsedObservationCount } = computeDailyMetarMax(
-        observations,
-        args.year,
-        args.month,
-        mode,
-      );
+    return {
+      mode,
+      daysUpdated: upsertResult.updatedDays,
+      parsedObservationCount,
+      downloadedRows: observations.length,
+      savedObservationRows: observationRows.length,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await ctx.runMutation("weather:setMonthRunStatus", {
+      stationIcao: args.stationIcao,
+      year: args.year,
+      month: args.month,
+      mode,
+      status: "error",
+      error: message,
+    });
+    throw new Error(`METAR ${mode} compute failed: ${message}`);
+  }
+}
 
-      const upsertResult = await ctx.runMutation(
-        "weather:upsertMetarMonthResults",
-        {
-          stationIcao: args.stationIcao,
-          year: args.year,
-          month: args.month,
-          mode,
-          rows,
-        },
-      );
-
-      await ctx.runMutation("weather:setMonthRunStatus", {
-        stationIcao: args.stationIcao,
-        year: args.year,
-        month: args.month,
-        mode,
-        status: "ok",
-        error: "",
-        computedAt: Date.now(),
-      });
-
-      return {
-        mode,
-        daysUpdated: upsertResult.updatedDays,
-        parsedObservationCount,
-        downloadedRows: observations.length,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await ctx.runMutation("weather:setMonthRunStatus", {
-        stationIcao: args.stationIcao,
-        year: args.year,
-        month: args.month,
-        mode,
-        status: "error",
-        error: message,
-      });
-      throw new Error(`METAR compute failed: ${message}`);
-    }
+export const computeMetarMonthBoth = actionGeneric({
+  args: {
+    ...monthArgsValidator,
+    force: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    assertValidYearMonth(args.year, args.month);
+    const force = args.force ?? false;
+    const official = await computeAndPersistMode(ctx, args, METAR_MODE.OFFICIAL, {
+      force,
+    });
+    const all = await computeAndPersistMode(ctx, args, METAR_MODE.ALL, {
+      force,
+    });
+    return { official, all };
   },
 });

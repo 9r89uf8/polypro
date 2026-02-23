@@ -14,12 +14,18 @@ export default function Home() {
           Paste your daily max temperatures for the month, then compute archived
           METAR daily maxima for KORD to compare side by side.
         </p>
-        <div className="mt-8">
+        <div className="mt-8 flex flex-wrap gap-3">
           <Link
             href="/kord/month"
             className="inline-flex items-center rounded-full border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-black"
           >
             Open KORD Month Tool
+          </Link>
+          <Link
+            href="/notes"
+            className="inline-flex items-center rounded-full border border-black/15 bg-white/70 px-5 py-2.5 text-sm font-semibold text-black transition hover:-translate-y-0.5 hover:border-black"
+          >
+            Open Notes
           </Link>
         </div>
       </section>

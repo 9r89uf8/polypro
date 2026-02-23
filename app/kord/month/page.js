@@ -11,16 +11,6 @@ const METAR_MODE = {
   OFFICIAL: "official",
   ALL: "all",
 };
-const METAR_MODE_META = {
-  official: {
-    label: "Official (Routine + SPECI)",
-    shortLabel: "official",
-  },
-  all: {
-    label: "All (HF + Routine + SPECI)",
-    shortLabel: "all",
-  },
-};
 const MONTH_NAMES = [
   "January",
   "February",
@@ -223,7 +213,6 @@ function KordMonthWorkspace() {
 
   const [manualUnit, setManualUnit] = useState("F");
   const [displayUnit, setDisplayUnit] = useState("F");
-  const [metarMode, setMetarMode] = useState(METAR_MODE.OFFICIAL);
   const [manualText, setManualText] = useState("");
 
   const [saveMessage, setSaveMessage] = useState("");
@@ -238,7 +227,7 @@ function KordMonthWorkspace() {
   });
 
   const saveManualMonth = useMutation("weather:upsertManualMonth");
-  const computeMetarMonth = useAction("weather:computeMetarMonth");
+  const computeMetarMonthBoth = useAction("weather:computeMetarMonthBoth");
 
   const preview = useMemo(
     () => parseManualText(manualText, activeYear, activeMonth),
@@ -269,20 +258,15 @@ function KordMonthWorkspace() {
   }, [activeYear, activeMonth, rowsByDate]);
 
   const monthRun = monthData?.monthRun ?? null;
-  const metarStatus =
-    metarMode === METAR_MODE.ALL
-      ? monthRun?.metarAllLastStatus ?? "idle"
-      : monthRun?.metarLastStatus ?? "idle";
-  const metarError =
-    metarMode === METAR_MODE.ALL
-      ? monthRun?.metarAllLastError
-      : monthRun?.metarLastError;
-  const metarComputedAtRaw =
-    metarMode === METAR_MODE.ALL
-      ? monthRun?.metarAllLastComputedAt
-      : monthRun?.metarLastComputedAt;
-  const metarComputedAt = metarComputedAtRaw
-    ? new Date(metarComputedAtRaw).toLocaleString()
+  const officialStatus = monthRun?.metarLastStatus ?? "idle";
+  const allStatus = monthRun?.metarAllLastStatus ?? "idle";
+  const officialError = monthRun?.metarLastError;
+  const allError = monthRun?.metarAllLastError;
+  const officialComputedAt = monthRun?.metarLastComputedAt
+    ? new Date(monthRun.metarLastComputedAt).toLocaleString()
+    : null;
+  const allComputedAt = monthRun?.metarAllLastComputedAt
+    ? new Date(monthRun.metarAllLastComputedAt).toLocaleString()
     : null;
 
   async function handleSaveManual() {
@@ -313,19 +297,26 @@ function KordMonthWorkspace() {
     }
   }
 
-  async function handleComputeMetar() {
+  async function handleComputeMetarBoth(force = false) {
     setComputeMessage("");
     setIsComputing(true);
-    const requestedMode = metarMode;
     try {
-      const result = await computeMetarMonth({
+      const result = await computeMetarMonthBoth({
         stationIcao: STATION_ICAO,
         year: activeYear,
         month: activeMonth,
-        mode: requestedMode,
+        force,
       });
+
+      const officialMessage = result.official.skipped
+        ? "official skipped (already computed)"
+        : `official ${result.official.daysUpdated} day(s), ${result.official.parsedObservationCount} obs`;
+      const allMessage = result.all.skipped
+        ? "all skipped (already computed)"
+        : `all ${result.all.daysUpdated} day(s), ${result.all.parsedObservationCount} obs`;
+
       setComputeMessage(
-        `METAR ${METAR_MODE_META[requestedMode].shortLabel} updated for ${result.daysUpdated} day(s) from ${result.parsedObservationCount} parsed observation(s).`,
+        `${force ? "Force recompute" : "Compute"} complete: ${officialMessage}; ${allMessage}.`,
       );
     } catch (error) {
       setComputeMessage(error instanceof Error ? error.message : String(error));
@@ -415,58 +406,59 @@ function KordMonthWorkspace() {
 
           <article className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
             <h2 className="text-lg font-semibold text-foreground">2. Compute METAR Daily Max</h2>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium text-black/70">Mode:</span>
-              {Object.entries(METAR_MODE_META).map(([modeValue, modeMeta]) => (
-                <button
-                  key={modeValue}
-                  type="button"
-                  onClick={() => setMetarMode(modeValue)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                    metarMode === modeValue
-                      ? "bg-black text-white"
-                      : "border border-black/20 bg-white/70 text-black/70 hover:border-black"
-                  }`}
-                >
-                  {modeMeta.shortLabel}
-                </button>
-              ))}
-            </div>
             <p className="mt-2 text-xs text-black/60">
-              {METAR_MODE_META[metarMode].label}
+              This button always computes both modes: official and all.
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                onClick={handleComputeMetar}
+                onClick={() => handleComputeMetarBoth(false)}
                 disabled={isComputing}
                 className="rounded-full border border-black bg-black px-5 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isComputing ? "Computing..." : "Compute METAR Daily Max"}
               </button>
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${getStatusChipClass(metarStatus)}`}
+              <button
+                type="button"
+                onClick={() => handleComputeMetarBoth(true)}
+                disabled={isComputing}
+                className="rounded-full border border-black/20 bg-white/80 px-5 py-2.5 text-sm font-semibold text-black transition hover:-translate-y-0.5 hover:border-black disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {metarStatus}
+                {isComputing ? "Computing..." : "Force Recompute"}
+              </button>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+              <span
+                className={`rounded-full px-3 py-1 font-semibold uppercase tracking-wide ${getStatusChipClass(officialStatus)}`}
+              >
+                official: {officialStatus}
+              </span>
+              <span
+                className={`rounded-full px-3 py-1 font-semibold uppercase tracking-wide ${getStatusChipClass(allStatus)}`}
+              >
+                all: {allStatus}
               </span>
             </div>
-
-            {metarMode === METAR_MODE.ALL ? (
-              <p className="mt-2 text-xs text-amber-900">
-                All mode may include high-frequency observations that Wunderground
-                does not display.
+            <div className="mt-3 space-y-1 text-sm text-black/70">
+              <p>
+                Official last computed:{" "}
+                <span className="font-medium text-black">
+                  {officialComputedAt || "—"}
+                </span>
               </p>
-            ) : null}
-
-            {metarComputedAt ? (
-              <p className="mt-3 text-sm text-black/70">
-                Last computed: <span className="font-medium text-black">{metarComputedAt}</span>
+              <p>
+                All last computed:{" "}
+                <span className="font-medium text-black">{allComputedAt || "—"}</span>
               </p>
-            ) : null}
-
-            {metarError ? (
+            </div>
+            {officialError ? (
               <p className="mt-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
-                {metarError}
+                Official error: {officialError}
+              </p>
+            ) : null}
+            {allError ? (
+              <p className="mt-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+                All error: {allError}
               </p>
             ) : null}
 
@@ -602,7 +594,7 @@ function KordMonthWorkspace() {
             </div>
           </div>
           <p className="mt-2 text-xs text-black/60">
-            Showing mode: {METAR_MODE_META[metarMode].label}
+            Official and All are shown side by side for direct comparison.
           </p>
 
           {monthData === undefined ? (
@@ -614,55 +606,88 @@ function KordMonthWorkspace() {
                   <tr>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2">Manual Max</th>
-                    <th className="px-3 py-2">
-                      METAR Max ({METAR_MODE_META[metarMode].shortLabel})
-                    </th>
-                    <th className="px-3 py-2">METAR Time (Local)</th>
-                    <th className="px-3 py-2">Obs Count</th>
-                    <th className="px-3 py-2">
-                      METAR Raw ({METAR_MODE_META[metarMode].shortLabel})
-                    </th>
-                    <th className="px-3 py-2">Delta</th>
+                    <th className="px-3 py-2">Official Max</th>
+                    <th className="px-3 py-2">Official Time</th>
+                    <th className="px-3 py-2">Official Obs</th>
+                    <th className="px-3 py-2">Official Raw</th>
+                    <th className="px-3 py-2">Official Delta</th>
+                    <th className="px-3 py-2">All Max</th>
+                    <th className="px-3 py-2">All Time</th>
+                    <th className="px-3 py-2">All Obs</th>
+                    <th className="px-3 py-2">All Raw</th>
+                    <th className="px-3 py-2">All Delta</th>
                   </tr>
                 </thead>
                 <tbody>
                   {tableRows.map((row) => {
                     const manualValue =
                       displayUnit === "C" ? row.manualMaxC : row.manualMaxF;
-                    const modeFields = readMetarFieldsByMode(
+                    const officialFields = readMetarFieldsByMode(
                       row,
-                      metarMode,
+                      METAR_MODE.OFFICIAL,
                       displayUnit,
                     );
-                    const metarValue = modeFields.metarValue;
-                    const deltaValue = modeFields.deltaValue;
+                    const allFields = readMetarFieldsByMode(
+                      row,
+                      METAR_MODE.ALL,
+                      displayUnit,
+                    );
 
                     return (
                       <tr key={row.date} className="border-t border-black/10">
-                        <td className="px-3 py-2 font-semibold text-black/80">{row.date}</td>
+                        <td className="px-3 py-2 font-semibold text-black/80">
+                          <Link
+                            href={`/kord/day/${row.date}`}
+                            className="underline decoration-black/25 underline-offset-2 transition hover:decoration-black"
+                          >
+                            {row.date}
+                          </Link>
+                        </td>
                         <td className="px-3 py-2 text-black/80">
                           {formatTemp(manualValue, displayUnit)}
                         </td>
                         <td className="px-3 py-2 text-black/80">
-                          {formatTemp(metarValue, displayUnit)}
+                          {formatTemp(officialFields.metarValue, displayUnit)}
                         </td>
                         <td className="px-3 py-2 text-black/70">
-                          {modeFields.metarTime || "—"}
+                          {officialFields.metarTime || "—"}
                         </td>
                         <td className="px-3 py-2 text-black/70">
-                          {modeFields.metarObsCount ?? "—"}
+                          {officialFields.metarObsCount ?? "—"}
                         </td>
                         <td
-                          className="max-w-[460px] px-3 py-2 font-mono text-xs text-black/70"
-                          title={modeFields.metarRaw || ""}
+                          className="max-w-[360px] px-3 py-2 font-mono text-xs text-black/70"
+                          title={officialFields.metarRaw || ""}
                         >
-                          {modeFields.metarRaw || "—"}
+                          {officialFields.metarRaw || "—"}
                         </td>
                         <td className="px-3 py-2">
                           <span
-                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getDeltaChipClass(deltaValue)}`}
+                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getDeltaChipClass(officialFields.deltaValue)}`}
                           >
-                            {formatDelta(deltaValue, displayUnit)}
+                            {formatDelta(officialFields.deltaValue, displayUnit)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-black/80">
+                          {formatTemp(allFields.metarValue, displayUnit)}
+                        </td>
+                        <td className="px-3 py-2 text-black/70">
+                          {allFields.metarTime || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-black/70">
+                          {allFields.metarObsCount ?? "—"}
+                        </td>
+                        <td
+                          className="max-w-[360px] px-3 py-2 font-mono text-xs text-black/70"
+                          title={allFields.metarRaw || ""}
+                        >
+                          {allFields.metarRaw || "—"}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getDeltaChipClass(allFields.deltaValue)}`}
+                          >
+                            {formatDelta(allFields.deltaValue, displayUnit)}
                           </span>
                         </td>
                       </tr>

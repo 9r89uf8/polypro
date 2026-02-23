@@ -2,6 +2,14 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  notes: defineTable({
+    title: v.optional(v.string()),
+    body: v.optional(v.string()),
+    imageIds: v.array(v.id("_storage")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_createdAt", ["createdAt"]),
+
   monthRuns: defineTable({
     stationIcao: v.string(),
     stationIem: v.string(),
@@ -56,4 +64,17 @@ export default defineSchema({
     deltaAllF: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_station_date", ["stationIcao", "date"]),
+
+  metarObservations: defineTable({
+    stationIcao: v.string(),
+    mode: v.union(v.literal("official"), v.literal("all")),
+    date: v.string(),
+    tsUtc: v.number(),
+    tsLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    rawMetar: v.string(),
+    source: v.string(),
+    updatedAt: v.number(),
+  }).index("by_station_mode_date_ts", ["stationIcao", "mode", "date", "tsUtc"]),
 });

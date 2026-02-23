@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as notes from "../notes.js";
 import type * as weather from "../weather.js";
 
 import type {
@@ -17,6 +18,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  notes: typeof notes;
   weather: typeof weather;
 }>;
 
