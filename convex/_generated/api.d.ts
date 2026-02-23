@@ -8,6 +8,10 @@
  * @module
  */
 
+import type * as crons from "../crons.js";
+import type * as http from "../http.js";
+import type * as kordPhone from "../kordPhone.js";
+import type * as kordPhoneNode from "../kordPhoneNode.js";
 import type * as notes from "../notes.js";
 import type * as weather from "../weather.js";
 
@@ -18,6 +22,10 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
+  http: typeof http;
+  kordPhone: typeof kordPhone;
+  kordPhoneNode: typeof kordPhoneNode;
   notes: typeof notes;
   weather: typeof weather;
 }>;

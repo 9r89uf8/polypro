@@ -1,578 +1,1023 @@
-Got it. You want a **live “today-only” chart** of **normal METAR/SPECI** temps (no HF/MADIS), fed by the **NOAA “latest METAR” TXT** endpoint, updated by a **3‑minute poll**, and persisted so the chart updates automatically via Convex subscriptions.
+Below is a working “Convex-first” implementation that does exactly what you described:
 
-Important constraint: that NOAA endpoint only ever returns **the most recent report** (timestamp + METAR in the TXT). Example format for KORD looks like: `YYYY/MM/DD HH:MM` followed by the METAR line. ([NOAA FTP Server][1])
+* **Cron (Convex)** fires every hour at `:45` **UTC**, but the function checks **America/Chicago** local time and only runs for **12:45, 1:45, 2:45, 3:45, 4:45**.
+* It **creates an outbound Twilio call** to `+17738000035`, **records the entire call**, and ends it after **45s**. (Twilio supports recording full outbound calls.) ([Twilio][1])
+* Twilio hits a **Convex HTTP Action webhook** when the recording is available. ([Twilio][2])
+* The webhook schedules a Node action to:
 
-Below is a detailed “do this then that” plan your agent can implement with your existing app structure.
-
----
-
-# What you are building
-
-### Behavior
-
-* A “**Today (Live)**” page that shows **only today’s official METAR/SPECI temps** on a line chart.
-* The page:
-
-    1. does a **one-time backfill** for today (so you don’t start with an empty chart at 5pm),
-    2. then **polls NOAA every 3 minutes** and inserts a new observation **only if it changed**.
-* Chart updates automatically as Convex data changes.
-
-### Data
-
-* Reuse your existing `metarObservations` table with:
-
-    * `mode: "official"`
-    * `source: "noaa_latest"` or `"iem_backfill"`
-* Reuse `dailyComparisons` for max/summary if you want (optional, but your day page already expects it).
+    1. download the recording as **MP3** (append `.mp3` to `RecordingUrl`) ([Twilio][3])
+    2. send it to **OpenAI Whisper** (`/v1/audio/transcriptions`, model `whisper-1`) ([OpenAI Developers][4])
+    3. extract **temperature**, store it in Convex, and then
+* The UI in **`app/kord/today/page.js`** **plots** + lists the saved temperatures.
 
 ---
 
-# Why you should do a one-time backfill (PRO detail)
+## 1) Convex schema: add a table for the phone-call temps
 
-If you only poll `KORD.TXT`, then you only capture observations **from the moment the user opened the tab**. That’s usually not what “today’s chart” means.
-
-**PRO approach (no cron needed):**
-
-* On page load, fetch the **last 24 hours** of routine + special METAR from IEM and filter to **today local**.
-* Then start NOAA polling.
-
-IEM explicitly supports `hours=24` and `report_type=3,4` (Routine + Specials). ([Iowa Environmental Mesonet][2])
-
-This is still “no cron” because it runs only when a user opens the page.
-
----
-
-# Step-by-step implementation plan
-
-## Step 1 — Add a new “Live Today” route
-
-Create:
-
-**`app/kord/today/page.js`** (server component redirect; clean, no client flicker)
+**Edit:** `convex/schema.js`
+Add this table inside `defineSchema({ ... })`:
 
 ```js
-import { redirect } from "next/navigation";
+  kordPhoneCalls: defineTable({
+    stationIcao: v.string(),
+    date: v.string(), // YYYY-MM-DD (Chicago)
+    slotLocal: v.string(), // YYYY-MM-DD HH:45 (Chicago) intended slot
+    tsUtc: v.optional(v.number()), // recording start (ms epoch)
+    tsLocal: v.optional(v.string()), // YYYY-MM-DD HH:MM (Chicago), derived from tsUtc
 
-const CHICAGO_TZ = "America/Chicago";
+    callSid: v.optional(v.string()),
+    recordingSid: v.optional(v.string()),
+    recordingUrl: v.optional(v.string()),
+    recordingDuration: v.optional(v.number()),
 
-function chicagoTodayKey() {
-  // en-CA gives YYYY-MM-DD
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: CHICAGO_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
+    transcript: v.optional(v.string()),
 
-export default function TodayRedirectPage() {
-  const date = chicagoTodayKey();
-  redirect(`/kord/day/${date}`);
-}
+    tempC: v.optional(v.number()),
+    tempF: v.optional(v.number()),
+
+    status: v.union(
+      v.literal("queued"),
+      v.literal("calling"),
+      v.literal("recorded"),
+      v.literal("transcribed"),
+      v.literal("parsed"),
+      v.literal("error"),
+    ),
+    error: v.optional(v.string()),
+
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_station_date", ["stationIcao", "date"])
+    .index("by_station_slot", ["stationIcao", "slotLocal"])
+    .index("by_callSid", ["callSid"]),
 ```
 
-Now you can link users to `/kord/today` and they’ll land on today’s day page.
-
 ---
 
-## Step 2 — Add Convex “live ingest” backend functions
+## 2) Convex: mutations + query (non-node) — `convex/kordPhone.js`
 
-You will add 2 Actions + 1 internal Mutation to **`convex/weather.js`**.
-
-### 2.1 Helpers: parse NOAA TXT, parse METAR temp, format Chicago date/time
-
-Add these helpers in `convex/weather.js` (top-level, not exported):
+**Add file:** `convex/kordPhone.js`
 
 ```js
-const CHICAGO_TZ = "America/Chicago";
-
-function cToF(c) {
-  return c * 9 / 5 + 32;
-}
-
-// Returns { dateKey: "YYYY-MM-DD", tsLocal: "YYYY-MM-DD HH:mm" }
-function formatChicago(tsUtcMs) {
-  const d = new Date(tsUtcMs);
-
-  const dateKey = new Intl.DateTimeFormat("en-CA", {
-    timeZone: CHICAGO_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-
-  const time = new Intl.DateTimeFormat("en-CA", {
-    timeZone: CHICAGO_TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(d);
-
-  return { dateKey, tsLocal: `${dateKey} ${time}` };
-}
-
-function parseNoaaLatestTxt(text) {
-  const cleaned = text.trim().replace(/\r/g, "");
-  const lines = cleaned.split("\n").map((l) => l.trim()).filter(Boolean);
-
-  let stamp;
-  let metar;
-
-  if (lines.length >= 2) {
-    stamp = lines[0];
-    metar = lines[1];
-  } else {
-    // sometimes the file is one line: "YYYY/MM/DD HH:MM METAR..."
-    const m = cleaned.match(/^(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2})\s+(.*)$/);
-    if (!m) throw new Error(`Unexpected NOAA format: ${cleaned.slice(0, 80)}...`);
-    stamp = m[1];
-    metar = m[2];
-  }
-
-  const tm = stamp.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})$/);
-  if (!tm) throw new Error(`Bad NOAA timestamp line: ${stamp}`);
-
-  const year = Number(tm[1]);
-  const month = Number(tm[2]);
-  const day = Number(tm[3]);
-  const hour = Number(tm[4]);
-  const minute = Number(tm[5]);
-
-  const tsUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  return { tsUtcMs, metar };
-}
-
-// Best: parse remark T group (tenths C). Fallback: integer group M06/M11
-function extractTempC(metar) {
-  if (!metar) return { tempC: null, source: "none" };
-
-  // Example: RMK ... T10611111 -> temp = -6.1C
-  const t = metar.match(/\bT([01])(\d{3})([01])(\d{3})\b/);
-  if (t) {
-    const sign = t[1] === "1" ? -1 : 1;
-    const tenths = Number(t[2]);
-    if (Number.isFinite(tenths)) {
-      return { tempC: sign * (tenths / 10), source: "remark_T" };
-    }
-  }
-
-  // Example: M06/M11 or 08/06
-  const m = metar.match(/\b(M?\d{2})\/(M?\d{2}|\/\/)\b/);
-  if (m) {
-    const raw = m[1];
-    const neg = raw.startsWith("M");
-    const v = Number(raw.replace("M", ""));
-    if (Number.isFinite(v)) {
-      return { tempC: neg ? -v : v, source: "metar_integer" };
-    }
-  }
-
-  return { tempC: null, source: "none" };
-}
-```
-
-This matches what you need:
-
-* NOAA file always contains timestamp + METAR line ([NOAA FTP Server][1])
-* Parse tenths (better) or integer.
-
----
-
-### 2.2 Internal Mutation: upsert an observation and update daily max/count
-
-Add:
-
-```js
-import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { query, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 
-export const upsertOfficialObservation = internalMutation({
+const CHICAGO_TIMEZONE = "America/Chicago";
+const SCHEDULED_LOCAL_HOURS = new Set([12, 13, 14, 15, 16]);
+const SCHEDULED_MINUTE = 45;
+
+const chicagoDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: CHICAGO_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const chicagoDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: CHICAGO_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  hourCycle: "h23",
+});
+
+function getDateParts(formatter, date) {
+  const parts = formatter.formatToParts(date);
+  const values = {};
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+  return values;
+}
+
+function formatChicagoDate(epochMs) {
+  const parts = getDateParts(chicagoDateFormatter, new Date(epochMs));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatChicagoDateTime(epochMs) {
+  const parts = getDateParts(chicagoDateTimeFormatter, new Date(epochMs));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function roundToTenth(value) {
+  return Math.round(value * 10) / 10;
+}
+
+function toFahrenheit(celsius) {
+  return roundToTenth((celsius * 9) / 5 + 32);
+}
+
+/**
+ * Public query: get all phone call observations for a day (Chicago dateKey).
+ */
+export const getDayPhoneReadings = query({
   args: {
     stationIcao: v.string(),
-    date: v.string(),     // YYYY-MM-DD (Chicago)
-    tsUtc: v.number(),    // ms epoch
-    tsLocal: v.string(),  // "YYYY-MM-DD HH:mm"
-    tempC: v.number(),
-    tempF: v.number(),
-    rawMetar: v.string(),
-    source: v.string(),   // "noaa_latest" | "iem_backfill"
+    date: v.string(), // YYYY-MM-DD
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("kordPhoneCalls")
+      .withIndex("by_station_date", (q) =>
+        q.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+
+    rows.sort((a, b) => a.slotLocal.localeCompare(b.slotLocal));
+    return { stationIcao: args.stationIcao, date: args.date, rows };
+  },
+});
+
+/**
+ * Internal mutation invoked by cron every hour at :45 UTC.
+ * It checks Chicago local time and enqueues only 12:45–16:45 local.
+ */
+export const enqueueScheduledCall = internalMutation({
+  args: {
+    stationIcao: v.string(),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const parts = getDateParts(chicagoDateTimeFormatter, new Date(now));
+    const hour = Number(parts.hour);
+    const minute = Number(parts.minute);
+    const dateKey = `${parts.year}-${parts.month}-${parts.day}`;
 
-    // Dedupe: same station+mode+date+tsUtc => already have it
+    if (minute !== SCHEDULED_MINUTE || !SCHEDULED_LOCAL_HOURS.has(hour)) {
+      return { ok: false, reason: "outside_window", dateKey, hour, minute };
+    }
+
+    const slotLocal = `${dateKey} ${pad2(hour)}:${pad2(SCHEDULED_MINUTE)}`;
+
     const existing = await ctx.db
-      .query("metarObservations")
-      .withIndex("by_station_mode_date_ts", (q) =>
-        q
-          .eq("stationIcao", args.stationIcao)
-          .eq("mode", "official")
-          .eq("date", args.date)
-          .eq("tsUtc", args.tsUtc)
+      .query("kordPhoneCalls")
+      .withIndex("by_station_slot", (q) =>
+        q.eq("stationIcao", args.stationIcao).eq("slotLocal", slotLocal),
       )
-      .unique();
+      .first();
 
     if (existing) {
-      return { inserted: false };
+      return { ok: false, reason: "already_enqueued", slotLocal };
     }
 
-    await ctx.db.insert("metarObservations", {
+    const callId = await ctx.db.insert("kordPhoneCalls", {
       stationIcao: args.stationIcao,
-      mode: "official",
-      date: args.date,
-      tsUtc: args.tsUtc,
-      tsLocal: args.tsLocal,
-      tempC: args.tempC,
-      tempF: args.tempF,
-      rawMetar: args.rawMetar,
-      source: args.source,
+      date: dateKey,
+      slotLocal,
+      status: "queued",
+      createdAt: now,
       updatedAt: now,
     });
 
-    // Update dailyComparisons summary (optional but keeps your day page cards accurate)
-    let comp = await ctx.db
-      .query("dailyComparisons")
-      .withIndex("by_station_date", (q) =>
-        q.eq("stationIcao", args.stationIcao).eq("date", args.date)
-      )
-      .unique();
+    // Schedule the Node action that actually hits Twilio.
+    await ctx.scheduler.runAfter(0, internal.kordPhoneNode.startCall, {
+      callId,
+    });
 
-    if (!comp) {
-      const id = await ctx.db.insert("dailyComparisons", {
-        stationIcao: args.stationIcao,
-        date: args.date,
-        updatedAt: now,
-      });
-      comp = await ctx.db.get(id);
+    return { ok: true, slotLocal, callId };
+  },
+});
+
+export const markCallStarted = internalMutation({
+  args: {
+    callId: v.id("kordPhoneCalls"),
+    callSid: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    await ctx.db.patch(args.callId, {
+      callSid: args.callSid,
+      status: "calling",
+      updatedAt: now,
+    });
+  },
+});
+
+export const markCallError = internalMutation({
+  args: {
+    callId: v.id("kordPhoneCalls"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    await ctx.db.patch(args.callId, {
+      status: "error",
+      error: args.error,
+      updatedAt: now,
+    });
+  },
+});
+
+export const upsertRecordingFromWebhook = internalMutation({
+  args: {
+    callSid: v.string(),
+    recordingSid: v.optional(v.string()),
+    recordingUrl: v.string(),
+    recordingDuration: v.optional(v.number()),
+    recordingStartTime: v.optional(v.string()), // RFC 2822-ish from Twilio
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("kordPhoneCalls")
+      .withIndex("by_callSid", (q) => q.eq("callSid", args.callSid))
+      .first();
+
+    if (!existing) {
+      return { ok: false, reason: "call_not_found" };
     }
 
-    const prevCount = comp.metarObsCount ?? 0;
-    const prevMaxC = comp.metarMaxC;
+    let tsUtc = existing.tsUtc ?? null;
+    if (args.recordingStartTime) {
+      const parsed = Date.parse(args.recordingStartTime);
+      if (!Number.isNaN(parsed)) {
+        tsUtc = parsed;
+      }
+    }
 
     const patch = {
-      metarObsCount: prevCount + 1,
+      recordingSid: args.recordingSid ?? existing.recordingSid,
+      recordingUrl: args.recordingUrl,
+      recordingDuration: args.recordingDuration ?? existing.recordingDuration,
+      status: "recorded",
       updatedAt: now,
     };
 
-    const isNewMax =
-      prevMaxC === undefined || prevMaxC === null || args.tempC > prevMaxC;
-
-    if (isNewMax) {
-      patch.metarMaxC = args.tempC;
-      patch.metarMaxF = args.tempF;
-      patch.metarMaxAtUtc = args.tsUtc;
-      patch.metarMaxAtLocal = args.tsLocal;
-      patch.metarMaxRaw = args.rawMetar;
-      patch.metarMaxSource = args.source;
-
-      // Update delta if manual exists
-      if (comp.manualMaxC !== undefined && comp.manualMaxC !== null) {
-        patch.deltaC = comp.manualMaxC - args.tempC;
-      }
-      if (comp.manualMaxF !== undefined && comp.manualMaxF !== null) {
-        patch.deltaF = comp.manualMaxF - args.tempF;
-      }
+    if (tsUtc !== null) {
+      patch.tsUtc = tsUtc;
+      patch.tsLocal = formatChicagoDateTime(tsUtc);
     }
 
-    await ctx.db.patch(comp._id, patch);
-
-    return { inserted: true };
+    await ctx.db.patch(existing._id, patch);
+    return { ok: true };
   },
 });
-```
 
-This gives you:
-
-* “insert if new”
-* “update summary max/count”
-* no duplicates
-
----
-
-### 2.3 Action: Poll NOAA latest METAR (every 3 minutes from client)
-
-Add:
-
-```js
-import { action } from "./_generated/server";
-import { internal } from "./_generated/api";
-import { v } from "convex/values";
-
-export const pollLatestNoaaMetar = action({
+export const upsertTranscriptAndTemperature = internalMutation({
   args: {
-    stationIcao: v.string(), // "KORD"
+    callSid: v.string(),
+    transcript: v.string(),
+    tempC: v.optional(v.number()),
+    error: v.optional(v.string()),
   },
-  handler: async (ctx, { stationIcao }) => {
-    const url = `https://tgftp.nws.noaa.gov/data/observations/metar/stations/${stationIcao}.TXT`;
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("kordPhoneCalls")
+      .withIndex("by_callSid", (q) => q.eq("callSid", args.callSid))
+      .first();
 
-    // NOAA file contains a UTC timestamp + the latest METAR :contentReference[oaicite:3]{index=3}
-    const res = await fetch(url, {
-      // best-effort to avoid caching
-      headers: { "Cache-Control": "no-cache" },
-    });
-
-    if (!res.ok) {
-      throw new Error(`NOAA fetch failed ${res.status}`);
+    if (!existing) {
+      return { ok: false, reason: "call_not_found" };
     }
 
-    const text = await res.text();
-    const { tsUtcMs, metar } = parseNoaaLatestTxt(text);
-    const { dateKey, tsLocal } = formatChicago(tsUtcMs);
-
-    const { tempC, source: tempSource } = extractTempC(metar);
-    if (tempC === null) {
-      return { ok: false, reason: "no_temp_in_metar", dateKey, tsUtcMs };
-    }
-
-    const tempF = cToF(tempC);
-
-    const result = await ctx.runMutation(internal.weather.upsertOfficialObservation, {
-      stationIcao,
-      date: dateKey,
-      tsUtc: tsUtcMs,
-      tsLocal,
-      tempC,
-      tempF,
-      rawMetar: metar,
-      source: "noaa_latest:" + tempSource,
-    });
-
-    return {
-      ok: true,
-      inserted: result.inserted,
-      dateKey,
-      tsUtcMs,
-      tempC,
-      tempF,
+    const patch = {
+      transcript: args.transcript,
+      updatedAt: now,
     };
-  },
-});
-```
 
-This is the function your page calls every 3 minutes.
-
----
-
-### 2.4 Action: One-time backfill for today from IEM (last 24 hours → filter to today)
-
-Add (recommended):
-
-```js
-export const backfillTodayOfficialFromIem = action({
-  args: {
-    stationIem: v.string(),   // "ORD"
-    stationIcao: v.string(),  // "KORD"
-  },
-  handler: async (ctx, { stationIem, stationIcao }) => {
-    // IEM supports hours=24 and report_type=3,4 (routine + specials) :contentReference[oaicite:4]{index=4}
-    const url = new URL("https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py");
-    url.searchParams.set("station", stationIem);
-    url.searchParams.append("data", "metar");
-    url.searchParams.set("report_type", "3,4");
-    url.searchParams.set("tz", "UTC");
-    url.searchParams.set("format", "onlycomma");
-    url.searchParams.set("hours", "24");
-
-    const res = await fetch(url.toString());
-    if (!res.ok) throw new Error(`IEM fetch failed ${res.status}`);
-
-    const csv = await res.text();
-    const rows = parseCsv(csv); // reuse your CSV parser from month compute
-
-    const todayKey = new Intl.DateTimeFormat("en-CA", {
-      timeZone: CHICAGO_TZ,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(new Date());
-
-    let insertedCount = 0;
-    for (const r of rows) {
-      // IEM 'valid' is like "YYYY-MM-DD HH:MM" when tz=UTC :contentReference[oaicite:5]{index=5}
-      const m = String(r.valid || "").match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
-      if (!m) continue;
-      const tsUtcMs = Date.UTC(
-        Number(m[1]), Number(m[2]) - 1, Number(m[3]),
-        Number(m[4]), Number(m[5]), 0, 0
-      );
-
-      const { dateKey, tsLocal } = formatChicago(tsUtcMs);
-      if (dateKey !== todayKey) continue;
-
-      const metar = String(r.metar || "");
-      const { tempC, source: tempSource } = extractTempC(metar);
-      if (tempC === null) continue;
-
-      const tempF = cToF(tempC);
-
-      const result = await ctx.runMutation(internal.weather.upsertOfficialObservation, {
-        stationIcao,
-        date: dateKey,
-        tsUtc: tsUtcMs,
-        tsLocal,
-        tempC,
-        tempF,
-        rawMetar: metar,
-        source: "iem_backfill:" + tempSource,
-      });
-
-      if (result.inserted) insertedCount += 1;
+    if (args.error) {
+      patch.status = "error";
+      patch.error = args.error;
+    } else if (args.tempC !== undefined && args.tempC !== null) {
+      const tempC = roundToTenth(args.tempC);
+      patch.tempC = tempC;
+      patch.tempF = toFahrenheit(tempC);
+      patch.status = "parsed";
+      patch.error = "";
+    } else {
+      patch.status = "transcribed";
+      patch.error = "temp_parse_failed";
     }
 
-    return { ok: true, insertedCount };
+    await ctx.db.patch(existing._id, patch);
+    return { ok: true };
   },
 });
 ```
 
-Notes:
-
-* This uses **report_type=3,4 only** (Routine + Specials), no HF data. ([Iowa Environmental Mesonet][2])
-* It’s only called once when the page opens (or when the user clicks Backfill).
-
 ---
 
-## Step 3 — Add polling to your existing Day page only when it is “today”
+## 3) Convex: Node actions (Twilio call + OpenAI Whisper) — `convex/kordPhoneNode.js`
 
-In **`app/kord/day/[date]/page.js`**, add:
-
-1. import `useEffect`, `useAction`:
+**Add file:** `convex/kordPhoneNode.js`
 
 ```js
-import { useEffect, useRef } from "react";
-import { useAction } from "convex/react";
-```
+"use node";
 
-2. add helpers:
+import { v } from "convex/values";
+import { internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
 
-```js
-const CHICAGO_TZ = "America/Chicago";
-function chicagoTodayKey() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: CHICAGO_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
+const DESTINATION_NUMBER_DEFAULT = "+17738000035"; // 773-800-0035
+const CALL_SECONDS = 45;
+
+function normalizeToE164(value) {
+  const raw = String(value ?? "").trim();
+  if (raw.startsWith("+")) return raw;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return raw; // best effort
 }
-```
 
-3. inside `KordDayPage()`, create actions:
+function buildTwimlPauseHangup(seconds) {
+  const safe = Math.max(1, Math.min(600, Math.floor(seconds)));
+  return `<Response><Pause length="${safe}" /><Hangup /></Response>`;
+}
 
-```js
-const pollLatest = useAction("weather:pollLatestNoaaMetar");
-const backfillToday = useAction("weather:backfillTodayOfficialFromIem");
+function extractTemperatureC(transcript) {
+  const text = String(transcript ?? "").trim();
+  if (!text) return null;
 
-const isToday = isDateValid(date) && date === chicagoTodayKey();
-const inFlightRef = useRef(false);
-```
+  // 1) Look for numeric temperature after the word "temperature"
+  // e.g. "temperature 12", "temperature is -3", "temperature 12 degrees"
+  const numericMatch = text.match(
+    /\btemperature\b[^-\d]{0,20}(-?\d{1,3}(?:\.\d+)?)/i,
+  );
+  if (numericMatch) {
+    const value = Number(numericMatch[1]);
+    if (Number.isFinite(value)) return value;
+  }
 
-4. add the polling effect:
+  // 2) Handle "temperature one five" style (common in aviation)
+  // We'll take up to 3 tokens after "temperature" and map digits.
+  const after = text.toLowerCase().split(/\btemperature\b/i)[1];
+  if (!after) return null;
 
-```js
-useEffect(() => {
-  if (!isToday) return;
+  const tokens = after
+    .replace(/[^\w\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .slice(0, 4);
 
-  let cancelled = false;
+  const digit = {
+    zero: 0,
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+  };
+  const teen = {
+    ten: 10,
+    eleven: 11,
+    twelve: 12,
+    thirteen: 13,
+    fourteen: 14,
+    fifteen: 15,
+    sixteen: 16,
+    seventeen: 17,
+    eighteen: 18,
+    nineteen: 19,
+  };
+  const tens = {
+    twenty: 20,
+    thirty: 30,
+    forty: 40,
+    fifty: 50,
+  };
 
-  async function safeCall(fn) {
-    if (cancelled) return;
-    if (document.hidden) return;
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
+  let sign = 1;
+  let start = 0;
+  if (tokens[0] === "minus" || tokens[0] === "negative") {
+    sign = -1;
+    start = 1;
+  }
+
+  const t1 = tokens[start];
+  const t2 = tokens[start + 1];
+
+  if (!t1) return null;
+
+  // Exact word numbers
+  if (teen[t1] !== undefined) return sign * teen[t1];
+  if (tens[t1] !== undefined && digit[t2] !== undefined) {
+    return sign * (tens[t1] + digit[t2]);
+  }
+  if (tens[t1] !== undefined) return sign * tens[t1];
+
+  // Two spoken digits: "one five" => 15
+  if (digit[t1] !== undefined && digit[t2] !== undefined) {
+    return sign * (digit[t1] * 10 + digit[t2]);
+  }
+
+  // Single digit word
+  if (digit[t1] !== undefined) return sign * digit[t1];
+
+  return null;
+}
+
+async function twilioCreateCall({
+  accountSid,
+  authToken,
+  to,
+  from,
+  recordingStatusCallback,
+}) {
+  const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`;
+
+  const body = new URLSearchParams();
+  body.set("To", to);
+  body.set("From", from);
+
+  // Keep the call open for 45s then hang up.
+  body.set("Twiml", buildTwimlPauseHangup(CALL_SECONDS));
+
+  // Record the entire outbound call and notify our webhook when available.
+  body.set("Record", "true");
+  body.set("RecordingStatusCallback", recordingStatusCallback);
+  body.set("RecordingStatusCallbackMethod", "POST");
+  body.append("RecordingStatusCallbackEvent", "completed");
+
+  const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+    },
+    body: body.toString(),
+  });
+
+  const json = await resp.json().catch(() => ({}));
+
+  if (!resp.ok) {
+    const msg =
+      json?.message ||
+      `Twilio call create failed (${resp.status})`;
+    throw new Error(msg);
+  }
+
+  return json;
+}
+
+async function downloadTwilioRecordingMp3({ accountSid, authToken, recordingUrl }) {
+  const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+  const mp3Url = `${recordingUrl}.mp3`;
+
+  // Small retry loop in case media is briefly not ready
+  const delays = [0, 1000, 2500, 5000];
+  let lastErr = null;
+
+  for (const d of delays) {
+    if (d) await new Promise((r) => setTimeout(r, d));
     try {
-      await fn();
-    } catch (err) {
-      console.error(err);
-    } finally {
-      inFlightRef.current = false;
+      const resp = await fetch(mp3Url, {
+        headers: { Authorization: `Basic ${auth}` },
+      });
+      if (!resp.ok) {
+        throw new Error(`Recording fetch failed (${resp.status})`);
+      }
+      const ab = await resp.arrayBuffer();
+      return new Blob([ab], { type: "audio/mpeg" });
+    } catch (e) {
+      lastErr = e;
     }
   }
 
-  // 1) Backfill once so the chart has today’s earlier points
-  safeCall(() =>
-    backfillToday({ stationIem: "ORD", stationIcao: STATION_ICAO })
-  );
+  throw lastErr instanceof Error ? lastErr : new Error("Recording download failed");
+}
 
-  // 2) Poll immediately and then every 3 minutes
-  safeCall(() => pollLatest({ stationIcao: STATION_ICAO }));
+async function openaiTranscribeWhisper({ apiKey, audioBlob }) {
+  const form = new FormData();
+  form.append("model", "whisper-1");
+  form.append("file", audioBlob, "kord-call.mp3");
 
-  const id = setInterval(() => {
-    safeCall(() => pollLatest({ stationIcao: STATION_ICAO }));
-  }, 180000);
+  const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: form,
+  });
 
-  return () => {
-    cancelled = true;
-    clearInterval(id);
-  };
-}, [isToday, pollLatest, backfillToday]);
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const msg = json?.error?.message || `OpenAI transcription failed (${resp.status})`;
+    throw new Error(msg);
+  }
+
+  // Default JSON response includes { text: "..." }
+  return String(json?.text ?? "");
+}
+
+export const startCall = internalAction({
+  args: {
+    callId: v.id("kordPhoneCalls"),
+  },
+  handler: async (ctx, args) => {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const from = process.env.TWILIO_FROM_NUMBER;
+    const convexSite = process.env.CONVEX_SITE_URL;
+
+    if (!accountSid || !authToken || !from) {
+      await ctx.runMutation(internal.kordPhone.markCallError, {
+        callId: args.callId,
+        error: "Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER",
+      });
+      return { ok: false };
+    }
+    if (!convexSite) {
+      await ctx.runMutation(internal.kordPhone.markCallError, {
+        callId: args.callId,
+        error: "Missing CONVEX_SITE_URL (needed for Twilio RecordingStatusCallback)",
+      });
+      return { ok: false };
+    }
+
+    const token = process.env.TWILIO_WEBHOOK_TOKEN;
+    const recordingStatusCallback = token
+      ? `${convexSite}/twilio/recording?token=${encodeURIComponent(token)}`
+      : `${convexSite}/twilio/recording`;
+
+    const to = normalizeToE164(process.env.KORD_ATIS_NUMBER || DESTINATION_NUMBER_DEFAULT);
+
+    try {
+      const call = await twilioCreateCall({
+        accountSid,
+        authToken,
+        to,
+        from: normalizeToE164(from),
+        recordingStatusCallback,
+      });
+
+      const callSid = String(call?.sid ?? "");
+      if (!callSid) {
+        throw new Error("Twilio did not return a CallSid");
+      }
+
+      await ctx.runMutation(internal.kordPhone.markCallStarted, {
+        callId: args.callId,
+        callSid,
+      });
+
+      return { ok: true, callSid };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await ctx.runMutation(internal.kordPhone.markCallError, {
+        callId: args.callId,
+        error: msg,
+      });
+      return { ok: false, error: msg };
+    }
+  },
+});
+
+export const processRecording = internalAction({
+  args: {
+    callSid: v.string(),
+    recordingSid: v.optional(v.string()),
+    recordingUrl: v.string(),
+    recordingDuration: v.optional(v.string()),
+    recordingStartTime: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const openaiKey = process.env.OPENAI_API_KEY;
+
+    if (!accountSid || !authToken) {
+      await ctx.runMutation(internal.kordPhone.upsertTranscriptAndTemperature, {
+        callSid: args.callSid,
+        transcript: "",
+        error: "Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN",
+      });
+      return { ok: false };
+    }
+    if (!openaiKey) {
+      await ctx.runMutation(internal.kordPhone.upsertTranscriptAndTemperature, {
+        callSid: args.callSid,
+        transcript: "",
+        error: "Missing OPENAI_API_KEY",
+      });
+      return { ok: false };
+    }
+
+    const durationNum =
+      args.recordingDuration && /^\d+(\.\d+)?$/.test(args.recordingDuration)
+        ? Number(args.recordingDuration)
+        : undefined;
+
+    // Save recording metadata immediately
+    await ctx.runMutation(internal.kordPhone.upsertRecordingFromWebhook, {
+      callSid: args.callSid,
+      recordingSid: args.recordingSid,
+      recordingUrl: args.recordingUrl,
+      recordingDuration: durationNum,
+      recordingStartTime: args.recordingStartTime,
+    });
+
+    try {
+      const audioBlob = await downloadTwilioRecordingMp3({
+        accountSid,
+        authToken,
+        recordingUrl: args.recordingUrl,
+      });
+
+      const transcript = await openaiTranscribeWhisper({
+        apiKey: openaiKey,
+        audioBlob,
+      });
+
+      const tempC = extractTemperatureC(transcript);
+
+      await ctx.runMutation(internal.kordPhone.upsertTranscriptAndTemperature, {
+        callSid: args.callSid,
+        transcript,
+        tempC: tempC ?? undefined,
+      });
+
+      return { ok: true, tempC };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await ctx.runMutation(internal.kordPhone.upsertTranscriptAndTemperature, {
+        callSid: args.callSid,
+        transcript: "",
+        error: msg,
+      });
+      return { ok: false, error: msg };
+    }
+  },
+});
 ```
-
-Now your existing `useQuery("weather:getDayObservations", ...)` will “just update” as new rows are inserted.
 
 ---
 
-## Step 4 — Make the chart “official only” when live (optional but matches your request)
+## 4) Convex HTTP Action webhook for Twilio — `convex/http.js`
 
-Right now you render both “Official” and “All”. For today live view, you can hide “All”:
-
-Replace your dataset build:
+**Add file:** `convex/http.js`
 
 ```js
-const chartData = useMemo(
-  () => ({
-    datasets: isToday
-      ? [buildLineDataset(officialRows, displayUnit, "Official", "#0f766e")]
-      : [
-          buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
-          buildLineDataset(allRows, displayUnit, "All", "#111827"),
-        ],
+import { httpRouter } from "convex/server";
+import { httpAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+
+const http = httpRouter();
+
+http.route({
+  path: "/twilio/recording",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    // Optional simple shared-secret check (recommended)
+    const url = new URL(request.url);
+    const token = url.searchParams.get("token");
+    const expected = process.env.TWILIO_WEBHOOK_TOKEN;
+    if (expected && token !== expected) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    // Twilio sends application/x-www-form-urlencoded
+    const bodyText = await request.text();
+    const params = new URLSearchParams(bodyText);
+
+    const callSid = params.get("CallSid") || "";
+    const recordingUrl = params.get("RecordingUrl") || "";
+    const recordingSid = params.get("RecordingSid") || undefined;
+    const recordingDuration = params.get("RecordingDuration") || undefined;
+    const recordingStartTime = params.get("RecordingStartTime") || undefined;
+    const recordingStatus = params.get("RecordingStatus") || "";
+
+    if (!callSid || !recordingUrl) {
+      return new Response("Missing CallSid/RecordingUrl", { status: 400 });
+    }
+
+    // Only act when completed (defensive)
+    if (recordingStatus && recordingStatus !== "completed") {
+      return new Response("Ignored", { status: 200 });
+    }
+
+    // Schedule the heavy work (download + Whisper + parsing) and return quickly
+    await ctx.scheduler.runAfter(0, internal.kordPhoneNode.processRecording, {
+      callSid,
+      recordingUrl,
+      recordingSid,
+      recordingDuration,
+      recordingStartTime,
+    });
+
+    return new Response("ok", { status: 200 });
   }),
-  [officialRows, allRows, displayUnit, isToday]
-);
+});
+
+export default http;
 ```
 
-And in the raw table merge, you can also switch to official only when live if you want.
+Convex HTTP Actions are exposed at `https://<deployment>.convex.site/...` and are commonly used for webhooks like this. ([Convex Developer Hub][5])
 
 ---
 
-## Step 5 — Add a “Live” badge + manual refresh button (quality polish)
+## 5) Convex cron to enqueue calls — `convex/crons.js`
 
-In your header, if `isToday` true:
+**Add file:** `convex/crons.js`
 
-* show `LIVE (polling every 3 min)`
-* add a “Refresh now” button that calls `pollLatest(...)`
+```js
+import { cronJobs } from "convex/server";
+import { internal } from "./_generated/api";
 
-This makes it feel pro and gives you a manual escape hatch.
+const crons = cronJobs();
 
----
+// Runs every hour at minute 45 UTC.
+// The function itself checks America/Chicago time and only runs 12:45–16:45 local.
+crons.cron(
+  "kord_phone_calls_hourly_45",
+  "45 * * * *",
+  internal.kordPhone.enqueueScheduledCall,
+  { stationIcao: "KORD" },
+);
 
-# Testing checklist (your agent should follow)
+export default crons;
+```
 
-1. Open `/kord/today` → it redirects to `/kord/day/YYYY-MM-DD`.
-2. Page loads:
-
-    * Backfill runs once → chart shows points from earlier today (if any).
-3. Leave tab open across `:51–:54` past the hour:
-
-    * Within 3 minutes after the new METAR posts, a new point appears.
-4. Confirm dedupe:
-
-    * polling every 3 minutes should not create duplicates (same timestamp won’t insert again).
-5. Confirm time axes:
-
-    * points show correct local `HH:mm` (America/Chicago), including around midnight boundaries.
+Convex cron expressions are interpreted in **UTC**, so the “check Chicago local time in code” approach keeps this DST-safe. ([Convex Developer Hub][6])
 
 ---
 
-# Two key limitations (so you don’t get surprised)
+## 6) Frontend: replace redirect with the plot page — `app/kord/today/page.js`
 
-1. **Polling “latest-only” can miss a report** if two METAR/SPECI updates happen between polls.
-   The one-time backfill reduces the “missing earlier in the day” problem, but it won’t catch a rapid pair that happened in the last 3 minutes. (Rare at KORD, but possible.)
+**Replace** your current redirect file with this **client** page.
 
-2. **Multiple users = multiple polls**
-   Each open tab will call the action every 3 minutes. If that’s a concern later, you can add a shared “cooldown” doc in Convex so only one poll per minute happens globally.
+```js
+"use client";
+
+import Link from "next/link";
+import {
+  Chart as ChartJS,
+  Legend,
+  LinearScale,
+  LineElement,
+  PointElement,
+  Title,
+  Tooltip,
+} from "chart.js";
+import { Line } from "react-chartjs-2";
+import { useMemo, useState } from "react";
+import { useQuery } from "convex/react";
+
+ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
+
+const STATION_ICAO = "KORD";
+const CHICAGO_TIMEZONE = "America/Chicago";
+
+function getDateParts(formatter, date) {
+  const parts = formatter.formatToParts(date);
+  const values = {};
+  for (const part of parts) {
+    if (part.type !== "literal") values[part.type] = part.value;
+  }
+  return values;
+}
+
+function chicagoTodayKey() {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = getDateParts(formatter, new Date());
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function parseMinute(tsLocal) {
+  const match = /(\d{2}):(\d{2})$/.exec(tsLocal || "");
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function minuteLabel(totalMinutes) {
+  if (!Number.isFinite(totalMinutes)) return "";
+  const normalized = Math.max(0, Math.min(1439, Math.round(totalMinutes)));
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function formatTemp(value, unit) {
+  if (value === undefined || value === null) return "—";
+  return `${value.toFixed(1)}°${unit}`;
+}
+
+export default function KordTodayPhoneTempsPage() {
+  const [displayUnit, setDisplayUnit] = useState("F");
+  const date = chicagoTodayKey();
+
+  const result = useQuery("kordPhone:getDayPhoneReadings", {
+    stationIcao: STATION_ICAO,
+    date,
+  });
+
+  const rows = result?.rows ?? [];
+
+  const chartData = useMemo(() => {
+    const points = rows
+      .map((row) => {
+        // Prefer tsLocal if available (recording start), else fall back to slotLocal
+        const when = row.tsLocal ?? row.slotLocal;
+        const x = parseMinute(when);
+        if (x === null) return null;
+
+        const y = displayUnit === "C" ? row.tempC : row.tempF;
+        if (!Number.isFinite(y)) return null;
+
+        return { x, y };
+      })
+      .filter(Boolean);
+
+    return {
+      datasets: [
+        {
+          label: "KORD phone temperature",
+          data: points,
+          borderColor: "#0f766e",
+          backgroundColor: "#0f766e",
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          borderWidth: 2,
+          tension: 0.25,
+          showLine: true,
+        },
+      ],
+    };
+  }, [rows, displayUnit]);
+
+  const chartOptions = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      plugins: {
+        legend: { position: "top" },
+        tooltip: {
+          callbacks: {
+            title(items) {
+              if (!items.length) return "";
+              return `Local ${minuteLabel(items[0].parsed.x)}`;
+            },
+            label(item) {
+              return `${item.dataset.label}: ${item.parsed.y.toFixed(1)}°${displayUnit}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: "linear",
+          min: 0,
+          max: 1439,
+          title: { display: true, text: "Local Time (America/Chicago)" },
+          ticks: {
+            stepSize: 60,
+            callback(value) {
+              return minuteLabel(Number(value));
+            },
+          },
+        },
+        y: {
+          title: { display: true, text: `Temperature (°${displayUnit})` },
+        },
+      },
+    }),
+    [displayUnit],
+  );
+
+  return (
+    <main className="min-h-screen px-4 py-8 md:px-8">
+      <div className="mx-auto max-w-6xl space-y-6">
+        <header className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <p className="inline-flex rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold tracking-[0.18em] text-accent">
+            STATION {STATION_ICAO}
+          </p>
+          <h1 className="mt-3 text-2xl font-semibold text-foreground">
+            KORD Phone Temperature (Today) — {date}
+          </h1>
+          <p className="mt-2 text-sm text-black/65">
+            Scheduled calls at 12:45, 1:45, 2:45, 3:45, 4:45 (America/Chicago). Each call records 45 seconds, then is transcribed via Whisper and parsed for temperature.
+          </p>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Link
+              href={`/kord/day/${date}`}
+              className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 hover:border-emerald-400"
+            >
+              Open METAR Live Day Chart
+            </Link>
+
+            {["C", "F"].map((unit) => (
+              <button
+                key={unit}
+                type="button"
+                onClick={() => setDisplayUnit(unit)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  displayUnit === unit
+                    ? "bg-black text-white"
+                    : "border border-black/20 bg-white/70 text-black/70 hover:border-black"
+                }`}
+              >
+                {unit}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <h2 className="text-lg font-semibold text-foreground">
+            Phone Temperature Plot
+          </h2>
+          <div className="mt-4 h-[360px] rounded-2xl border border-black/10 bg-white/75 p-3">
+            <Line data={chartData} options={chartOptions} />
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <h2 className="text-lg font-semibold text-foreground">Calls</h2>
+          <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+            <table className="min-w-full text-sm">
+              <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                <tr>
+                  <th className="px-3 py-2">Slot (local)</th>
+                  <th className="px-3 py-2">Recorded at</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Temp</th>
+                  <th className="px-3 py-2">Transcript</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row._id} className="border-t border-black/10">
+                    <td className="px-3 py-2 text-black/80">{row.slotLocal}</td>
+                    <td className="px-3 py-2 text-black/65">{row.tsLocal ?? "—"}</td>
+                    <td className="px-3 py-2 text-black/80">{row.status}</td>
+                    <td className="px-3 py-2 text-black/80">
+                      {formatTemp(displayUnit === "C" ? row.tempC : row.tempF, displayUnit)}
+                    </td>
+                    <td
+                      className="max-w-[520px] px-3 py-2 text-xs text-black/70"
+                      title={row.transcript ?? ""}
+                    >
+                      {(row.transcript ?? "—").slice(0, 140)}
+                      {(row.transcript ?? "").length > 140 ? "…" : ""}
+                    </td>
+                  </tr>
+                ))}
+                {rows.length === 0 ? (
+                  <tr>
+                    <td className="px-3 py-4 text-sm text-black/60" colSpan={5}>
+                      No calls recorded yet for today.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+```
 
 ---
 
-[1]: https://tgftp.nws.noaa.gov/data/observations/metar/stations/KORD.TXT "tgftp.nws.noaa.gov"
-[2]: https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?help= "Iowa Environmental Mesonet"
+## 7) Env vars you need (Convex)
+
+Set these in your Convex deployment (Dashboard or CLI):
+
+* `TWILIO_ACCOUNT_SID`
+* `TWILIO_AUTH_TOKEN`
+* `TWILIO_FROM_NUMBER` (your Twilio voice-capable number, E.164 like `+13125551212`)
+* `OPENAI_API_KEY`
+* `TWILIO_WEBHOOK_TOKEN` (any random secret string)
+* optional: `KORD_ATIS_NUMBER` (defaults to `+17738000035`)
+
+Also ensure `CONVEX_SITE_URL` is available (Convex provides a `.convex.site` URL for HTTP actions). HTTP actions are hosted at `https://<deployment>.convex.site`. ([Convex Developer Hub][5])
+
+
+[1]: https://www.twilio.com/docs/voice/tutorials/how-to-record-phone-calls/node "https://www.twilio.com/docs/voice/tutorials/how-to-record-phone-calls/node"
+[2]: https://www.twilio.com/docs/voice/api/call-resource "https://www.twilio.com/docs/voice/api/call-resource"
+[3]: https://www.twilio.com/docs/voice/twiml/record "https://www.twilio.com/docs/voice/twiml/record"
+[4]: https://developers.openai.com/api/docs/guides/speech-to-text/ "https://developers.openai.com/api/docs/guides/speech-to-text/"
+[5]: https://docs.convex.dev/functions/http-actions "https://docs.convex.dev/functions/http-actions"
+[6]: https://docs.convex.dev/api/modules/server "https://docs.convex.dev/api/modules/server"

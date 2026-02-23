@@ -1,18 +1,19 @@
 # KORD Live Today
 
-This document covers the live "today-only" METAR feature for KORD, including routes, backend ingest actions, and day-page live behavior.
+This document covers the live "today-only" KORD pages, including METAR ingest on `/kord/day/[date]` and the phone-call controls on `/kord/today`.
 
 ## Purpose
 
 - Show a live chart for **today only** using normal official METAR/SPECI reports.
 - Keep the day page updated automatically through Convex subscriptions as new rows are ingested.
-- Avoid cron requirements by running ingest logic only when a user has the page open.
+- For METAR ingest, avoid cron requirements by running polls only when a user has the day page open.
 
 ## Routes
 
 - `/kord/today`
-  - Server-side redirect route.
-  - Resolves current Chicago date (`America/Chicago`) and redirects to `/kord/day/YYYY-MM-DD`.
+  - Client page for KORD phone-call temperatures for Chicago today.
+  - Includes a manual `Call now` button that queues an immediate outbound call via `kordPhone:enqueueManualCall`.
+  - Links to `/kord/day/YYYY-MM-DD` for the live METAR day chart.
 - `/kord/day/[date]`
   - Enables live mode only when `[date]` equals Chicago today.
   - Non-today dates remain historical/static views.
@@ -55,6 +56,13 @@ Defined in `convex/weather.js`:
     - official max fields (`metarMaxC/F`, max time/raw/source)
     - official deltas (`deltaC`, `deltaF`) when manual values exist.
 
+Related phone-call trigger in `convex/kordPhone.js`:
+
+- `kordPhone:enqueueManualCall` (public mutation)
+  - Uses Chicago current time as the `slotLocal` key.
+  - Dedupe key: `(stationIcao, slotLocal)` via `kordPhoneCalls.by_station_slot`.
+  - Inserts a `queued` row and schedules `internal.kordPhoneNode.startCall`.
+
 ## Stored Data
 
 - `metarObservations`
@@ -83,13 +91,14 @@ When date is not today:
 
 - NOAA station TXT contains only the latest report. If two new reports arrive between polls, one can be missed.
 - Polling is per-browser-tab. Multiple open tabs can issue multiple poll calls.
-- No server-side scheduler is used; ingest runs only while users have live pages open.
+- For METAR ingest, no server-side scheduler is used; polling runs only while users have live day pages open.
 
 ## Change Guidance
 
 Update this document when changing any of:
 
-- `/kord/today` routing/date resolution.
+- `/kord/today` phone-call controls (`Call now`) or route/date behavior.
 - Live mode gating in `/kord/day/[date]`.
 - Poll interval, visibility gating, or manual refresh behavior.
+- `kordPhone:enqueueManualCall`.
 - `weather:pollLatestNoaaMetar`, `weather:backfillTodayOfficialFromIem`, or `weather:upsertOfficialObservation`.

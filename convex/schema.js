@@ -66,6 +66,41 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_station_date", ["stationIcao", "date"]),
 
+
+    kordPhoneCalls: defineTable({
+        stationIcao: v.string(),
+        date: v.string(), // YYYY-MM-DD (Chicago)
+        slotLocal: v.string(), // YYYY-MM-DD HH:MM (Chicago) scheduled slot or manual trigger time
+        tsUtc: v.optional(v.number()), // recording start (ms epoch)
+        tsLocal: v.optional(v.string()), // YYYY-MM-DD HH:MM (Chicago), derived from tsUtc
+
+        callSid: v.optional(v.string()),
+        recordingSid: v.optional(v.string()),
+        recordingUrl: v.optional(v.string()),
+        recordingDuration: v.optional(v.number()),
+
+        transcript: v.optional(v.string()),
+
+        tempC: v.optional(v.number()),
+        tempF: v.optional(v.number()),
+
+        status: v.union(
+            v.literal("queued"),
+            v.literal("calling"),
+            v.literal("recorded"),
+            v.literal("transcribed"),
+            v.literal("parsed"),
+            v.literal("error"),
+        ),
+        error: v.optional(v.string()),
+
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_station_date", ["stationIcao", "date"])
+        .index("by_station_slot", ["stationIcao", "slotLocal"])
+        .index("by_callSid", ["callSid"]),
+
   metarObservations: defineTable({
     stationIcao: v.string(),
     mode: v.union(v.literal("official"), v.literal("all")),
@@ -78,4 +113,5 @@ export default defineSchema({
     source: v.string(),
     updatedAt: v.number(),
   }).index("by_station_mode_date_ts", ["stationIcao", "mode", "date", "tsUtc"]),
+
 });
