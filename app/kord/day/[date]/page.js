@@ -456,12 +456,20 @@ export default function KordDayPage() {
           <p className="mt-2 text-sm text-black/70">
             The route must use <code>YYYY-MM-DD</code>.
           </p>
-          <Link
-            href="/kord/month"
-            className="mt-4 inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
-          >
-            Back to Month
-          </Link>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Link
+              href="/"
+              className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
+            >
+              Home
+            </Link>
+            <Link
+              href="/kord/month"
+              className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
+            >
+              Back to Month
+            </Link>
+          </div>
         </div>
       </main>
     );
@@ -483,6 +491,12 @@ export default function KordDayPage() {
             </p>
           ) : null}
           <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Link
+              href="/"
+              className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
+            >
+              Home
+            </Link>
             <Link
               href="/kord/month"
               className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"

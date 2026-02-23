@@ -48,7 +48,7 @@ Purpose: day-level diagnostics for observation-by-observation review.
 
 What this page displays:
 
-- Header with date and `Back to Month`.
+- Header with date plus `Home` and `Back to Month` navigation.
 - If viewing today (Chicago date), a live badge (`Live polling every 3 minutes`) and `Refresh now` button.
 - Unit toggle (`C` / `F`) for day-level display.
 - Summary cards:
