@@ -8,11 +8,12 @@ export default function Home() {
           POLYPRO
         </p>
         <h1 className="text-3xl font-semibold leading-tight text-foreground md:text-4xl">
-          Manual vs METAR Daily Max
+          KORD Weather Toolkit
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-black/70">
-          Paste your daily max temperatures for the month, then compute archived
-          METAR daily maxima for KORD to compare side by side.
+          Compare monthly manual vs METAR highs, open today&apos;s live METAR day
+          chart, run KORD phone-call temperature captures, and keep notes in one
+          place.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
           <Link
