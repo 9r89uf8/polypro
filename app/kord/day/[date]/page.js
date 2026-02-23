@@ -54,9 +54,11 @@ function minuteLabel(totalMinutes) {
     return "";
   }
   const normalized = Math.max(0, Math.min(1439, Math.round(totalMinutes)));
-  const hour = Math.floor(normalized / 60);
+  const hour24 = Math.floor(normalized / 60);
   const minute = normalized % 60;
-  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  const period = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
 function formatTemp(value, unit) {
@@ -134,6 +136,39 @@ function buildLineDataset(rows, unit, label, color) {
   };
 }
 
+function buildPhoneLineDataset(rows, unit, label, color) {
+  const data = rows
+    .map((row) => {
+      const when = row.tsLocal ?? row.slotLocal;
+      const x = parseMinute(when);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  if (!data.length) {
+    return null;
+  }
+
+  return {
+    label,
+    data,
+    borderColor: color,
+    backgroundColor: color,
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    borderWidth: 2,
+    tension: 0.25,
+    showLine: true,
+  };
+}
+
 function mergeObservationRows(officialRows, allRows, displayUnit) {
   const merged = [];
 
@@ -187,10 +222,20 @@ export default function KordDayPage() {
         }
       : "skip",
   );
+  const phoneDayData = useQuery(
+    "kordPhone:getDayPhoneReadings",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
 
   const comparison = dayData?.comparison ?? null;
   const officialRows = dayData?.officialRows ?? [];
   const allRows = dayData?.allRows ?? [];
+  const phoneRows = phoneDayData?.rows ?? [];
   const manualMax =
     displayUnit === "C" ? comparison?.manualMaxC : comparison?.manualMaxF;
   const officialMax =
@@ -295,17 +340,26 @@ export default function KordDayPage() {
     }
   }
 
-  const chartData = useMemo(
-    () => ({
-      datasets: isToday
-        ? [buildLineDataset(officialRows, displayUnit, "Official", "#0f766e")]
-        : [
-            buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
-            buildLineDataset(allRows, displayUnit, "All", "#111827"),
-          ],
-    }),
-    [officialRows, allRows, displayUnit, isToday],
-  );
+  const chartData = useMemo(() => {
+    const datasets = isToday
+      ? [buildLineDataset(officialRows, displayUnit, "Official", "#0f766e")]
+      : [
+          buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
+          buildLineDataset(allRows, displayUnit, "All", "#111827"),
+        ];
+
+    const phoneDataset = buildPhoneLineDataset(
+      phoneRows,
+      displayUnit,
+      "Phone calls",
+      "#2563eb",
+    );
+    if (phoneDataset) {
+      datasets.push(phoneDataset);
+    }
+
+    return { datasets };
+  }, [officialRows, allRows, phoneRows, displayUnit, isToday]);
 
   const chartOptions = useMemo(() => {
     const annotations = {};
@@ -523,8 +577,8 @@ export default function KordDayPage() {
               </h2>
               <p className="mt-2 text-sm text-black/65">
                 {isToday
-                  ? "Official METAR/SPECI temperatures for today (live). Red dashed line is the manual/Wunderground max."
-                  : "Official and All observation temperatures through the day. Red dashed line is the manual/Wunderground max."}
+                  ? "Official METAR/SPECI temperatures for today (live), with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max."
+                  : "Official and All observation temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max."}
               </p>
               <div className="mt-4 h-[360px] rounded-2xl border border-black/10 bg-white/75 p-3">
                 <Line data={chartData} options={chartOptions} />

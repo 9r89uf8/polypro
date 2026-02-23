@@ -14,7 +14,7 @@ This document covers the KORD phone-call temperature workflow shown on `/kord/to
   - Resolves current Chicago date (`America/Chicago`) client-side.
   - Queries `kordPhone:getDayPhoneReadings` for today's rows.
   - Renders:
-    - line chart (x: local time, y: temperature)
+    - line chart (x: local time in 12-hour format `h:mm AM/PM`, y: temperature)
     - calls table with slot, recorded time, status, temp, transcript excerpt
   - Supports:
     - `Call now` button -> `kordPhone:enqueueManualCall`

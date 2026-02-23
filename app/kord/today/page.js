@@ -51,9 +51,11 @@ function parseMinute(tsLocal) {
 function minuteLabel(totalMinutes) {
     if (!Number.isFinite(totalMinutes)) return "";
     const normalized = Math.max(0, Math.min(1439, Math.round(totalMinutes)));
-    const hour = Math.floor(normalized / 60);
+    const hour24 = Math.floor(normalized / 60);
     const minute = normalized % 60;
-    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    const period = hour24 >= 12 ? "PM" : "AM";
+    const hour12 = hour24 % 12 || 12;
+    return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
 function formatTemp(value, unit) {

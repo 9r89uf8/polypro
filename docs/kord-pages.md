@@ -56,10 +56,11 @@ What this page displays:
   - `Official Max` (+ obs count)
   - `All Max` (+ obs count) on non-today dates.
 - Line chart:
-  - Today route date: official-only line (normal METAR/SPECI ingest).
-  - Non-today dates: official + all lines.
+  - Today route date: official-only METAR line (normal METAR/SPECI ingest).
+  - Non-today dates: official + all METAR lines.
+  - Saved phone-call temperatures are overlaid as a separate `Phone calls` line when available for that date.
   - Horizontal annotation line for manual/WU max.
-  - X-axis is local time (`America/Chicago`).
+  - X-axis is local time (`America/Chicago`) shown in 12-hour format (`h:mm AM/PM`).
 - Raw observations table:
   - `Local Time`, `Mode`, `Temp`, `Source`, `Raw METAR`.
   - Today route date: official rows only.
@@ -80,6 +81,7 @@ Behavior details:
 - `dailyComparisons` table for daily aggregates (manual, official, and all fields).
 - `monthRuns` table for compute statuses and timestamps.
 - `metarObservations` table for per-observation day charting and raw review.
+- `kordPhoneCalls` table (via `kordPhone:getDayPhoneReadings`) for optional day-chart phone-temperature overlay.
 - Live-today actions:
   - NOAA latest TXT endpoint (`/data/observations/metar/stations/{ICAO}.TXT`) for incremental polling.
   - IEM ASOS request endpoint (`hours=24`, `report_type=3,4`) for today backfill.
