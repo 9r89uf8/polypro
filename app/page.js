@@ -22,10 +22,16 @@ export default function Home() {
             Open KORD Month Tool
           </Link>
           <Link
+            href="/kord/metar-today"
+            className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-5 py-2.5 text-sm font-semibold text-sky-800 transition hover:-translate-y-0.5 hover:border-sky-400"
+          >
+            Open METAR Live Day Chart
+          </Link>
+          <Link
             href="/kord/today"
             className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-5 py-2.5 text-sm font-semibold text-emerald-800 transition hover:-translate-y-0.5 hover:border-emerald-400"
           >
-            Open KORD Live Today
+            Open KORD Phone Calls Today
           </Link>
           <Link
             href="/notes"

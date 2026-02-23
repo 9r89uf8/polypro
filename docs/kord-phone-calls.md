@@ -17,6 +17,8 @@ This document covers the KORD phone-call temperature workflow shown on `/kord/to
     - line chart (x: local time in 12-hour format `h:mm AM/PM`, y: temperature)
     - calls table with slot, recorded time, status, temp, transcript excerpt
   - Supports:
+    - `Home` button back to `/`
+    - `Open METAR Live Day Chart` link to `/kord/day/YYYY-MM-DD`
     - `Call now` button -> `kordPhone:enqueueManualCall`
     - unit toggle (`C` / `F`)
     - status message for manual trigger result
