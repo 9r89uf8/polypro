@@ -15,7 +15,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Line } from "react-chartjs-2";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 
 ChartJS.register(
   LinearScale,
@@ -75,6 +75,18 @@ function formatLagMinutes(noaaFirstSeenAt, tsUtc) {
   }
   const lagMinutes = Math.max(0, (noaaFirstSeenAt - tsUtc) / 60000);
   return `${lagMinutes.toFixed(1)} min`;
+}
+
+function parseDateKeyParts(dateKey) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey || "");
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
 }
 
 function formatStoredLocalDateTime(tsLocal) {
@@ -276,6 +288,10 @@ export default function KordDayPage() {
   const [showRawObservations, setShowRawObservations] = useState(false);
   const [showUnofficialSeries, setShowUnofficialSeries] = useState(true);
   const [showUnofficialRawRows, setShowUnofficialRawRows] = useState(false);
+  const [manualEntryValue, setManualEntryValue] = useState("");
+  const [manualEntryUnit, setManualEntryUnit] = useState("F");
+  const [manualSaveMessage, setManualSaveMessage] = useState("");
+  const [isSavingManual, setIsSavingManual] = useState(false);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
@@ -287,6 +303,7 @@ export default function KordDayPage() {
   const pollLatest = useAction("weather:pollLatestNoaaMetar");
   const backfillToday = useAction("weather:backfillTodayOfficialFromIem");
   const backfillTodayAll = useAction("weather:backfillTodayAllFromIem");
+  const saveManualDay = useMutation("weather:upsertManualMonth");
 
   const dayData = useQuery(
     "weather:getDayObservations",
@@ -424,6 +441,11 @@ export default function KordDayPage() {
     };
   }, [date, isToday, backfillToday, backfillTodayAll, pollLatest]);
 
+  useEffect(() => {
+    setManualSaveMessage("");
+    setManualEntryValue("");
+  }, [date]);
+
   async function handleRefreshNow() {
     if (!isToday || inFlightRef.current) {
       return;
@@ -450,6 +472,50 @@ export default function KordDayPage() {
     } finally {
       inFlightRef.current = false;
       setIsRefreshing(false);
+    }
+  }
+
+  async function handleSaveManualMax() {
+    if (!isDateValid) {
+      return;
+    }
+
+    const parts = parseDateKeyParts(date);
+    if (!parts) {
+      setManualSaveMessage("Date is invalid.");
+      return;
+    }
+
+    const trimmed = manualEntryValue.trim();
+    if (!trimmed) {
+      setManualSaveMessage("Enter a manual max before saving.");
+      return;
+    }
+
+    const parsedValue = Number(trimmed);
+    if (!Number.isFinite(parsedValue)) {
+      setManualSaveMessage("Manual max must be numeric.");
+      return;
+    }
+
+    setIsSavingManual(true);
+    setManualSaveMessage("");
+    try {
+      await saveManualDay({
+        stationIcao: STATION_ICAO,
+        year: parts.year,
+        month: parts.month,
+        unit: manualEntryUnit,
+        values: [{ date, value: parsedValue }],
+      });
+      setManualSaveMessage(`Saved ${parsedValue.toFixed(1)}°${manualEntryUnit} for ${date}.`);
+      setManualEntryValue("");
+    } catch (error) {
+      setManualSaveMessage(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setIsSavingManual(false);
     }
   }
 
@@ -728,6 +794,46 @@ export default function KordDayPage() {
                 <p className="mt-2 text-xl font-semibold text-black">
                   {formatTemp(manualMax, displayUnit)}
                 </p>
+                <p className="mt-2 text-xs text-black/60">
+                  Enter Wunderground's reported daily max manually.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {["C", "F"].map((unit) => (
+                    <button
+                      key={unit}
+                      type="button"
+                      onClick={() => setManualEntryUnit(unit)}
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                        manualEntryUnit === unit
+                          ? "bg-black text-white"
+                          : "border border-black/20 bg-white/80 text-black/70 hover:border-black"
+                      }`}
+                    >
+                      {unit}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={manualEntryValue}
+                    onChange={(event) => setManualEntryValue(event.target.value)}
+                    placeholder={`Manual max (${manualEntryUnit})`}
+                    className="min-w-0 flex-1 rounded-lg border border-black/20 bg-white px-2.5 py-1.5 text-sm text-black outline-none focus:border-black"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveManualMax}
+                    disabled={isSavingManual}
+                    className="rounded-lg border border-black bg-black px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isSavingManual ? "Saving..." : "Save"}
+                  </button>
+                </div>
+                {manualSaveMessage ? (
+                  <p className="mt-2 text-xs text-black/70">{manualSaveMessage}</p>
+                ) : null}
               </article>
               <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
@@ -864,7 +970,7 @@ export default function KordDayPage() {
                         <tr>
                           <td className="px-3 py-4 text-sm text-black/60" colSpan={7}>
                             {mergedRows.length > 0 && !showUnofficialRawRows
-                              ? "Only unofficial (All) observations are available right now. Use “Show Unofficial (All)” to include them."
+                              ? "Only unofficial (All) observations are available right now. Use \"Show Unofficial (All)\" to include them."
                               : isToday
                                 ? "No official/all observations saved for today yet. Leave this page open to continue live polling."
                                 : "No observations saved for this day yet. Run compute first."}

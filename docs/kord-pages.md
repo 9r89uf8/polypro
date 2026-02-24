@@ -52,7 +52,7 @@ What this page displays:
 - If viewing today (Chicago date), a live badge (`Live polling every 2 minutes`) and `Refresh now` button.
 - Unit toggle (`C` / `F`) for day-level display.
 - Summary cards:
-  - `Manual / WU Max`
+  - `Manual / WU Max` (includes day-level manual entry controls: unit toggle, numeric input, and `Save`)
   - `Official Max` (+ obs count)
   - `All Max` (+ obs count).
 - Line chart:
@@ -93,6 +93,9 @@ Behavior details:
     - `weather:upsertAllObservation` for `mode=all`
   - Official rows may include `noaaFirstSeenAt` once seen by NOAA latest poll (including patching an existing backfilled row on first NOAA sighting).
   - `dailyComparisons` official/all max/count fields are updated incrementally when new rows are inserted.
+- Manual/WU max can be saved directly from this page for the selected day:
+  - Uses `weather:upsertManualMonth` with a single day value (`values: [{ date, value }]`).
+  - Updates `dailyComparisons.manualMaxC/manualMaxF` and related deltas immediately.
 
 ## Data sources used by these pages
 
