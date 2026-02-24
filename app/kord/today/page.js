@@ -99,8 +99,10 @@ export default function KordTodayPhoneTempsPage() {
                     data: points,
                     borderColor: "#0f766e",
                     backgroundColor: "#0f766e",
-                    pointRadius: 4,
-                    pointHoverRadius: 6,
+                    pointRadius: 4.5,
+                    pointHoverRadius: 7,
+                    pointHitRadius: 20,
+                    pointBorderWidth: 1.75,
                     borderWidth: 2,
                     tension: 0.25,
                     showLine: true,
@@ -114,9 +116,17 @@ export default function KordTodayPhoneTempsPage() {
             responsive: true,
             maintainAspectRatio: false,
             parsing: false,
+            interaction: {
+                mode: "nearest",
+                axis: "x",
+                intersect: false,
+            },
             plugins: {
                 legend: { position: "top" },
                 tooltip: {
+                    padding: 10,
+                    titleFont: { size: 13 },
+                    bodyFont: { size: 12 },
                     callbacks: {
                         title(items) {
                             if (!items.length) return "";
@@ -233,8 +243,13 @@ export default function KordTodayPhoneTempsPage() {
                     <h2 className="text-lg font-semibold text-foreground">
                         Phone Temperature Plot
                     </h2>
-                    <div className="mt-4 h-[360px] rounded-2xl border border-black/10 bg-white/75 p-3">
-                        <Line data={chartData} options={chartOptions} />
+                    <p className="mt-2 text-xs text-black/55 md:hidden">
+                        Tip: swipe horizontally to inspect call points and times.
+                    </p>
+                    <div className="mt-4 overflow-x-auto pb-2">
+                        <div className="h-[400px] min-w-[1200px] rounded-2xl border border-black/10 bg-white/75 p-2 sm:h-[360px] sm:p-3 md:min-w-0">
+                            <Line data={chartData} options={chartOptions} />
+                        </div>
                     </div>
                 </section>
 

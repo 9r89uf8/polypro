@@ -15,6 +15,10 @@ This document covers the KORD phone-call temperature workflow shown on `/kord/to
   - Queries `kordPhone:getDayPhoneReadings` for today's rows.
   - Renders:
     - line chart (x: local time in 12-hour format `h:mm AM/PM`, y: temperature)
+      - mobile behavior:
+        - horizontally scrollable chart region (`overflow-x-auto`) with `min-width: 1200px`
+        - larger point hit area and x-axis nearest-point interaction for touch
+        - mobile tip text (`swipe horizontally to inspect call points and times`)
     - calls table with slot, recorded time, status, temp, transcript excerpt
   - Supports:
     - `Home` button back to `/`
