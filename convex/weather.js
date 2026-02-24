@@ -654,6 +654,7 @@ export const upsertOfficialObservation = internalMutationGeneric({
     tempF: v.number(),
     rawMetar: v.string(),
     source: v.string(),
+    noaaSeenAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     if (!parseDateKey(args.date)) {
@@ -663,6 +664,8 @@ export const upsertOfficialObservation = internalMutationGeneric({
     const tempC = roundToTenth(args.tempC);
     const tempF = roundToTenth(args.tempF);
     const now = Date.now();
+    const noaaSeenAt =
+      typeof args.noaaSeenAt === "number" ? Math.round(args.noaaSeenAt) : null;
 
     const existing = await ctx.db
       .query("metarObservations")
@@ -676,7 +679,15 @@ export const upsertOfficialObservation = internalMutationGeneric({
       .first();
 
     if (existing) {
-      return { inserted: false };
+      let recordedSeenAt = existing.noaaFirstSeenAt ?? null;
+      if (recordedSeenAt === null && noaaSeenAt !== null) {
+        await ctx.db.patch(existing._id, {
+          noaaFirstSeenAt: noaaSeenAt,
+          updatedAt: now,
+        });
+        recordedSeenAt = noaaSeenAt;
+      }
+      return { inserted: false, noaaFirstSeenAt: recordedSeenAt };
     }
 
     await ctx.db.insert("metarObservations", {
@@ -689,6 +700,7 @@ export const upsertOfficialObservation = internalMutationGeneric({
       tempF,
       rawMetar: args.rawMetar,
       source: args.source,
+      ...(noaaSeenAt !== null ? { noaaFirstSeenAt: noaaSeenAt } : {}),
       updatedAt: now,
     });
 
@@ -742,7 +754,7 @@ export const upsertOfficialObservation = internalMutationGeneric({
 
     await ctx.db.patch(comparison._id, patch);
 
-    return { inserted: true };
+    return { inserted: true, noaaFirstSeenAt: noaaSeenAt };
   },
 });
 
@@ -869,6 +881,7 @@ export const pollLatestNoaaMetar = actionGeneric({
 
     const body = await response.text();
     const { tsUtc, rawMetar } = parseNoaaLatestTxt(body);
+    const polledAt = Date.now();
 
     if (isHighFrequencyGeneratedMetar(rawMetar)) {
       return {
@@ -903,7 +916,9 @@ export const pollLatestNoaaMetar = actionGeneric({
       tempF,
       rawMetar,
       source: `noaa_latest:${tempInfo.source}`,
+      noaaSeenAt: polledAt,
     });
+    const noaaFirstSeenAt = result.noaaFirstSeenAt ?? polledAt;
 
     return {
       ok: true,
@@ -913,6 +928,8 @@ export const pollLatestNoaaMetar = actionGeneric({
       tsLocal,
       tempC,
       tempF,
+      noaaFirstSeenAt,
+      availabilityLagMs: Math.max(0, noaaFirstSeenAt - tsUtc),
     };
   },
 });
@@ -1339,6 +1356,7 @@ const metarObservationRowValidator = v.object({
   tempF: v.number(),
   rawMetar: v.string(),
   source: v.string(),
+  noaaFirstSeenAt: v.optional(v.number()),
 });
 
 export const upsertMetarMonthResults = internalMutationGeneric({
@@ -1470,6 +1488,9 @@ export const insertObservationChunk = internalMutationGeneric({
         tempF: row.tempF,
         rawMetar: row.rawMetar,
         source: row.source,
+        ...(row.noaaFirstSeenAt !== undefined
+          ? { noaaFirstSeenAt: row.noaaFirstSeenAt }
+          : {}),
         updatedAt: now,
       });
       inserted += 1;

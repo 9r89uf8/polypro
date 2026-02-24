@@ -33,7 +33,7 @@ When `/kord/day/[date]` is opened for today's Chicago date:
 3. Run immediate NOAA latest poll:
    - Action: `weather:pollLatestNoaaMetar`
    - Source: NOAA latest station TXT (`.../stations/KORD.TXT`)
-4. Start interval polling every 3 minutes while the tab is visible.
+4. Start interval polling every 2 minutes while the tab is visible.
 5. Manual "Refresh now" triggers all-mode backfill + immediate NOAA poll.
 
 ## Backend Actions and Mutation
@@ -45,6 +45,7 @@ Defined in `convex/weather.js`:
   - Parses UTC timestamp + METAR text.
   - Skips high-frequency generated reports (`MADISHF`).
   - Extracts temperature from METAR remark `T` group first, then integer temp group fallback.
+  - Captures poll time (`noaaSeenAt`) and forwards it to `weather:upsertOfficialObservation`.
   - Calls `weather:upsertOfficialObservation`.
 
 - `weather:backfillTodayOfficialFromIem`
@@ -60,6 +61,8 @@ Defined in `convex/weather.js`:
 - `weather:upsertOfficialObservation` (internal mutation)
   - Dedupe key: `(stationIcao, mode=official, date, tsUtc)`.
   - Inserts row into `metarObservations` with `mode: "official"`.
+  - Persists `noaaFirstSeenAt` when a row is first observed via NOAA latest polling.
+  - If a row already exists (for example from IEM backfill), a later NOAA poll will patch `noaaFirstSeenAt` the first time NOAA sees that same `(station,date,tsUtc)` report.
   - Updates/creates `dailyComparisons` for:
     - `metarObsCount`
     - official max fields (`metarMaxC/F`, max time/raw/source)
@@ -85,6 +88,7 @@ Related phone-call trigger in `convex/kordPhone.js`:
 - `metarObservations`
   - Uses `mode: "official"` for NOAA poll + official IEM backfill rows.
   - Uses `mode: "all"` for all-mode IEM backfill rows.
+  - Official rows can include `noaaFirstSeenAt` (epoch ms) showing first observed time from NOAA latest polling.
   - `source` is tagged with prefixes:
     - `noaa_latest:<temp_source>`
     - `iem_backfill:<temp_source>`
@@ -110,7 +114,8 @@ When date is not today:
 
 - NOAA station TXT contains only the latest report. If two new reports arrive between polls, one can be missed.
 - Polling is per-browser-tab. Multiple open tabs can issue multiple poll calls.
-- All-mode (5-minute) data is refreshed on page bootstrap and manual refresh, not on each 3-minute poll tick.
+- All-mode (5-minute) data is refreshed on page bootstrap and manual refresh, not on each 2-minute poll tick.
+- `noaaFirstSeenAt` reflects first time this app observed the report from NOAA latest polling, not NOAA's upstream publish timestamp; precision is bounded by poll cadence and tab-visibility pauses.
 - For METAR ingest, no server-side scheduler is used; polling runs only while users have live day pages open.
 
 ## Change Guidance

@@ -30,7 +30,7 @@ ChartJS.register(
 const STATION_ICAO = "KORD";
 const STATION_IEM = "ORD";
 const CHICAGO_TIMEZONE = "America/Chicago";
-const LIVE_POLL_INTERVAL_MS = 3 * 60 * 1000;
+const LIVE_POLL_INTERVAL_MS = 2 * 60 * 1000;
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 
 function isValidDate(value) {
@@ -69,6 +69,29 @@ function formatTemp(value, unit) {
   return `${value.toFixed(1)}°${unit}`;
 }
 
+function formatLagMinutes(noaaFirstSeenAt, tsUtc) {
+  if (!Number.isFinite(noaaFirstSeenAt) || !Number.isFinite(tsUtc)) {
+    return "—";
+  }
+  const lagMinutes = Math.max(0, (noaaFirstSeenAt - tsUtc) / 60000);
+  return `${lagMinutes.toFixed(1)} min`;
+}
+
+function formatStoredLocalDateTime(tsLocal) {
+  const match = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})$/.exec(tsLocal || "");
+  if (!match) {
+    return tsLocal || "—";
+  }
+  const hour24 = Number(match[2]);
+  const minute = Number(match[3]);
+  if (!Number.isFinite(hour24) || !Number.isFinite(minute)) {
+    return tsLocal;
+  }
+  const period = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+}
+
 function getDateParts(formatter, date) {
   const parts = formatter.formatToParts(date);
   const values = {};
@@ -91,15 +114,43 @@ function chicagoTodayKey() {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function formatChicagoDateTimeSeconds(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return "—";
+  }
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+  const parts = getDateParts(formatter, new Date(epochMs));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
+}
+
 function formatLivePollMessage(result, label) {
   if (!result?.ok) {
     return `${label} skipped (${result?.reason ?? "unknown"}).`;
   }
 
+  const seenAtText = Number.isFinite(result.noaaFirstSeenAt)
+    ? formatChicagoDateTimeSeconds(result.noaaFirstSeenAt)
+    : null;
+  const lagText = Number.isFinite(result.availabilityLagMs)
+    ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
+    : null;
+  const timingSuffix = seenAtText
+    ? ` First seen ${seenAtText}${lagText ? ` (${lagText})` : ""}.`
+    : "";
+
   if (result.inserted) {
-    return `${label}: saved ${result.tsLocal}.`;
+    return `${label}: saved ${result.tsLocal}.${timingSuffix}`;
   }
-  return `${label}: no new report (${result.tsLocal}).`;
+  return `${label}: no new report (${result.tsLocal}).${timingSuffix}`;
 }
 
 function formatBackfillMessage(result, label) {
@@ -197,6 +248,7 @@ function mergeObservationRows(officialRows, allRows, displayUnit) {
       temp: displayUnit === "C" ? row.tempC : row.tempF,
       source: row.source,
       rawMetar: row.rawMetar,
+      noaaFirstSeenAt: row.noaaFirstSeenAt ?? null,
     });
   }
 
@@ -208,6 +260,7 @@ function mergeObservationRows(officialRows, allRows, displayUnit) {
       temp: displayUnit === "C" ? row.tempC : row.tempF,
       source: row.source,
       rawMetar: row.rawMetar,
+      noaaFirstSeenAt: null,
     });
   }
 
@@ -222,6 +275,7 @@ export default function KordDayPage() {
   const [displayUnit, setDisplayUnit] = useState("F");
   const [showRawObservations, setShowRawObservations] = useState(false);
   const [showUnofficialSeries, setShowUnofficialSeries] = useState(true);
+  const [showUnofficialRawRows, setShowUnofficialRawRows] = useState(false);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
@@ -557,6 +611,12 @@ export default function KordDayPage() {
     () => mergeObservationRows(officialRows, allRows, displayUnit),
     [officialRows, allRows, displayUnit],
   );
+  const filteredRawRows = useMemo(() => {
+    if (showUnofficialRawRows) {
+      return mergedRows;
+    }
+    return mergedRows.filter((row) => row.mode === "official");
+  }, [mergedRows, showUnofficialRawRows]);
 
   if (!isDateValid) {
     return (
@@ -597,7 +657,7 @@ export default function KordDayPage() {
           </h1>
           {isToday ? (
             <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">
-              Live polling every 3 minutes
+              Live polling every 2 minutes
             </p>
           ) : null}
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -726,13 +786,26 @@ export default function KordDayPage() {
                 <h2 className="text-lg font-semibold text-foreground">
                   Raw Observations
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => setShowRawObservations((current) => !current)}
-                  className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
-                >
-                  {showRawObservations ? "Hide Raw Observations" : "Show Raw Observations"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowUnofficialRawRows((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showUnofficialRawRows
+                      ? "Hide Unofficial (All)"
+                      : "Show Unofficial (All)"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowRawObservations((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showRawObservations
+                      ? "Hide Raw Observations"
+                      : "Show Raw Observations"}
+                  </button>
+                </div>
               </div>
               {showRawObservations ? (
                 <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
@@ -743,13 +816,17 @@ export default function KordDayPage() {
                         <th className="px-3 py-2">Mode</th>
                         <th className="px-3 py-2">Temp</th>
                         <th className="px-3 py-2">Source</th>
+                        <th className="px-3 py-2">NOAA First Seen</th>
+                        <th className="px-3 py-2">Lag vs Obs</th>
                         <th className="px-3 py-2">Raw METAR</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {mergedRows.map((row, index) => (
+                      {filteredRawRows.map((row, index) => (
                         <tr key={`${row.mode}-${row.tsUtc}-${index}`} className="border-t border-black/10">
-                          <td className="px-3 py-2 text-black/80">{row.tsLocal}</td>
+                          <td className="px-3 py-2 text-black/80">
+                            {formatStoredLocalDateTime(row.tsLocal)}
+                          </td>
                           <td className="px-3 py-2">
                             <span
                               className={`rounded-full px-2 py-1 text-xs font-semibold ${
@@ -765,6 +842,16 @@ export default function KordDayPage() {
                             {formatTemp(row.temp, displayUnit)}
                           </td>
                           <td className="px-3 py-2 text-black/65">{row.source}</td>
+                          <td className="px-3 py-2 text-black/65">
+                            {row.mode === "official"
+                              ? formatChicagoDateTimeSeconds(row.noaaFirstSeenAt)
+                              : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-black/65">
+                            {row.mode === "official"
+                              ? formatLagMinutes(row.noaaFirstSeenAt, row.tsUtc)
+                              : "—"}
+                          </td>
                           <td
                             className="max-w-[700px] px-3 py-2 font-mono text-xs text-black/70"
                             title={row.rawMetar}
@@ -773,12 +860,14 @@ export default function KordDayPage() {
                           </td>
                         </tr>
                       ))}
-                      {mergedRows.length === 0 ? (
+                      {filteredRawRows.length === 0 ? (
                         <tr>
-                          <td className="px-3 py-4 text-sm text-black/60" colSpan={5}>
-                            {isToday
-                              ? "No official/all observations saved for today yet. Leave this page open to continue live polling."
-                              : "No observations saved for this day yet. Run compute first."}
+                          <td className="px-3 py-4 text-sm text-black/60" colSpan={7}>
+                            {mergedRows.length > 0 && !showUnofficialRawRows
+                              ? "Only unofficial (All) observations are available right now. Use “Show Unofficial (All)” to include them."
+                              : isToday
+                                ? "No official/all observations saved for today yet. Leave this page open to continue live polling."
+                                : "No observations saved for this day yet. Run compute first."}
                           </td>
                         </tr>
                       ) : null}

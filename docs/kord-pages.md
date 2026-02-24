@@ -49,7 +49,7 @@ Purpose: day-level diagnostics for observation-by-observation review.
 What this page displays:
 
 - Header with date plus `Home` and `Back to Month` navigation.
-- If viewing today (Chicago date), a live badge (`Live polling every 3 minutes`) and `Refresh now` button.
+- If viewing today (Chicago date), a live badge (`Live polling every 2 minutes`) and `Refresh now` button.
 - Unit toggle (`C` / `F`) for day-level display.
 - Summary cards:
   - `Manual / WU Max`
@@ -71,7 +71,11 @@ What this page displays:
     - Taller chart container and a mobile tip note (`swipe horizontally to inspect points across the full day`).
 - Raw observations table:
   - Hidden by default behind a `Show Raw Observations` toggle.
-  - `Local Time`, `Mode`, `Temp`, `Source`, `Raw METAR`.
+  - Defaults to official rows only; unofficial `all` rows are hidden until `Show Unofficial (All)` is enabled.
+  - `Local Time`, `Mode`, `Temp`, `Source`, `NOAA First Seen`, `Lag vs Obs`, `Raw METAR`.
+  - `Local Time` and `NOAA First Seen` are displayed in 12-hour local time with AM/PM.
+  - `NOAA First Seen` is populated for official rows once NOAA latest polling first observes that report.
+  - `Lag vs Obs` shows `(NOAA First Seen - METAR observation tsUtc)` in minutes.
   - Today route date: official + all rows.
 
 Behavior details:
@@ -82,11 +86,12 @@ Behavior details:
   - Runs one-time backfill action: `weather:backfillTodayOfficialFromIem` (IEM last 24h, report types 3/4, filtered to today local date).
   - Runs one-time backfill action: `weather:backfillTodayAllFromIem` (IEM last 24h, report types 1/3/4, filtered to today local date).
   - Runs immediate live poll action: `weather:pollLatestNoaaMetar` (NOAA latest station TXT).
-  - Starts a 3-minute interval to poll NOAA while the tab is visible.
+  - Starts a 2-minute interval to poll NOAA while the tab is visible.
   - Manual refresh triggers an all-mode today backfill + immediate NOAA poll.
   - Inserts are deduped by `(stationIcao, mode, date, tsUtc)` via:
     - `weather:upsertOfficialObservation` for `mode=official`
     - `weather:upsertAllObservation` for `mode=all`
+  - Official rows may include `noaaFirstSeenAt` once seen by NOAA latest poll (including patching an existing backfilled row on first NOAA sighting).
   - `dailyComparisons` official/all max/count fields are updated incrementally when new rows are inserted.
 
 ## Data sources used by these pages

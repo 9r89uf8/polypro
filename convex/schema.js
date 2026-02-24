@@ -111,6 +111,7 @@ export default defineSchema({
     tempF: v.number(),
     rawMetar: v.string(),
     source: v.string(),
+    noaaFirstSeenAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_station_mode_date_ts", ["stationIcao", "mode", "date", "tsUtc"]),
 
