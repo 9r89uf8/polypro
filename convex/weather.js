@@ -746,6 +746,108 @@ export const upsertOfficialObservation = internalMutationGeneric({
   },
 });
 
+export const upsertAllObservation = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+    tsUtc: v.number(),
+    tsLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    rawMetar: v.string(),
+    source: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!parseDateKey(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+
+    const tempC = roundToTenth(args.tempC);
+    const tempF = roundToTenth(args.tempF);
+    const now = Date.now();
+
+    const existing = await ctx.db
+      .query("metarObservations")
+      .withIndex("by_station_mode_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("mode", METAR_MODE.ALL)
+          .eq("date", args.date)
+          .eq("tsUtc", args.tsUtc),
+      )
+      .first();
+
+    if (existing) {
+      return { inserted: false };
+    }
+
+    await ctx.db.insert("metarObservations", {
+      stationIcao: args.stationIcao,
+      mode: METAR_MODE.ALL,
+      date: args.date,
+      tsUtc: args.tsUtc,
+      tsLocal: args.tsLocal,
+      tempC,
+      tempF,
+      rawMetar: args.rawMetar,
+      source: args.source,
+      updatedAt: now,
+    });
+
+    const existingComparison = await findDailyComparison(
+      ctx,
+      args.stationIcao,
+      args.date,
+    );
+    let comparison = existingComparison;
+    if (!comparison) {
+      const comparisonId = await ctx.db.insert("dailyComparisons", {
+        stationIcao: args.stationIcao,
+        date: args.date,
+        updatedAt: now,
+      });
+      comparison = await ctx.db.get(comparisonId);
+    }
+
+    if (!comparison) {
+      throw new Error("Failed to load daily comparison after insertion.");
+    }
+
+    const patch = {
+      metarAllObsCount: (comparison.metarAllObsCount ?? 0) + 1,
+      updatedAt: now,
+    };
+
+    const shouldReplaceMax =
+      comparison.metarAllMaxC === undefined ||
+      comparison.metarAllMaxC === null ||
+      tempC > comparison.metarAllMaxC ||
+      (tempC === comparison.metarAllMaxC &&
+        getSourcePriority(args.source) >
+          getSourcePriority(comparison.metarAllMaxSource));
+
+    if (shouldReplaceMax) {
+      patch.metarAllMaxC = tempC;
+      patch.metarAllMaxF = tempF;
+      patch.metarAllMaxAtUtc = args.tsUtc;
+      patch.metarAllMaxAtLocal = args.tsLocal;
+      patch.metarAllMaxRaw = args.rawMetar;
+      patch.metarAllMaxSource = args.source;
+
+      if (comparison.manualMaxC !== undefined && comparison.manualMaxC !== null) {
+        patch.deltaAllC = roundToTenth(comparison.manualMaxC - tempC);
+      }
+      if (comparison.manualMaxF !== undefined && comparison.manualMaxF !== null) {
+        patch.deltaAllF = roundToTenth(comparison.manualMaxF - tempF);
+      }
+    }
+
+    await ctx.db.patch(comparison._id, patch);
+
+    return { inserted: true };
+  },
+});
+
 export const pollLatestNoaaMetar = actionGeneric({
   args: {
     stationIcao: v.string(),
@@ -877,6 +979,82 @@ export const backfillTodayOfficialFromIem = actionGeneric({
         tempF,
         rawMetar,
         source: `iem_backfill:${tempInfo.source}`,
+      });
+
+      if (result.inserted) {
+        insertedCount += 1;
+      }
+    }
+
+    return {
+      ok: true,
+      dateKey: todayKey,
+      downloadedRows: observations.length,
+      consideredCount,
+      insertedCount,
+    };
+  },
+});
+
+export const backfillTodayAllFromIem = actionGeneric({
+  args: {
+    stationIem: v.string(),
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIem = args.stationIem.trim().toUpperCase();
+    const stationIcao = args.stationIcao.trim().toUpperCase();
+    if (!stationIem || !stationIcao) {
+      throw new Error("stationIem and stationIcao are required.");
+    }
+
+    const params = new URLSearchParams();
+    params.set("station", stationIem);
+    params.append("report_type", "1");
+    params.append("report_type", "3");
+    params.append("report_type", "4");
+    params.set("data", "metar");
+    params.set("tz", "UTC");
+    params.set("format", "onlycomma");
+    params.set("hours", "24");
+
+    const csvText = await fetchCsvWithRetry(
+      `https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?${params.toString()}`,
+    );
+    const observations = parseCsvObservations(csvText);
+    const todayKey = chicagoTodayDateKey();
+    let insertedCount = 0;
+    let consideredCount = 0;
+
+    for (const observation of observations) {
+      const utcEpoch = parseValidUtcEpoch(observation.valid);
+      if (utcEpoch === null) {
+        continue;
+      }
+
+      const dateKey = formatChicagoDate(utcEpoch);
+      if (dateKey !== todayKey) {
+        continue;
+      }
+
+      const rawMetar = observation.metar ?? "";
+      const tempInfo = extractTempInfo(rawMetar, undefined);
+      if (!tempInfo) {
+        continue;
+      }
+
+      consideredCount += 1;
+      const tempC = roundToTenth(tempInfo.tempC);
+      const tempF = toFahrenheit(tempC);
+      const result = await ctx.runMutation("weather:upsertAllObservation", {
+        stationIcao,
+        date: dateKey,
+        tsUtc: utcEpoch,
+        tsLocal: formatChicagoDateTime(utcEpoch),
+        tempC,
+        tempF,
+        rawMetar,
+        source: `iem_backfill_all:${tempInfo.source}`,
       });
 
       if (result.inserted) {

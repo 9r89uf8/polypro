@@ -101,11 +101,11 @@ function formatLivePollMessage(result, label) {
   return `${label}: no new report (${result.tsLocal}).`;
 }
 
-function formatBackfillMessage(result) {
+function formatBackfillMessage(result, label) {
   if (!result?.ok) {
-    return "Live backfill skipped.";
+    return `${label} skipped.`;
   }
-  return `Live backfill: inserted ${result.insertedCount} of ${result.consideredCount} today observations.`;
+  return `${label}: inserted ${result.insertedCount} of ${result.consideredCount} today observations.`;
 }
 
 function buildLineDataset(rows, unit, label, color) {
@@ -203,6 +203,7 @@ export default function KordDayPage() {
   const rawDate = Array.isArray(params?.date) ? params.date[0] : params?.date;
   const date = rawDate || "";
   const [displayUnit, setDisplayUnit] = useState("F");
+  const [showRawObservations, setShowRawObservations] = useState(false);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const inFlightRef = useRef(false);
@@ -212,6 +213,7 @@ export default function KordDayPage() {
 
   const pollLatest = useAction("weather:pollLatestNoaaMetar");
   const backfillToday = useAction("weather:backfillTodayOfficialFromIem");
+  const backfillTodayAll = useAction("weather:backfillTodayAllFromIem");
 
   const dayData = useQuery(
     "weather:getDayObservations",
@@ -283,12 +285,23 @@ export default function KordDayPage() {
 
     async function bootstrapLive() {
       if (backfilledDateRef.current !== date) {
-        const backfillSucceeded = await safeCall(
+        const officialBackfillSucceeded = await safeCall(
           () => backfillToday({ stationIem: STATION_IEM, stationIcao: STATION_ICAO }),
-          (result) => formatBackfillMessage(result),
+          (result) => formatBackfillMessage(result, "Official backfill"),
           { skipWhenHidden: false },
         );
-        if (backfillSucceeded) {
+
+        const allBackfillSucceeded = await safeCall(
+          () =>
+            backfillTodayAll({
+              stationIem: STATION_IEM,
+              stationIcao: STATION_ICAO,
+            }),
+          (result) => formatBackfillMessage(result, "All backfill"),
+          { skipWhenHidden: false },
+        );
+
+        if (officialBackfillSucceeded && allBackfillSucceeded) {
           backfilledDateRef.current = date;
         }
       }
@@ -318,7 +331,7 @@ export default function KordDayPage() {
         clearInterval(intervalId);
       }
     };
-  }, [date, isToday, backfillToday, pollLatest]);
+  }, [date, isToday, backfillToday, backfillTodayAll, pollLatest]);
 
   async function handleRefreshNow() {
     if (!isToday || inFlightRef.current) {
@@ -328,8 +341,17 @@ export default function KordDayPage() {
     setIsRefreshing(true);
     inFlightRef.current = true;
     try {
-      const result = await pollLatest({ stationIcao: STATION_ICAO });
-      setLiveMessage(formatLivePollMessage(result, "Manual refresh"));
+      const allResult = await backfillTodayAll({
+        stationIem: STATION_IEM,
+        stationIcao: STATION_ICAO,
+      });
+      const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
+      setLiveMessage(
+        `${formatBackfillMessage(allResult, "Manual all backfill")} ${formatLivePollMessage(
+          pollResult,
+          "Manual refresh",
+        )}`,
+      );
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -341,12 +363,10 @@ export default function KordDayPage() {
   }
 
   const chartData = useMemo(() => {
-    const datasets = isToday
-      ? [buildLineDataset(officialRows, displayUnit, "Official", "#0f766e")]
-      : [
-          buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
-          buildLineDataset(allRows, displayUnit, "All", "#111827"),
-        ];
+    const datasets = [
+      buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
+      buildLineDataset(allRows, displayUnit, "All", "#111827"),
+    ];
 
     const phoneDataset = buildPhoneLineDataset(
       phoneRows,
@@ -359,7 +379,7 @@ export default function KordDayPage() {
     }
 
     return { datasets };
-  }, [officialRows, allRows, phoneRows, displayUnit, isToday]);
+  }, [officialRows, allRows, phoneRows, displayUnit]);
 
   const chartOptions = useMemo(() => {
     const annotations = {};
@@ -439,13 +459,8 @@ export default function KordDayPage() {
   }, [manualMax, displayUnit]);
 
   const mergedRows = useMemo(
-    () =>
-      mergeObservationRows(
-        officialRows,
-        isToday ? [] : allRows,
-        displayUnit,
-      ),
-    [officialRows, allRows, displayUnit, isToday],
+    () => mergeObservationRows(officialRows, allRows, displayUnit),
+    [officialRows, allRows, displayUnit],
   );
 
   if (!isDateValid) {
@@ -539,7 +554,7 @@ export default function KordDayPage() {
           {isToday ? (
             <p className="mt-3 text-xs text-black/65">
               {liveMessage ||
-                "Live mode will backfill today once, then poll NOAA while this tab is visible."}
+                "Live mode will backfill official + all once, then poll NOAA while this tab is visible."}
             </p>
           ) : null}
         </header>
@@ -550,7 +565,7 @@ export default function KordDayPage() {
           </section>
         ) : (
           <>
-            <section className={`grid gap-4 ${isToday ? "md:grid-cols-2" : "md:grid-cols-3"}`}>
+            <section className="grid gap-4 md:grid-cols-3">
               <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
                   Manual / WU Max
@@ -570,19 +585,17 @@ export default function KordDayPage() {
                   Obs: {comparison?.metarObsCount ?? "—"}
                 </p>
               </article>
-              {!isToday ? (
-                <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    All Max
-                  </p>
-                  <p className="mt-2 text-xl font-semibold text-black">
-                    {formatTemp(allMax, displayUnit)}
-                  </p>
-                  <p className="mt-1 text-xs text-black/60">
-                    Obs: {comparison?.metarAllObsCount ?? "—"}
-                  </p>
-                </article>
-              ) : null}
+              <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                  All Max
+                </p>
+                <p className="mt-2 text-xl font-semibold text-black">
+                  {formatTemp(allMax, displayUnit)}
+                </p>
+                <p className="mt-1 text-xs text-black/60">
+                  Obs: {comparison?.metarAllObsCount ?? "—"}
+                </p>
+              </article>
             </section>
 
             <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
@@ -590,9 +603,7 @@ export default function KordDayPage() {
                 Temperature Lines
               </h2>
               <p className="mt-2 text-sm text-black/65">
-                {isToday
-                  ? "Official METAR/SPECI temperatures for today (live), with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max."
-                  : "Official and All observation temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max."}
+                Official and All observation temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max.
               </p>
               <div className="mt-4 h-[360px] rounded-2xl border border-black/10 bg-white/75 p-3">
                 <Line data={chartData} options={chartOptions} />
@@ -600,59 +611,74 @@ export default function KordDayPage() {
             </section>
 
             <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
-              <h2 className="text-lg font-semibold text-foreground">
-                Raw Observations
-              </h2>
-              <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
-                    <tr>
-                      <th className="px-3 py-2">Local Time</th>
-                      <th className="px-3 py-2">Mode</th>
-                      <th className="px-3 py-2">Temp</th>
-                      <th className="px-3 py-2">Source</th>
-                      <th className="px-3 py-2">Raw METAR</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mergedRows.map((row, index) => (
-                      <tr key={`${row.mode}-${row.tsUtc}-${index}`} className="border-t border-black/10">
-                        <td className="px-3 py-2 text-black/80">{row.tsLocal}</td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                              row.mode === "official"
-                                ? "bg-emerald-100 text-emerald-800"
-                                : "bg-black/10 text-black/75"
-                            }`}
-                          >
-                            {row.mode}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-black/80">
-                          {formatTemp(row.temp, displayUnit)}
-                        </td>
-                        <td className="px-3 py-2 text-black/65">{row.source}</td>
-                        <td
-                          className="max-w-[700px] px-3 py-2 font-mono text-xs text-black/70"
-                          title={row.rawMetar}
-                        >
-                          {row.rawMetar}
-                        </td>
-                      </tr>
-                    ))}
-                    {mergedRows.length === 0 ? (
-                      <tr>
-                        <td className="px-3 py-4 text-sm text-black/60" colSpan={5}>
-                          {isToday
-                            ? "No official observations saved for today yet. Leave this page open to continue live polling."
-                            : "No observations saved for this day yet. Run compute first."}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-foreground">
+                  Raw Observations
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowRawObservations((current) => !current)}
+                  className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                >
+                  {showRawObservations ? "Hide Raw Observations" : "Show Raw Observations"}
+                </button>
               </div>
+              {showRawObservations ? (
+                <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                      <tr>
+                        <th className="px-3 py-2">Local Time</th>
+                        <th className="px-3 py-2">Mode</th>
+                        <th className="px-3 py-2">Temp</th>
+                        <th className="px-3 py-2">Source</th>
+                        <th className="px-3 py-2">Raw METAR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mergedRows.map((row, index) => (
+                        <tr key={`${row.mode}-${row.tsUtc}-${index}`} className="border-t border-black/10">
+                          <td className="px-3 py-2 text-black/80">{row.tsLocal}</td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                                row.mode === "official"
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : "bg-black/10 text-black/75"
+                              }`}
+                            >
+                              {row.mode}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-black/80">
+                            {formatTemp(row.temp, displayUnit)}
+                          </td>
+                          <td className="px-3 py-2 text-black/65">{row.source}</td>
+                          <td
+                            className="max-w-[700px] px-3 py-2 font-mono text-xs text-black/70"
+                            title={row.rawMetar}
+                          >
+                            {row.rawMetar}
+                          </td>
+                        </tr>
+                      ))}
+                      {mergedRows.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-4 text-sm text-black/60" colSpan={5}>
+                            {isToday
+                              ? "No official/all observations saved for today yet. Leave this page open to continue live polling."
+                              : "No observations saved for this day yet. Run compute first."}
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-black/60">
+                  Hidden by default. Use "Show Raw Observations" to expand.
+                </p>
+              )}
             </section>
           </>
         )}

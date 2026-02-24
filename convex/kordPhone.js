@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 
 const CHICAGO_TIMEZONE = "America/Chicago";
 const SCHEDULED_LOCAL_HOURS = new Set([12, 13, 14, 15, 16]);
-const SCHEDULED_MINUTE = 45;
+const SCHEDULED_MINUTE = 51;
 
 const chicagoDateFormatter = new Intl.DateTimeFormat("en-US", {
     timeZone: CHICAGO_TIMEZONE,
@@ -109,8 +109,8 @@ export const getDayPhoneReadings = query({
 });
 
 /**
- * Internal mutation invoked by cron every hour at :45 UTC.
- * It checks Chicago local time and enqueues only 12:45–16:45 local.
+ * Internal mutation invoked by cron every hour at :51 UTC.
+ * It checks Chicago local time and enqueues only 12:51–16:51 local.
  */
 export const enqueueScheduledCall = internalMutation({
     args: {

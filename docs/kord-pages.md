@@ -54,16 +54,17 @@ What this page displays:
 - Summary cards:
   - `Manual / WU Max`
   - `Official Max` (+ obs count)
-  - `All Max` (+ obs count) on non-today dates.
+  - `All Max` (+ obs count).
 - Line chart:
-  - Today route date: official-only METAR line (normal METAR/SPECI ingest).
+  - Today route date: official + all METAR lines.
   - Non-today dates: official + all METAR lines.
   - Saved phone-call temperatures are overlaid as a separate `Phone calls` line when available for that date.
   - Horizontal annotation line for manual/WU max.
   - X-axis is local time (`America/Chicago`) shown in 12-hour format (`h:mm AM/PM`).
 - Raw observations table:
+  - Hidden by default behind a `Show Raw Observations` toggle.
   - `Local Time`, `Mode`, `Temp`, `Source`, `Raw METAR`.
-  - Today route date: official rows only.
+  - Today route date: official + all rows.
 
 Behavior details:
 
@@ -71,10 +72,14 @@ Behavior details:
 - Day page expects a `YYYY-MM-DD` date segment.
 - If route date equals Chicago today:
   - Runs one-time backfill action: `weather:backfillTodayOfficialFromIem` (IEM last 24h, report types 3/4, filtered to today local date).
+  - Runs one-time backfill action: `weather:backfillTodayAllFromIem` (IEM last 24h, report types 1/3/4, filtered to today local date).
   - Runs immediate live poll action: `weather:pollLatestNoaaMetar` (NOAA latest station TXT).
   - Starts a 3-minute interval to poll NOAA while the tab is visible.
-  - Inserts are deduped by `(stationIcao, mode=official, date, tsUtc)` via `weather:upsertOfficialObservation`.
-  - Official `dailyComparisons` max/count fields are updated incrementally when new rows are inserted.
+  - Manual refresh triggers an all-mode today backfill + immediate NOAA poll.
+  - Inserts are deduped by `(stationIcao, mode, date, tsUtc)` via:
+    - `weather:upsertOfficialObservation` for `mode=official`
+    - `weather:upsertAllObservation` for `mode=all`
+  - `dailyComparisons` official/all max/count fields are updated incrementally when new rows are inserted.
 
 ## Data sources used by these pages
 
@@ -84,4 +89,5 @@ Behavior details:
 - `kordPhoneCalls` table (via `kordPhone:getDayPhoneReadings`) for optional day-chart phone-temperature overlay.
 - Live-today actions:
   - NOAA latest TXT endpoint (`/data/observations/metar/stations/{ICAO}.TXT`) for incremental polling.
-  - IEM ASOS request endpoint (`hours=24`, `report_type=3,4`) for today backfill.
+  - IEM ASOS request endpoint (`hours=24`, `report_type=3,4`) for official today backfill.
+  - IEM ASOS request endpoint (`hours=24`, `report_type=1,3,4`) for all-mode today backfill.
