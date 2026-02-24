@@ -31,6 +31,7 @@ const STATION_ICAO = "KORD";
 const STATION_IEM = "ORD";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const LIVE_POLL_INTERVAL_MS = 3 * 60 * 1000;
+const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -108,7 +109,13 @@ function formatBackfillMessage(result, label) {
   return `${label}: inserted ${result.insertedCount} of ${result.consideredCount} today observations.`;
 }
 
-function buildLineDataset(rows, unit, label, color) {
+function buildLineDataset(rows, unit, label, color, pointConfig = {}) {
+  const {
+    pointRadius = 1.5,
+    pointHoverRadius = 3,
+    pointHitRadius = 10,
+    pointBorderWidth = 1.25,
+  } = pointConfig;
   const data = rows
     .map((row) => {
       const x = parseMinute(row.tsLocal);
@@ -128,15 +135,23 @@ function buildLineDataset(rows, unit, label, color) {
     data,
     borderColor: color,
     backgroundColor: color,
-    pointRadius: 1.5,
-    pointHoverRadius: 3,
+    pointRadius,
+    pointHoverRadius,
+    pointHitRadius,
+    pointBorderWidth,
     borderWidth: 2,
     tension: 0.25,
     showLine: true,
   };
 }
 
-function buildPhoneLineDataset(rows, unit, label, color) {
+function buildPhoneLineDataset(rows, unit, label, color, pointConfig = {}) {
+  const {
+    pointRadius = 3,
+    pointHoverRadius = 5,
+    pointHitRadius = 12,
+    pointBorderWidth = 1.5,
+  } = pointConfig;
   const data = rows
     .map((row) => {
       const when = row.tsLocal ?? row.slotLocal;
@@ -161,8 +176,10 @@ function buildPhoneLineDataset(rows, unit, label, color) {
     data,
     borderColor: color,
     backgroundColor: color,
-    pointRadius: 3,
-    pointHoverRadius: 5,
+    pointRadius,
+    pointHoverRadius,
+    pointHitRadius,
+    pointBorderWidth,
     borderWidth: 2,
     tension: 0.25,
     showLine: true,
@@ -204,8 +221,10 @@ export default function KordDayPage() {
   const date = rawDate || "";
   const [displayUnit, setDisplayUnit] = useState("F");
   const [showRawObservations, setShowRawObservations] = useState(false);
+  const [showUnofficialSeries, setShowUnofficialSeries] = useState(true);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
   const inFlightRef = useRef(false);
   const backfilledDateRef = useRef("");
   const isDateValid = isValidDate(date);
@@ -244,6 +263,24 @@ export default function KordDayPage() {
     displayUnit === "C" ? comparison?.metarMaxC : comparison?.metarMaxF;
   const allMax =
     displayUnit === "C" ? comparison?.metarAllMaxC : comparison?.metarAllMaxF;
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
+    syncViewport();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", syncViewport);
+      return () => mediaQuery.removeEventListener("change", syncViewport);
+    }
+
+    mediaQuery.addListener(syncViewport);
+    return () => mediaQuery.removeListener(syncViewport);
+  }, []);
 
   useEffect(() => {
     if (!isToday) {
@@ -363,23 +400,70 @@ export default function KordDayPage() {
   }
 
   const chartData = useMemo(() => {
+    const basePointConfig = isMobileViewport
+      ? {
+          pointRadius: 3,
+          pointHoverRadius: 6,
+          pointHitRadius: 20,
+          pointBorderWidth: 1.75,
+        }
+      : {
+          pointRadius: 1.5,
+          pointHoverRadius: 4,
+          pointHitRadius: 10,
+          pointBorderWidth: 1.25,
+        };
+
     const datasets = [
-      buildLineDataset(officialRows, displayUnit, "Official", "#0f766e"),
-      buildLineDataset(allRows, displayUnit, "All", "#111827"),
+      buildLineDataset(
+        officialRows,
+        displayUnit,
+        "Official",
+        "#0f766e",
+        basePointConfig,
+      ),
     ];
+
+    if (showUnofficialSeries) {
+      datasets.push(
+        buildLineDataset(allRows, displayUnit, "All", "#111827", basePointConfig),
+      );
+    }
+
+    const phonePointConfig = isMobileViewport
+      ? {
+          pointRadius: 4.5,
+          pointHoverRadius: 7,
+          pointHitRadius: 24,
+          pointBorderWidth: 2,
+        }
+      : {
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          pointHitRadius: 12,
+          pointBorderWidth: 1.5,
+        };
 
     const phoneDataset = buildPhoneLineDataset(
       phoneRows,
       displayUnit,
       "Phone calls",
       "#2563eb",
+      phonePointConfig,
     );
     if (phoneDataset) {
       datasets.push(phoneDataset);
     }
 
     return { datasets };
-  }, [officialRows, allRows, phoneRows, displayUnit]);
+  }, [
+    officialRows,
+    allRows,
+    phoneRows,
+    displayUnit,
+    isMobileViewport,
+    showUnofficialSeries,
+  ]);
 
   const chartOptions = useMemo(() => {
     const annotations = {};
@@ -409,6 +493,7 @@ export default function KordDayPage() {
       parsing: false,
       interaction: {
         mode: "nearest",
+        axis: isMobileViewport ? "x" : "xy",
         intersect: false,
       },
       plugins: {
@@ -416,6 +501,13 @@ export default function KordDayPage() {
           position: "top",
         },
         tooltip: {
+          padding: isMobileViewport ? 12 : 8,
+          titleFont: {
+            size: isMobileViewport ? 13 : 12,
+          },
+          bodyFont: {
+            size: isMobileViewport ? 12 : 11,
+          },
           callbacks: {
             title(items) {
               if (!items.length) {
@@ -442,7 +534,10 @@ export default function KordDayPage() {
             text: "Local Time (America/Chicago)",
           },
           ticks: {
-            stepSize: 120,
+            stepSize: isMobileViewport ? 60 : 120,
+            autoSkip: !isMobileViewport,
+            maxTicksLimit: isMobileViewport ? 25 : 13,
+            maxRotation: 0,
             callback(value) {
               return minuteLabel(Number(value));
             },
@@ -456,7 +551,7 @@ export default function KordDayPage() {
         },
       },
     };
-  }, [manualMax, displayUnit]);
+  }, [manualMax, displayUnit, isMobileViewport]);
 
   const mergedRows = useMemo(
     () => mergeObservationRows(officialRows, allRows, displayUnit),
@@ -599,14 +694,30 @@ export default function KordDayPage() {
             </section>
 
             <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
-              <h2 className="text-lg font-semibold text-foreground">
-                Temperature Lines
-              </h2>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-foreground">
+                  Temperature Lines
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowUnofficialSeries((current) => !current)}
+                  className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                >
+                  {showUnofficialSeries
+                    ? "Hide Unofficial (All)"
+                    : "Show Unofficial (All)"}
+                </button>
+              </div>
               <p className="mt-2 text-sm text-black/65">
                 Official and All observation temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max.
               </p>
-              <div className="mt-4 h-[360px] rounded-2xl border border-black/10 bg-white/75 p-3">
-                <Line data={chartData} options={chartOptions} />
+              <p className="mt-2 text-xs text-black/55 md:hidden">
+                Tip: swipe horizontally to inspect points across the full day.
+              </p>
+              <div className="mt-4 overflow-x-auto pb-2">
+                <div className="h-[400px] min-w-[2000px] rounded-2xl border border-black/10 bg-white/75 p-2 sm:h-[360px] sm:p-3 md:min-w-0">
+                  <Line data={chartData} options={chartOptions} />
+                </div>
               </div>
             </section>
 
