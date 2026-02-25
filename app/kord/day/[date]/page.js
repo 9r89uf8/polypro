@@ -285,7 +285,9 @@ export default function KordDayPage() {
   const date = rawDate || "";
   const [displayUnit, setDisplayUnit] = useState("F");
   const [showRawObservations, setShowRawObservations] = useState(false);
+  const [showOfficialSeries, setShowOfficialSeries] = useState(true);
   const [showUnofficialSeries, setShowUnofficialSeries] = useState(true);
+  const [showPhoneSeries, setShowPhoneSeries] = useState(true);
   const [showUnofficialRawRows, setShowUnofficialRawRows] = useState(false);
   const [manualEntryValue, setManualEntryValue] = useState("");
   const [manualEntryUnit, setManualEntryUnit] = useState("F");
@@ -515,15 +517,19 @@ export default function KordDayPage() {
           pointBorderWidth: 1.25,
         };
 
-    const datasets = [
-      buildLineDataset(
-        officialRows,
-        displayUnit,
-        "Official",
-        "#0f766e",
-        basePointConfig,
-      ),
-    ];
+    const datasets = [];
+
+    if (showOfficialSeries) {
+      datasets.push(
+        buildLineDataset(
+          officialRows,
+          displayUnit,
+          "Official",
+          "#0f766e",
+          basePointConfig,
+        ),
+      );
+    }
 
     if (showUnofficialSeries) {
       datasets.push(
@@ -545,15 +551,17 @@ export default function KordDayPage() {
           pointBorderWidth: 1.5,
         };
 
-    const phoneDataset = buildPhoneLineDataset(
-      phoneRows,
-      displayUnit,
-      "Phone calls",
-      "#2563eb",
-      phonePointConfig,
-    );
-    if (phoneDataset) {
-      datasets.push(phoneDataset);
+    if (showPhoneSeries) {
+      const phoneDataset = buildPhoneLineDataset(
+        phoneRows,
+        displayUnit,
+        "Phone calls",
+        "#2563eb",
+        phonePointConfig,
+      );
+      if (phoneDataset) {
+        datasets.push(phoneDataset);
+      }
     }
 
     return { datasets };
@@ -563,7 +571,9 @@ export default function KordDayPage() {
     phoneRows,
     displayUnit,
     isMobileViewport,
+    showOfficialSeries,
     showUnofficialSeries,
+    showPhoneSeries,
   ]);
 
   const chartOptions = useMemo(() => {
@@ -635,9 +645,9 @@ export default function KordDayPage() {
             text: "Local Time (America/Chicago)",
           },
           ticks: {
-            stepSize: isMobileViewport ? 60 : 120,
-            autoSkip: !isMobileViewport,
-            maxTicksLimit: isMobileViewport ? 25 : 13,
+            stepSize: 60,
+            autoSkip: false,
+            maxTicksLimit: isMobileViewport ? 25 : 25,
             maxRotation: 0,
             callback(value) {
               return minuteLabel(Number(value));
@@ -845,15 +855,31 @@ export default function KordDayPage() {
                 <h2 className="text-lg font-semibold text-foreground">
                   Temperature Lines
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => setShowUnofficialSeries((current) => !current)}
-                  className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
-                >
-                  {showUnofficialSeries
-                    ? "Hide Unofficial (All)"
-                    : "Show Unofficial (All)"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowOfficialSeries((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showOfficialSeries ? "Hide Official" : "Show Official"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowUnofficialSeries((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showUnofficialSeries
+                      ? "Hide Unofficial (All)"
+                      : "Show Unofficial (All)"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPhoneSeries((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showPhoneSeries ? "Hide Phone Calls" : "Show Phone Calls"}
+                  </button>
+                </div>
               </div>
               <p className="mt-2 text-sm text-black/65">
                 Official and All observation temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max.
@@ -861,8 +887,11 @@ export default function KordDayPage() {
               <p className="mt-2 text-xs text-black/55 md:hidden">
                 Tip: swipe horizontally to inspect points across the full day.
               </p>
+              <p className="mt-2 hidden text-xs text-black/55 md:block">
+                Tip: scroll horizontally to inspect points across the full day.
+              </p>
               <div className="mt-4 overflow-x-auto pb-2">
-                <div className="h-[400px] min-w-[2000px] rounded-2xl border border-black/10 bg-white/75 p-2 sm:h-[360px] sm:p-3 md:min-w-0">
+                <div className="h-[400px] min-w-[2000px] rounded-2xl border border-black/10 bg-white/75 p-2 sm:h-[360px] sm:min-w-[2300px] sm:p-3 md:min-w-[2600px]">
                   <Line data={chartData} options={chartOptions} />
                 </div>
               </div>

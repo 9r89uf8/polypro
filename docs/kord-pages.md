@@ -58,17 +58,20 @@ What this page displays:
 - Line chart:
   - Today route date: official + all METAR lines.
   - Non-today dates: official + all METAR lines.
-  - Toggle control to show/hide the unofficial `All` line (`Hide Unofficial (All)` / `Show Unofficial (All)`).
+  - Toggle controls to show/hide each series: `Official`, unofficial `All`, and `Phone Calls`.
   - Saved phone-call temperatures are overlaid as a separate `Phone calls` line when available for that date.
   - Horizontal annotation line for manual/WU max.
   - X-axis is local time (`America/Chicago`) shown in 12-hour format (`h:mm AM/PM`).
+  - X-axis labels are hourly.
   - Mobile behavior (`<=768px`):
     - Larger point markers and larger point hit radii for easier tapping.
     - Interaction is biased to the x-axis (`nearest` by x), making touch selection less precise-sensitive.
-    - X-axis labels are shown hourly (`stepSize: 60`) instead of every 2 hours.
     - Slightly larger tooltip text for readability.
     - Horizontally scrollable chart region (`overflow-x-auto`) with a wider mobile plot area (`min-width: 2000px`) so denser time labels remain legible.
     - Taller chart container and a mobile tip note (`swipe horizontally to inspect points across the full day`).
+  - Desktop behavior:
+    - Horizontally scrollable chart region is also enabled.
+    - Plot area uses a wider minimum width so hourly labels remain readable.
 - Raw observations table:
   - Hidden by default behind a `Show Raw Observations` toggle.
   - Defaults to official rows only; unofficial `all` rows are hidden until `Show Unofficial (All)` is enabled.
