@@ -6,7 +6,7 @@ This document covers the live "today-only" KORD pages, including METAR ingest on
 
 - Show a live chart for **today only** using official METAR/SPECI plus all-mode observations.
 - Keep the day page updated automatically through Convex subscriptions as new rows are ingested.
-- Keep official METAR ingest running even when no `/kord/day/[date]` tab is open.
+- Keep official and all-mode METAR ingest running even when no `/kord/day/[date]` tab is open.
 
 ## Routes
 
@@ -20,12 +20,20 @@ This document covers the live "today-only" KORD pages, including METAR ingest on
 
 ## Live Workflow
 
-Server-side official ingest (independent of browser tabs):
+Server-side ingest (independent of browser tabs):
 
 1. Convex cron runs every 2 minutes:
    - Cron: `kord_official_metar_every_2_min` in `convex/crons.js`
    - Action: `weather:pollLatestNoaaMetar`
    - Args: `{ stationIcao: "KORD" }`
+2. Convex cron also runs at minute `:51` every hour:
+   - Cron: `kord_official_metar_minute_51`
+   - Action: `weather:pollLatestNoaaMetar`
+   - Args: `{ stationIcao: "KORD" }`
+3. Convex cron runs every 5 minutes for all-mode backfill:
+   - Cron: `kord_all_metar_every_5_min`
+   - Action: `weather:backfillTodayAllFromIem`
+   - Args: `{ stationIem: "ORD", stationIcao: "KORD" }`
 
 When `/kord/day/[date]` is opened for today's Chicago date:
 
@@ -95,7 +103,11 @@ Related scheduler in `convex/crons.js`:
 
 - `kord_official_metar_every_2_min`
   - Invokes `weather:pollLatestNoaaMetar` every 2 minutes with `stationIcao: "KORD"`.
-  - Keeps official latest ingest active even when no day page is open.
+- `kord_official_metar_minute_51`
+  - Invokes `weather:pollLatestNoaaMetar` at minute `:51` every hour with `stationIcao: "KORD"`.
+- `kord_all_metar_every_5_min`
+  - Invokes `weather:backfillTodayAllFromIem` every 5 minutes with `stationIem: "ORD", stationIcao: "KORD"`.
+  - Keeps all-mode ingest active even when no day page is open.
 
 ## Stored Data
 
@@ -128,10 +140,9 @@ When date is not today:
 ## Known Limitations
 
 - NOAA station TXT contains only the latest report. If two new reports arrive between polls, one can be missed.
-- Server cron and manual refresh can fetch the same report; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
-- All-mode (5-minute) data is refreshed on page bootstrap and manual refresh, not on each 2-minute poll tick.
+- Official cron and manual refresh can fetch the same official report; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
+- All-mode cron, page bootstrap, and manual refresh can fetch overlapping all-mode rows; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
 - `noaaFirstSeenAt` reflects first time this app observed the report from NOAA latest polling, not NOAA's upstream publish timestamp; precision is bounded by poll cadence and tab-visibility pauses.
-- Server-side cron keeps official ingest active without open tabs; all-mode ingest still relies on day-page bootstrap/manual refresh.
 
 ## Change Guidance
 

@@ -48,7 +48,10 @@ Purpose: day-level diagnostics for observation-by-observation review.
 
 What this page displays:
 
-- Header with date plus `Home` and `Back to Month` navigation.
+- Header with date plus navigation:
+  - `Home` and `Current Date YYYY-MM-DD` (jumps to Chicago "today").
+  - Two quick previous-day buttons (relative to the route date): `date - 1 day` and `date - 2 days`.
+  - `Pick Date` button that opens a date picker and routes to `/kord/day/[picked-date]`.
 - If viewing today (Chicago date), a live badge (`Live ingest enabled`) and `Refresh now` button.
 - Unit toggle (`C` / `F`) for day-level display.
 - Summary cards:
@@ -90,7 +93,8 @@ Behavior details:
   - Runs one-time backfill action: `weather:backfillTodayAllFromIem` (IEM last 24h, report types 1/3/4, filtered to today local date).
   - Runs immediate live poll action: `weather:pollLatestNoaaMetar` (NOAA latest station TXT).
   - Does not run a recurring client poll interval.
-  - Ongoing official ingest runs via Convex cron (`kord_official_metar_every_2_min`).
+  - Ongoing official ingest runs via Convex crons (`kord_official_metar_every_2_min` plus `kord_official_metar_minute_51`).
+  - Ongoing all-mode ingest runs via Convex cron (`kord_all_metar_every_5_min`).
   - Manual refresh triggers an all-mode today backfill + immediate NOAA poll.
   - Inserts are deduped by `(stationIcao, mode, date, tsUtc)` via:
     - `weather:upsertOfficialObservation` for `mode=official`

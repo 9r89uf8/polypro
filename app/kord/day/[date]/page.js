@@ -12,7 +12,7 @@ import {
 } from "chart.js";
 import annotationPlugin from "chartjs-plugin-annotation";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
@@ -31,6 +31,7 @@ const STATION_ICAO = "KORD";
 const STATION_IEM = "ORD";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -86,6 +87,37 @@ function parseDateKeyParts(dateKey) {
     month: Number(match[2]),
     day: Number(match[3]),
   };
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function formatDateKeyFromUtcDate(date) {
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(
+    date.getUTCDate(),
+  )}`;
+}
+
+function shiftDateKey(dateKey, deltaDays) {
+  const parts = parseDateKeyParts(dateKey);
+  if (!parts) {
+    return null;
+  }
+
+  const utcMs = Date.UTC(parts.year, parts.month - 1, parts.day);
+  return formatDateKeyFromUtcDate(new Date(utcMs + deltaDays * DAY_MS));
+}
+
+function buildPreviousDateKeys(dateKey, count) {
+  const keys = [];
+  for (let offset = 1; offset <= count; offset += 1) {
+    const previousDate = shiftDateKey(dateKey, -offset);
+    if (previousDate) {
+      keys.push(previousDate);
+    }
+  }
+  return keys;
 }
 
 function formatStoredLocalDateTime(tsLocal) {
@@ -280,6 +312,7 @@ function mergeObservationRows(officialRows, allRows, displayUnit) {
 }
 
 export default function KordDayPage() {
+  const router = useRouter();
   const params = useParams();
   const rawDate = Array.isArray(params?.date) ? params.date[0] : params?.date;
   const date = rawDate || "";
@@ -299,7 +332,9 @@ export default function KordDayPage() {
   const inFlightRef = useRef(false);
   const backfilledDateRef = useRef("");
   const isDateValid = isValidDate(date);
-  const isToday = isDateValid && date === chicagoTodayKey();
+  const chicagoTodayDate = chicagoTodayKey();
+  const isToday = isDateValid && date === chicagoTodayDate;
+  const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
   const pollLatest = useAction("weather:pollLatestNoaaMetar");
   const backfillToday = useAction("weather:backfillTodayOfficialFromIem");
@@ -502,6 +537,13 @@ export default function KordDayPage() {
     }
   }
 
+  function navigateToDate(targetDate) {
+    if (!isValidDate(targetDate)) {
+      return;
+    }
+    router.push(`/kord/day/${targetDate}`);
+  }
+
   const chartData = useMemo(() => {
     const basePointConfig = isMobileViewport
       ? {
@@ -691,10 +733,10 @@ export default function KordDayPage() {
               Home
             </Link>
             <Link
-              href="/kord/month"
+              href={`/kord/day/${chicagoTodayDate}`}
               className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
             >
-              Back to Month
+              Current Date {chicagoTodayDate}
             </Link>
           </div>
         </div>
@@ -725,19 +767,30 @@ export default function KordDayPage() {
               Home
             </Link>
             <Link
-              href="/kord/month"
+              href={`/kord/day/${chicagoTodayDate}`}
               className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
             >
-              Back to Month
+              Current Date {chicagoTodayDate}
             </Link>
-            {!isToday ? (
+            {quickPreviousDates.map((quickDate) => (
               <Link
-                href="/kord/today"
-                className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 hover:border-emerald-400"
+                key={quickDate}
+                href={`/kord/day/${quickDate}`}
+                className="inline-flex rounded-full border border-black/20 bg-white/80 px-4 py-2 text-sm font-semibold text-black hover:border-black"
               >
-                Go to Live Today
+                {quickDate}
               </Link>
-            ) : null}
+            ))}
+            <label className="relative inline-flex cursor-pointer items-center overflow-hidden rounded-full border border-black/20 bg-white/80 px-4 py-2 text-sm font-semibold text-black hover:border-black">
+              Pick Date
+              <input
+                type="date"
+                value={date}
+                onChange={(event) => navigateToDate(event.target.value)}
+                aria-label="Pick KORD day date"
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+            </label>
             {isToday ? (
               <button
                 type="button"
