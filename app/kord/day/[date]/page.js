@@ -30,7 +30,6 @@ ChartJS.register(
 const STATION_ICAO = "KORD";
 const STATION_IEM = "ORD";
 const CHICAGO_TIMEZONE = "America/Chicago";
-const LIVE_POLL_INTERVAL_MS = 2 * 60 * 1000;
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 
 function isValidDate(value) {
@@ -360,15 +359,9 @@ export default function KordDayPage() {
     }
 
     let cancelled = false;
-    let intervalId;
 
-    async function safeCall(fn, onSuccess, options = {}) {
-      const skipWhenHidden = options.skipWhenHidden !== false;
-      if (
-        cancelled ||
-        inFlightRef.current ||
-        (skipWhenHidden && document.hidden)
-      ) {
+    async function safeCall(fn, onSuccess) {
+      if (cancelled || inFlightRef.current) {
         return false;
       }
 
@@ -396,7 +389,6 @@ export default function KordDayPage() {
         const officialBackfillSucceeded = await safeCall(
           () => backfillToday({ stationIem: STATION_IEM, stationIcao: STATION_ICAO }),
           (result) => formatBackfillMessage(result, "Official backfill"),
-          { skipWhenHidden: false },
         );
 
         const allBackfillSucceeded = await safeCall(
@@ -406,7 +398,6 @@ export default function KordDayPage() {
               stationIcao: STATION_ICAO,
             }),
           (result) => formatBackfillMessage(result, "All backfill"),
-          { skipWhenHidden: false },
         );
 
         if (officialBackfillSucceeded && allBackfillSucceeded) {
@@ -422,22 +413,12 @@ export default function KordDayPage() {
       if (cancelled) {
         return;
       }
-
-      intervalId = setInterval(() => {
-        safeCall(
-          () => pollLatest({ stationIcao: STATION_ICAO }),
-          (result) => formatLivePollMessage(result, "Live poll"),
-        );
-      }, LIVE_POLL_INTERVAL_MS);
     }
 
     bootstrapLive();
 
     return () => {
       cancelled = true;
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
     };
   }, [date, isToday, backfillToday, backfillTodayAll, pollLatest]);
 
@@ -723,7 +704,7 @@ export default function KordDayPage() {
           </h1>
           {isToday ? (
             <p className="mt-2 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-800">
-              Live polling every 2 minutes
+              Live ingest enabled
             </p>
           ) : null}
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -775,7 +756,7 @@ export default function KordDayPage() {
           {isToday ? (
             <p className="mt-3 text-xs text-black/65">
               {liveMessage ||
-                "Live mode will backfill official + all once, then poll NOAA while this tab is visible."}
+                "Live mode backfills official + all once, then does one immediate NOAA poll. Ongoing official ingest runs via Convex cron."}
             </p>
           ) : null}
         </header>

@@ -49,7 +49,7 @@ Purpose: day-level diagnostics for observation-by-observation review.
 What this page displays:
 
 - Header with date plus `Home` and `Back to Month` navigation.
-- If viewing today (Chicago date), a live badge (`Live polling every 2 minutes`) and `Refresh now` button.
+- If viewing today (Chicago date), a live badge (`Live ingest enabled`) and `Refresh now` button.
 - Unit toggle (`C` / `F`) for day-level display.
 - Summary cards:
   - `Manual / WU Max` (includes day-level manual entry controls: unit toggle, numeric input, and `Save`)
@@ -86,7 +86,8 @@ Behavior details:
   - Runs one-time backfill action: `weather:backfillTodayOfficialFromIem` (IEM last 24h, report types 3/4, filtered to today local date).
   - Runs one-time backfill action: `weather:backfillTodayAllFromIem` (IEM last 24h, report types 1/3/4, filtered to today local date).
   - Runs immediate live poll action: `weather:pollLatestNoaaMetar` (NOAA latest station TXT).
-  - Starts a 2-minute interval to poll NOAA while the tab is visible.
+  - Does not run a recurring client poll interval.
+  - Ongoing official ingest runs via Convex cron (`kord_official_metar_every_2_min`).
   - Manual refresh triggers an all-mode today backfill + immediate NOAA poll.
   - Inserts are deduped by `(stationIcao, mode, date, tsUtc)` via:
     - `weather:upsertOfficialObservation` for `mode=official`
