@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 
 const CHICAGO_TIMEZONE = "America/Chicago";
 const SCHEDULED_LOCAL_HOURS = new Set([12, 13, 14, 15, 16]);
-const SCHEDULED_MINUTE = 51;
+const SCHEDULED_LOCAL_MINUTES = new Set([49, 52]);
 
 const chicagoDateFormatter = new Intl.DateTimeFormat("en-US", {
     timeZone: CHICAGO_TIMEZONE,
@@ -109,8 +109,8 @@ export const getDayPhoneReadings = query({
 });
 
 /**
- * Internal mutation invoked by cron every hour at :51 UTC.
- * It checks Chicago local time and enqueues only 12:51–16:51 local.
+ * Internal mutation invoked by cron at :49 and :52 UTC.
+ * It checks Chicago local time and enqueues only 12:49/12:52 through 16:49/16:52 local.
  */
 export const enqueueScheduledCall = internalMutation({
     args: {
@@ -123,11 +123,11 @@ export const enqueueScheduledCall = internalMutation({
         const minute = Number(parts.minute);
         const dateKey = `${parts.year}-${parts.month}-${parts.day}`;
 
-        if (minute !== SCHEDULED_MINUTE || !SCHEDULED_LOCAL_HOURS.has(hour)) {
+        if (!SCHEDULED_LOCAL_MINUTES.has(minute) || !SCHEDULED_LOCAL_HOURS.has(hour)) {
             return { ok: false, reason: "outside_window", dateKey, hour, minute };
         }
 
-        const slotLocal = `${dateKey} ${pad2(hour)}:${pad2(SCHEDULED_MINUTE)}`;
+        const slotLocal = `${dateKey} ${pad2(hour)}:${pad2(minute)}`;
         return enqueueCallForSlot(ctx, {
             stationIcao: args.stationIcao,
             dateKey,

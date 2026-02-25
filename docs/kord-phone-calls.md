@@ -32,9 +32,14 @@ This document covers the KORD phone-call temperature workflow shown on `/kord/to
 Defined in `convex/crons.js` and `convex/kordPhone.js`.
 
 - Cron trigger:
-  - Cron expression: `51 * * * *` (UTC)
+  - Cron expression: `49,52 * * * *` (UTC)
   - Calls `internal.kordPhone.enqueueScheduledCall` with `stationIcao: "KORD"`
-  - Internal mutation checks Chicago local time and only enqueues 12:51-16:51 local.
+  - Internal mutation checks Chicago local time and only enqueues:
+    - `12:49pm`, `12:52pm`
+    - `1:49pm`, `1:52pm`
+    - `2:49pm`, `2:52pm`
+    - `3:49pm`, `3:52pm`
+    - `4:49pm`, `4:52pm`
 - Manual trigger:
   - Public mutation `kordPhone:enqueueManualCall`
   - Uses current Chicago local timestamp as `slotLocal`.
