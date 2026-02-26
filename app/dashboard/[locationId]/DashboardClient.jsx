@@ -46,6 +46,14 @@ export default function DashboardClient({ locationId }) {
         leadDays: 1,
         includeToday: false, // daily summary needs actual high; today usually not finalized
     });
+    const leadTable =
+        useQuery(api.stats.leadHourAccuracyTable, {
+            locationId,
+            daysBack: 90,
+            toleranceF,
+            leadHours: [12, 16, 24, 32],
+            minHoursCovered: 24,
+        }) || [];
 
     if (!overview || !daily) return <div className="p-6">Loading…</div>;
 
@@ -83,9 +91,11 @@ export default function DashboardClient({ locationId }) {
                         <div className="mt-2 text-sm">
                             Latest predicted high:{" "}
                             <b>{fmtTemp(overview.todayForecast.latest?.predictedHighF)}</b>{" "}
-                            <span className="text-gray-500">
-                (snapshot {fmtHour(overview.todayForecast.latest?.fetchedLocalHour ?? 0)})
-              </span>
+                            {overview.todayForecast.latest ? (
+                                <span className="text-gray-500">
+                                    (snapshot {fmtHour(overview.todayForecast.latest.fetchedLocalHour)})
+                                </span>
+                            ) : null}
                         </div>
                         <div className="text-sm text-gray-600">
                             Predicted high time:{" "}
@@ -99,9 +109,11 @@ export default function DashboardClient({ locationId }) {
                         <div className="mt-2 text-sm">
                             Latest predicted high:{" "}
                             <b>{fmtTemp(overview.tomorrowForecast.latest?.predictedHighF)}</b>{" "}
-                            <span className="text-gray-500">
-                (snapshot {fmtHour(overview.tomorrowForecast.latest?.fetchedLocalHour ?? 0)})
-              </span>
+                            {overview.tomorrowForecast.latest ? (
+                                <span className="text-gray-500">
+                                    (snapshot {fmtHour(overview.tomorrowForecast.latest.fetchedLocalHour)})
+                                </span>
+                            ) : null}
                         </div>
                         <div className="text-sm text-gray-600">
                             Predicted high time:{" "}
@@ -216,6 +228,38 @@ export default function DashboardClient({ locationId }) {
                 <div className="mt-2 text-xs text-gray-500">
                     Lock-in (lenient) ignores missing snapshots; strict lock-in is available in the query if you
                     want it in the table.
+                </div>
+            </section>
+
+            <section className="border rounded p-4">
+                <h2 className="text-lg font-medium">Accuracy vs Lead Time (before target day starts)</h2>
+                <div className="text-sm text-gray-600">Tolerance ±{toleranceF}°F · Full-day coverage only</div>
+
+                <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full text-sm border">
+                        <thead className="bg-gray-50">
+                        <tr>
+                            <th className="text-left p-2 border">Lead</th>
+                            <th className="text-left p-2 border">Accuracy</th>
+                            <th className="text-left p-2 border">MAE</th>
+                            <th className="text-left p-2 border">Bias</th>
+                            <th className="text-left p-2 border">Samples</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {leadTable.map((r) => (
+                            <tr key={r.leadHour} className="border-t">
+                                <td className="p-2 border">{r.leadHour}h</td>
+                                <td className="p-2 border">
+                                    {r.accuracy == null ? "—" : `${Math.round(r.accuracy * 100)}%`}
+                                </td>
+                                <td className="p-2 border">{r.mae == null ? "—" : `${r.mae.toFixed(1)}°F`}</td>
+                                <td className="p-2 border">{r.bias == null ? "—" : `${r.bias.toFixed(1)}°F`}</td>
+                                <td className="p-2 border">{r.samples}</td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
                 </div>
             </section>
         </main>

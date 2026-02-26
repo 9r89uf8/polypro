@@ -133,6 +133,79 @@ export const accuracyByFetchedHour = query({
     },
 });
 
+export const leadHourAccuracyTable = query({
+    args: {
+        locationId: v.id("locations"),
+        daysBack: v.number(),
+        toleranceF: v.number(),
+        leadHours: v.array(v.number()),
+        minHoursCovered: v.optional(v.number()),
+    },
+    handler: async (ctx, args) => {
+        const minHoursCovered = args.minHoursCovered ?? 24;
+        const minFinalizedAt = Date.now() - args.daysBack * 86400000;
+
+        const preds = await ctx.db
+            .query("highPredictions")
+            .withIndex("by_location_finalizedAt", (q) =>
+                q.eq("locationId", args.locationId).gt("finalizedAtMs", minFinalizedAt)
+            )
+            .collect();
+
+        const wanted = new Set(args.leadHours);
+        const agg = new Map();
+
+        for (const p of preds) {
+            if (p.finalizedAtMs === 0) continue;
+            if (typeof p.absErrorF !== "number") continue;
+            if (typeof p.actualHighF !== "number") continue;
+            if (typeof p.leadHoursToTargetStart !== "number") continue;
+            if (typeof p.hoursCoveredForTarget !== "number") continue;
+            if (p.hoursCoveredForTarget < minHoursCovered) continue;
+
+            const lh = p.leadHoursToTargetStart;
+            if (!wanted.has(lh)) continue;
+
+            const cur = agg.get(lh) || {
+                leadHour: lh,
+                n: 0,
+                ok: 0,
+                sumAbs: 0,
+                sumSigned: 0,
+            };
+            cur.n += 1;
+            cur.sumAbs += p.absErrorF;
+            cur.sumSigned += p.predictedHighF - p.actualHighF;
+            if (p.absErrorF <= args.toleranceF) cur.ok += 1;
+            agg.set(lh, cur);
+        }
+
+        return args.leadHours
+            .slice()
+            .sort((a, b) => a - b)
+            .map((lh) => {
+                const row = agg.get(lh);
+                if (!row) {
+                    return {
+                        leadHour: lh,
+                        samples: 0,
+                        accuracy: null,
+                        mae: null,
+                        bias: null,
+                    };
+                }
+
+                return {
+                    leadHour: lh,
+                    samples: row.n,
+                    accuracy: row.n ? row.ok / row.n : null,
+                    mae: row.n ? row.sumAbs / row.n : null,
+                    bias: row.n ? row.sumSigned / row.n : null,
+                };
+            });
+    },
+});
+
 
 
 

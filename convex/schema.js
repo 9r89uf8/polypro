@@ -151,7 +151,7 @@ export default defineSchema({
         fetchedLocalHour: v.number(),
 
         targetDateISO: v.string(),        // day we are predicting
-        leadDays: v.number(),             // 0 or 1 (today / tomorrow)
+        leadDays: v.number(),             // typically 0..3 from 72h forecast coverage
 
         predictedHighF: v.number(),
         predictedHighTimeEpochMs: v.number(),

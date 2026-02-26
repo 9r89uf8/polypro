@@ -2,25 +2,46 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { awFetchJson } from "./aw";
-import { addDaysISO, getLocalParts, hourBucketMs } from "./time";
+import {
+    addDaysISO,
+    getLocalParts,
+    hourBucketMs,
+    localMidnightEpochMs,
+} from "./time";
 
-function computePredictedHighForDate(hourlyArray, targetDateISO, timeZone) {
-    let best = null;
+function daysBetweenISO(aISO, bISO) {
+    const [ay, am, ad] = aISO.split("-").map(Number);
+    const [by, bm, bd] = bISO.split("-").map(Number);
+    const a = Date.UTC(ay, am - 1, ad);
+    const b = Date.UTC(by, bm - 1, bd);
+    return Math.round((b - a) / 86400000);
+}
 
+function computeDailyHighMap(hourlyArray, timeZone) {
+    const map = new Map();
     for (const h of hourlyArray) {
-        const epochMs = h.EpochDateTime * 1000;
+        const epochMs = (h.EpochDateTime ?? 0) * 1000;
+        const tempF = h?.Temperature?.Value;
+        if (!epochMs || typeof tempF !== "number") continue;
+
         const { dateISO } = getLocalParts(epochMs, timeZone);
-        if (dateISO !== targetDateISO) continue;
+        const cur = map.get(dateISO) || {
+            dateISO,
+            count: 0,
+            maxTempF: -Infinity,
+            maxTimeEpochMs: null,
+        };
 
-        const temp = h?.Temperature?.Value;
-        if (typeof temp !== "number") continue;
-
-        if (!best || temp > best.tempF) {
-            best = { tempF: temp, timeEpochMs: epochMs };
+        cur.count += 1;
+        if (tempF > cur.maxTempF) {
+            cur.maxTempF = tempF;
+            cur.maxTimeEpochMs = epochMs;
         }
+
+        map.set(dateISO, cur);
     }
 
-    return best; // or null
+    return map;
 }
 
 export const saveObservation = internalMutation({
@@ -56,6 +77,7 @@ export const saveHighPrediction = internalMutation({
         leadDays: v.number(),
         predictedHighF: v.number(),
         predictedHighTimeEpochMs: v.number(),
+        hoursCoveredForTarget: v.number(),
     },
     handler: async (ctx, args) => {
         const existing = await ctx.db
@@ -81,6 +103,9 @@ export const saveHighPrediction = internalMutation({
 export const finalizeDay = internalMutation({
     args: { locationId: v.id("locations"), dateISO: v.string() },
     handler: async (ctx, args) => {
+        const loc = await ctx.db.get(args.locationId);
+        if (!loc) return { finalized: false, reason: "location not found" };
+
         const obs = await ctx.db
             .query("observations")
             .withIndex("by_location_date", (q) =>
@@ -98,6 +123,7 @@ export const finalizeDay = internalMutation({
 
         const actualHighF = actualHigh.tempF;
         const actualHighTimeEpochMs = actualHigh.epochMs;
+        const targetStartMs = localMidnightEpochMs(args.dateISO, loc.timeZone);
 
         const preds = await ctx.db
             .query("highPredictions")
@@ -110,13 +136,19 @@ export const finalizeDay = internalMutation({
 
         for (const p of preds) {
             const absErrorF = Math.abs(p.predictedHighF - actualHighF);
-            const leadHours = Math.floor((actualHighTimeEpochMs - p.fetchedAtMs) / 3600000);
+            const leadHoursToActualHigh = Math.floor(
+                (actualHighTimeEpochMs - p.fetchedHourBucketMs) / 3600000
+            );
+            const leadHoursToTargetStart = Math.floor(
+                (targetStartMs - p.fetchedHourBucketMs) / 3600000
+            );
 
             await ctx.db.patch(p._id, {
                 actualHighF,
                 actualHighTimeEpochMs,
                 absErrorF,
-                leadHoursToActualHigh: leadHours,
+                leadHoursToActualHigh,
+                leadHoursToTargetStart,
                 finalizedAtMs: now,
             });
         }
@@ -147,11 +179,11 @@ export const collectHourly = internalAction({
                 loc.timeZone
             );
 
-            // Save "today high" + "tomorrow high" predictions each hour
-            for (const leadDays of [0, 1]) {
-                const targetDateISO = addDaysISO(fetchedLocalDateISO, leadDays);
-                const predicted = computePredictedHighForDate(hourly, targetDateISO, loc.timeZone);
-                if (!predicted) continue;
+            const dailyMap = computeDailyHighMap(hourly, loc.timeZone);
+            for (const d of dailyMap.values()) {
+                const leadDays = daysBetweenISO(fetchedLocalDateISO, d.dateISO);
+                if (leadDays < 0 || leadDays > 3) continue;
+                if (typeof d.maxTimeEpochMs !== "number") continue;
 
                 await ctx.runMutation(internal.weatherAccu.saveHighPrediction, {
                     locationId: loc._id,
@@ -159,10 +191,11 @@ export const collectHourly = internalAction({
                     fetchedHourBucketMs,
                     fetchedLocalDateISO,
                     fetchedLocalHour,
-                    targetDateISO,
+                    targetDateISO: d.dateISO,
                     leadDays,
-                    predictedHighF: predicted.tempF,
-                    predictedHighTimeEpochMs: predicted.timeEpochMs,
+                    predictedHighF: d.maxTempF,
+                    predictedHighTimeEpochMs: d.maxTimeEpochMs,
+                    hoursCoveredForTarget: d.count,
                 });
             }
 
