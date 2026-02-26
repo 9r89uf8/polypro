@@ -115,4 +115,61 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_station_mode_date_ts", ["stationIcao", "mode", "date", "tsUtc"]),
 
+
+    locations: defineTable({
+        name: v.string(),                 // "Chicago O'Hare Intl Airport"
+        timeZone: v.string(),             // "America/Chicago"
+        lat: v.number(),
+        lon: v.number(),
+        accuweatherLocationKey: v.string(),
+        accuweatherType: v.optional(v.string()),
+        accuweatherEnglishName: v.optional(v.string()),
+        active: v.boolean(),
+    })
+        .index("by_accuweatherKey", ["accuweatherLocationKey"])
+        .index("by_active", ["active"]),
+
+    observations: defineTable({
+        locationId: v.id("locations"),
+        epochMs: v.number(),
+        epochHourBucketMs: v.number(),    // used for idempotency (one obs per hour)
+        localDateISO: v.string(),         // YYYY-MM-DD in location tz
+        localHour: v.number(),            // 0-23 in location tz
+        tempF: v.number(),
+    })
+        .index("by_location_date", ["locationId", "localDateISO"])
+        .index("by_location_epochHour", ["locationId", "epochHourBucketMs"]),
+
+    highPredictions: defineTable({
+        locationId: v.id("locations"),
+
+        fetchedAtMs: v.number(),
+        fetchedHourBucketMs: v.number(),  // idempotency: one snapshot per hour
+        fetchedLocalDateISO: v.string(),
+        fetchedLocalHour: v.number(),
+
+        targetDateISO: v.string(),        // day we are predicting
+        leadDays: v.number(),             // 0 or 1 (today / tomorrow)
+
+        predictedHighF: v.number(),
+        predictedHighTimeEpochMs: v.number(),
+
+        // Filled in at local midnight AFTER the target day ends
+        actualHighF: v.optional(v.number()),
+        actualHighTimeEpochMs: v.optional(v.number()),
+        absErrorF: v.optional(v.number()),
+        leadHoursToActualHigh: v.optional(v.number()),
+
+        // Always present, 0 until finalized; helps range queries
+        finalizedAtMs: v.number(),
+    })
+        .index("by_location_target", ["locationId", "targetDateISO"])
+        .index("by_location_target_lead_bucket", [
+            "locationId",
+            "targetDateISO",
+            "leadDays",
+            "fetchedHourBucketMs",
+        ])
+        .index("by_location_finalizedAt", ["locationId", "finalizedAtMs"]),
+
 });
