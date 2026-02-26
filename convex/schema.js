@@ -142,7 +142,9 @@ export default defineSchema({
 
     highPredictions: defineTable({
         locationId: v.id("locations"),
+        hoursCoveredForTarget: v.number(),
 
+        leadHoursToTargetStart: v.optional(v.number()),
         fetchedAtMs: v.number(),
         fetchedHourBucketMs: v.number(),  // idempotency: one snapshot per hour
         fetchedLocalDateISO: v.string(),
@@ -170,6 +172,12 @@ export default defineSchema({
             "leadDays",
             "fetchedHourBucketMs",
         ])
-        .index("by_location_finalizedAt", ["locationId", "finalizedAtMs"]),
+        .index("by_location_finalizedAt", ["locationId", "finalizedAtMs"])
+    .index("by_location_lead_target_bucket", [
+        "locationId",
+        "leadDays",
+        "targetDateISO",
+        "fetchedHourBucketMs",
+    ]),
 
 });
