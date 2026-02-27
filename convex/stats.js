@@ -1,7 +1,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { addDaysISO, getLocalParts } from "./time";
-
+//convex/stats.js
 
 function pct(num, den) {
     if (!den) return 0;
@@ -211,30 +211,45 @@ export const leadHourAccuracyTable = query({
 
 // Helper to compute daily metrics from an array of predictions for one target date
 function summarizeDay(predsForDay, toleranceF) {
-    // Map by hour (0-23)
-    const byHour = Array(24).fill(null);
-    let predMin = null;
-    let predMax = null;
-
     let actualHighF = null;
     let actualHighTimeEpochMs = null;
 
     for (const p of predsForDay) {
+        if (typeof p.actualHighF === "number") actualHighF = p.actualHighF;
+        if (typeof p.actualHighTimeEpochMs === "number") actualHighTimeEpochMs = p.actualHighTimeEpochMs;
+    }
+
+    // For same-day targets, snapshots after the actual high are no longer
+    // forecasting the day's true max (they become "remaining max"), so treat
+    // those as out-of-scope for daily accuracy/lock-in metrics.
+    const relevant =
+        typeof actualHighTimeEpochMs === "number"
+            ? predsForDay.filter(
+                (p) => (p.fetchedHourBucketMs ?? p.fetchedAtMs) <= actualHighTimeEpochMs
+            )
+            : predsForDay;
+
+    // Map relevant snapshots by hour (0-23)
+    const byHour = Array(24).fill(null);
+    let predMin = null;
+    let predMax = null;
+    let lastRelevantHour = null;
+
+    for (const p of relevant) {
         const h = p.fetchedLocalHour;
-        if (h >= 0 && h <= 23) byHour[h] = p;
+        if (h >= 0 && h <= 23) {
+            byHour[h] = p;
+            lastRelevantHour = lastRelevantHour === null ? h : Math.max(lastRelevantHour, h);
+        }
 
         if (typeof p.predictedHighF === "number") {
             predMin = predMin === null ? p.predictedHighF : Math.min(predMin, p.predictedHighF);
             predMax = predMax === null ? p.predictedHighF : Math.max(predMax, p.predictedHighF);
         }
-
-        // After finalizeDay, these are filled on each row:
-        if (typeof p.actualHighF === "number") actualHighF = p.actualHighF;
-        if (typeof p.actualHighTimeEpochMs === "number") actualHighTimeEpochMs = p.actualHighTimeEpochMs;
     }
 
-    const coverage = predsForDay.length;
-    const missing = 24 - coverage;
+    const coverage = relevant.length;
+    const missing = Math.max(0, 24 - coverage);
 
     const p10 = byHour[22];
     const p11 = byHour[23];
@@ -271,10 +286,12 @@ function summarizeDay(predsForDay, toleranceF) {
         };
     }
 
+    const endH = lastRelevantHour ?? 23;
+
     // First accurate hour (earliest hour with absError <= tolerance)
     let firstAccurateHour = null;
     let firstAccurateLeadHours = null;
-    for (let h = 0; h < 24; h++) {
+    for (let h = 0; h <= endH; h++) {
         const p = byHour[h];
         if (!p || typeof p.absErrorF !== "number") continue;
         if (p.absErrorF <= toleranceF) {
@@ -289,7 +306,7 @@ function summarizeDay(predsForDay, toleranceF) {
     let lockInHourLenient = null;
     let lockInLeadHoursLenient = null;
     let allLaterAccurate = true;
-    for (let h = 23; h >= 0; h--) {
+    for (let h = endH; h >= 0; h--) {
         const p = byHour[h];
         if (!p || typeof p.absErrorF !== "number") continue;
         if (p.absErrorF <= toleranceF && allLaterAccurate) {
@@ -304,9 +321,9 @@ function summarizeDay(predsForDay, toleranceF) {
     // Lock-in hour (strict): requires a complete uninterrupted run of hours h..23 and all accurate
     let lockInHourStrict = null;
     let lockInLeadHoursStrict = null;
-    for (let h = 0; h < 24; h++) {
+    for (let h = 0; h <= endH; h++) {
         let ok = true;
-        for (let k = h; k < 24; k++) {
+        for (let k = h; k <= endH; k++) {
             const p = byHour[k];
             if (!p || typeof p.absErrorF !== "number" || p.absErrorF > toleranceF) {
                 ok = false;
@@ -389,16 +406,17 @@ export const dailySummaryTable = query({
 export const dayOverview = query({
     args: {
         locationId: v.id("locations"),
-        historyLimit: v.optional(v.number()), // e.g. 24
+        historyLimit: v.optional(v.number()), // e.g. 48
     },
     handler: async (ctx, args) => {
         const loc = await ctx.db.get(args.locationId);
         if (!loc) throw new Error("Location not found");
 
-        const limit = Math.max(1, Math.min(args.historyLimit ?? 24, 48));
+        const limit = Math.max(1, Math.min(args.historyLimit ?? 48, 48));
         const nowMs = Date.now();
         const { dateISO: todayISO } = getLocalParts(nowMs, loc.timeZone);
         const tomorrowISO = addDaysISO(todayISO, 1);
+        const day2ISO = addDaysISO(todayISO, 2);
 
         // Observations for today
         const obs = await ctx.db
@@ -423,34 +441,68 @@ export const dayOverview = query({
             .order("desc")
             .first();
 
-        // Forecast histories (today leadDays=0, tomorrow leadDays=1)
-        const todayHistDesc = await ctx.db
+        // Forecast histories by target day (crosses midnight naturally)
+        const todayTargetDesc = await ctx.db
             .query("highPredictions")
-            .withIndex("by_location_lead_target_bucket", (q) =>
+            .withIndex("by_location_target_bucket", (q) =>
                 q
                     .eq("locationId", args.locationId)
-                    .eq("leadDays", 0)
                     .eq("targetDateISO", todayISO)
             )
             .order("desc")
             .take(limit);
 
-        const tomorrowHistDesc = await ctx.db
+        const tomorrowTargetDesc = await ctx.db
             .query("highPredictions")
-            .withIndex("by_location_lead_target_bucket", (q) =>
+            .withIndex("by_location_target_bucket", (q) =>
                 q
                     .eq("locationId", args.locationId)
-                    .eq("leadDays", 1)
                     .eq("targetDateISO", tomorrowISO)
             )
             .order("desc")
             .take(limit);
 
-        const todayHist = [...todayHistDesc].reverse();
-        const tomorrowHist = [...tomorrowHistDesc].reverse();
+        const day2TargetDesc = await ctx.db
+            .query("highPredictions")
+            .withIndex("by_location_target_bucket", (q) =>
+                q
+                    .eq("locationId", args.locationId)
+                    .eq("targetDateISO", day2ISO)
+            )
+            .order("desc")
+            .take(limit);
 
-        const latestToday = todayHist[todayHist.length - 1] ?? null;
-        const latestTomorrow = tomorrowHist[tomorrowHist.length - 1] ?? null;
+        const todayTarget = [...todayTargetDesc].reverse();
+        const tomorrowTarget = [...tomorrowTargetDesc].reverse();
+        const day2Target = [...day2TargetDesc].reverse();
+
+        function mapPred(p) {
+            return {
+                fetchedLocalHour: p.fetchedLocalHour,
+                fetchedAtMs: p.fetchedAtMs,
+                fetchedLocalDateISO: p.fetchedLocalDateISO,
+                predictedHighF: p.predictedHighF,
+                predictedHighTimeEpochMs: p.predictedHighTimeEpochMs,
+                hoursCoveredForTarget: p.hoursCoveredForTarget,
+            };
+        }
+
+        const todayHistoryAll = todayTarget.map(mapPred);
+        const tomorrowHistoryAll = tomorrowTarget.map(mapPred);
+        const day2HistoryAll = day2Target.map(mapPred);
+        const todayHistoryTodayOnly = todayTarget
+            .filter((p) => p.fetchedLocalDateISO === todayISO)
+            .map(mapPred);
+        const tomorrowHistoryTodayOnly = tomorrowTarget
+            .filter((p) => p.fetchedLocalDateISO === todayISO)
+            .map(mapPred);
+        const day2HistoryTodayOnly = day2Target
+            .filter((p) => p.fetchedLocalDateISO === todayISO)
+            .map(mapPred);
+
+        const latestToday = todayHistoryAll[todayHistoryAll.length - 1] ?? null;
+        const latestTomorrow = tomorrowHistoryAll[tomorrowHistoryAll.length - 1] ?? null;
+        const latestDay2 = day2HistoryAll[day2HistoryAll.length - 1] ?? null;
 
         function drift(hist) {
             let min = null, max = null;
@@ -472,6 +524,7 @@ export const dayOverview = query({
             nowMs,
             todayISO,
             tomorrowISO,
+            day2ISO,
             observations: {
                 count: obs.length,
                 lastTempF: lastObs?.tempF ?? null,
@@ -480,38 +533,25 @@ export const dayOverview = query({
                 highSoFarTimeEpochMs,
             },
             todayForecast: {
-                latest: latestToday
-                    ? {
-                        predictedHighF: latestToday.predictedHighF,
-                        predictedHighTimeEpochMs: latestToday.predictedHighTimeEpochMs,
-                        fetchedLocalHour: latestToday.fetchedLocalHour,
-                        fetchedAtMs: latestToday.fetchedAtMs,
-                    }
-                    : null,
-                history: todayHist.map((p) => ({
-                    fetchedLocalHour: p.fetchedLocalHour,
-                    fetchedAtMs: p.fetchedAtMs,
-                    predictedHighF: p.predictedHighF,
-                    predictedHighTimeEpochMs: p.predictedHighTimeEpochMs,
-                })),
-                drift: drift(todayHist),
+                latest: latestToday,
+                historyAll: todayHistoryAll,
+                historyTodayOnly: todayHistoryTodayOnly,
+                history: todayHistoryAll, // compatibility for older clients
+                drift: drift(todayHistoryAll),
             },
             tomorrowForecast: {
-                latest: latestTomorrow
-                    ? {
-                        predictedHighF: latestTomorrow.predictedHighF,
-                        predictedHighTimeEpochMs: latestTomorrow.predictedHighTimeEpochMs,
-                        fetchedLocalHour: latestTomorrow.fetchedLocalHour,
-                        fetchedAtMs: latestTomorrow.fetchedAtMs,
-                    }
-                    : null,
-                history: tomorrowHist.map((p) => ({
-                    fetchedLocalHour: p.fetchedLocalHour,
-                    fetchedAtMs: p.fetchedAtMs,
-                    predictedHighF: p.predictedHighF,
-                    predictedHighTimeEpochMs: p.predictedHighTimeEpochMs,
-                })),
-                drift: drift(tomorrowHist),
+                latest: latestTomorrow,
+                historyAll: tomorrowHistoryAll,
+                historyTodayOnly: tomorrowHistoryTodayOnly,
+                history: tomorrowHistoryAll, // compatibility for older clients
+                drift: drift(tomorrowHistoryTodayOnly),
+            },
+            day2Forecast: {
+                latest: latestDay2,
+                historyAll: day2HistoryAll,
+                historyTodayOnly: day2HistoryTodayOnly,
+                history: day2HistoryAll, // compatibility for older clients
+                drift: drift(day2HistoryTodayOnly),
             },
         };
     },

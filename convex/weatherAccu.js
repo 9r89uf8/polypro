@@ -8,7 +8,7 @@ import {
     hourBucketMs,
     localMidnightEpochMs,
 } from "./time";
-
+//convex/weatherAccu.js
 function daysBetweenISO(aISO, bISO) {
     const [ay, am, ad] = aISO.split("-").map(Number);
     const [by, bm, bd] = bISO.split("-").map(Number);
@@ -106,23 +106,68 @@ export const finalizeDay = internalMutation({
         const loc = await ctx.db.get(args.locationId);
         if (!loc) return { finalized: false, reason: "location not found" };
 
-        const obs = await ctx.db
-            .query("observations")
-            .withIndex("by_location_date", (q) =>
-                q.eq("locationId", args.locationId).eq("localDateISO", args.dateISO)
-            )
-            .collect();
+        let actualHighF = null;
+        let actualHighTimeEpochMs = null;
+        let actualHighSource = "accuweather_observations";
 
-        if (obs.length === 0) return { finalized: false, reason: "no observations" };
+        const stationIcao =
+            typeof loc.stationIcao === "string" ? loc.stationIcao.trim().toUpperCase() : "";
 
-        // Actual high = max observed tempF
-        let actualHigh = obs[0];
-        for (const o of obs) {
-            if (o.tempF > actualHigh.tempF) actualHigh = o;
+        // Prefer independent official METAR observations when the location
+        // has a linked station ICAO.
+        if (stationIcao) {
+            const official = await ctx.db
+                .query("metarObservations")
+                .withIndex("by_station_mode_date_ts", (q) =>
+                    q
+                        .eq("stationIcao", stationIcao)
+                        .eq("mode", "official")
+                        .eq("date", args.dateISO)
+                )
+                .collect();
+
+            if (official.length > 0) {
+                let actualHigh = official[0];
+                for (const o of official) {
+                    if (
+                        o.tempF > actualHigh.tempF ||
+                        (o.tempF === actualHigh.tempF && o.tsUtc < actualHigh.tsUtc)
+                    ) {
+                        actualHigh = o;
+                    }
+                }
+                actualHighF = actualHigh.tempF;
+                actualHighTimeEpochMs = actualHigh.tsUtc;
+                actualHighSource = "metar_official";
+            }
         }
 
-        const actualHighF = actualHigh.tempF;
-        const actualHighTimeEpochMs = actualHigh.epochMs;
+        // Fallback to AccuWeather current-conditions snapshots when no
+        // independent METAR truth is available.
+        if (actualHighF === null || actualHighTimeEpochMs === null) {
+            const obs = await ctx.db
+                .query("observations")
+                .withIndex("by_location_date", (q) =>
+                    q.eq("locationId", args.locationId).eq("localDateISO", args.dateISO)
+                )
+                .collect();
+
+            if (obs.length === 0) {
+                return {
+                    finalized: false,
+                    reason: stationIcao ? "no metar or observations" : "no observations",
+                };
+            }
+
+            let actualHigh = obs[0];
+            for (const o of obs) {
+                if (o.tempF > actualHigh.tempF) actualHigh = o;
+            }
+            actualHighF = actualHigh.tempF;
+            actualHighTimeEpochMs = actualHigh.epochMs;
+            actualHighSource = "accuweather_observations";
+        }
+
         const targetStartMs = localMidnightEpochMs(args.dateISO, loc.timeZone);
 
         const preds = await ctx.db
@@ -153,7 +198,13 @@ export const finalizeDay = internalMutation({
             });
         }
 
-        return { finalized: true, actualHighF, actualHighTimeEpochMs, predictions: preds.length };
+        return {
+            finalized: true,
+            actualHighF,
+            actualHighTimeEpochMs,
+            actualHighSource,
+            predictions: preds.length,
+        };
     },
 });
 

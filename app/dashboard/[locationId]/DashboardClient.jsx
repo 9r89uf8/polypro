@@ -1,5 +1,5 @@
 "use client";
-
+//app/dashboard/[locationId]/DashboardClient.jsx
 import { useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 
@@ -30,6 +30,50 @@ function fmtTime(ms, timeZone) {
     }).format(new Date(ms));
 }
 
+function ForecastEvolutionTable({ title, dateISO, timeZone, segments }) {
+    return (
+        <div className="mt-4">
+            <div className="font-medium">
+                {title} forecast evolution ({dateISO})
+            </div>
+            <div className="text-sm text-gray-600">
+                Shows how predicted max temp and predicted max time change across today&apos;s snapshots.
+            </div>
+
+            <div className="mt-2 overflow-x-auto">
+                <table className="min-w-full text-sm border">
+                    <thead className="bg-gray-50">
+                    <tr>
+                        <th className="text-left p-2 border">Snapshot hour</th>
+                        <th className="text-left p-2 border">Predicted high</th>
+                        <th className="text-left p-2 border">Predicted high time</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {segments.length === 0 ? (
+                        <tr>
+                            <td className="p-2 border text-gray-500" colSpan={3}>
+                                No snapshots yet.
+                            </td>
+                        </tr>
+                    ) : (
+                        segments.slice(-12).map((s, idx) => (
+                            <tr key={idx} className="border-t">
+                                <td className="p-2 border">
+                                    {fmtTime(s.startAtMs, timeZone)} → {fmtTime(s.endAtMs, timeZone)}
+                                </td>
+                                <td className="p-2 border">{fmtTemp(s.predictedHighF)}</td>
+                                <td className="p-2 border">{fmtTime(s.predictedHighTimeEpochMs, timeZone)}</td>
+                            </tr>
+                        ))
+                    )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
 export default function DashboardClient({ locationId }) {
     const toleranceF = 2;
     const daysBack = 60;
@@ -54,17 +98,120 @@ export default function DashboardClient({ locationId }) {
             leadHours: [12, 16, 24, 32],
             minHoursCovered: 24,
         }) || [];
+    const leadToActualHigh =
+        useQuery(api.stats.accuracyByLeadHour, {
+            locationId,
+            daysBack: 90,
+            toleranceF: 1,
+            maxLeadHours: 36,
+            leadDays: 0,
+        }) || [];
 
     if (!overview || !daily) return <div className="p-6">Loading…</div>;
 
     const tz = overview.timeZone;
+    const todayLatest = overview.todayForecast.latest;
+    const observedHighSoFar = overview.observations.highSoFarF ?? null;
+    const forecastRemainingMax = todayLatest?.predictedHighF ?? null;
+    const estimatedDailyHigh =
+        forecastRemainingMax == null && observedHighSoFar == null
+            ? null
+            : Math.max(forecastRemainingMax ?? -Infinity, observedHighSoFar ?? -Infinity);
+    const highLikelyPassed =
+        observedHighSoFar != null &&
+        forecastRemainingMax != null &&
+        observedHighSoFar > forecastRemainingMax + 0.5;
+    const at12hSameDay = leadToActualHigh.find((r) => r.leadHour === 12) ?? null;
+
+
+    function roundToHour(ms) {
+        if (!ms) return null;
+        return Math.floor(ms / 3600000) * 3600000;
+    }
+
+    function sameForecast(a, b, { includeTimeChange = true } = {}) {
+        if (!a || !b) return false;
+        const sameHigh = Math.round(a.predictedHighF) === Math.round(b.predictedHighF);
+
+        if (!includeTimeChange) return sameHigh;
+
+        // Round predicted-high-time to the hour to avoid minute jitter
+        const ta = roundToHour(a.predictedHighTimeEpochMs);
+        const tb = roundToHour(b.predictedHighTimeEpochMs);
+        return sameHigh && ta === tb;
+    }
+
+    function toForecastSegments(history, opts) {
+        // history must be chronological ascending
+        if (!history || history.length === 0) return [];
+
+        const segments = [];
+        let start = history[0];
+        let prev = history[0];
+
+        for (let i = 1; i < history.length; i++) {
+            const cur = history[i];
+            if (sameForecast(prev, cur, opts)) {
+                prev = cur;
+                continue;
+            }
+
+            // close segment [start..prev]
+            segments.push({
+                startAtMs: start.fetchedAtMs,
+                endAtMs: prev.fetchedAtMs,
+                predictedHighF: start.predictedHighF,
+                predictedHighTimeEpochMs: start.predictedHighTimeEpochMs,
+            });
+
+            start = cur;
+            prev = cur;
+        }
+
+        // close final segment
+        segments.push({
+            startAtMs: start.fetchedAtMs,
+            endAtMs: prev.fetchedAtMs,
+            predictedHighF: start.predictedHighF,
+            predictedHighTimeEpochMs: start.predictedHighTimeEpochMs,
+        });
+
+        return segments;
+    }
+    const evolutionTables = [
+        {
+            key: "today",
+            title: "Today",
+            dateISO: overview.todayISO,
+            segments: toForecastSegments(overview.todayForecast.historyTodayOnly, {
+                includeTimeChange: true,
+            }),
+        },
+        {
+            key: "tomorrow",
+            title: "Tomorrow",
+            dateISO: overview.tomorrowISO,
+            segments: toForecastSegments(overview.tomorrowForecast.historyTodayOnly, {
+                includeTimeChange: true,
+            }),
+        },
+        {
+            key: "day2",
+            title: "Day +2",
+            dateISO: overview.day2ISO,
+            segments: toForecastSegments(overview.day2Forecast?.historyTodayOnly ?? [], {
+                includeTimeChange: true,
+            }),
+        },
+    ];
 
     return (
         <main className="p-6 max-w-5xl mx-auto space-y-6">
             <div>
                 <h1 className="text-2xl font-semibold">Forecast Accuracy Dashboard</h1>
                 <div className="text-sm text-gray-600">
-                    Timezone: {tz} · Today: {overview.todayISO} · Tomorrow: {overview.tomorrowISO}
+                    Timezone: {tz} · Today: {overview.todayISO} · Tomorrow: {overview.tomorrowISO} · Day +2:{" "}
+                    {overview.day2ISO}
                 </div>
             </div>
 
@@ -89,17 +236,25 @@ export default function DashboardClient({ locationId }) {
                         </div>
 
                         <div className="mt-2 text-sm">
-                            Latest predicted high:{" "}
-                            <b>{fmtTemp(overview.todayForecast.latest?.predictedHighF)}</b>{" "}
-                            {overview.todayForecast.latest ? (
+                            Estimated daily high so far: <b>{fmtTemp(estimatedDailyHigh)}</b>
+                            {highLikelyPassed ? (
+                                <span className="text-gray-500"> (already reached)</span>
+                            ) : null}
+                        </div>
+                        <div className="text-sm text-gray-600">
+                            Forecast remaining max: <b>{fmtTemp(forecastRemainingMax)}</b>{" "}
+                            {todayLatest ? (
                                 <span className="text-gray-500">
-                                    (snapshot {fmtHour(overview.todayForecast.latest.fetchedLocalHour)})
+                                    (snapshot {fmtHour(todayLatest.fetchedLocalHour)}
+                                    {typeof todayLatest.hoursCoveredForTarget === "number"
+                                        ? ` · covers ${todayLatest.hoursCoveredForTarget}h`
+                                        : ""}
+                                    )
                                 </span>
                             ) : null}
                         </div>
                         <div className="text-sm text-gray-600">
-                            Predicted high time:{" "}
-                            {fmtTime(overview.todayForecast.latest?.predictedHighTimeEpochMs, tz)}
+                            Forecast max time: {fmtTime(todayLatest?.predictedHighTimeEpochMs, tz)}
                         </div>
                     </div>
 
@@ -141,37 +296,17 @@ export default function DashboardClient({ locationId }) {
                     </div>
                 </div>
 
-                {/* Tomorrow evolution */}
-                <div className="mt-4">
-                    <div className="font-medium">Tomorrow forecast evolution (today’s hourly snapshots)</div>
-                    <div className="text-sm text-gray-600">
-                        Shows how predicted max temp and predicted max time change as we get closer.
-                    </div>
-
-                    <div className="mt-2 overflow-x-auto">
-                        <table className="min-w-full text-sm border">
-                            <thead className="bg-gray-50">
-                            <tr>
-                                <th className="text-left p-2 border">Snapshot hour</th>
-                                <th className="text-left p-2 border">Predicted high</th>
-                                <th className="text-left p-2 border">Predicted high time</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            {overview.tomorrowForecast.history.slice(-12).map((r, idx) => (
-                                <tr key={idx} className="border-t">
-                                    <td className="p-2 border">{fmtHour(r.fetchedLocalHour)}</td>
-                                    <td className="p-2 border">{fmtTemp(r.predictedHighF)}</td>
-                                    <td className="p-2 border">{fmtTime(r.predictedHighTimeEpochMs, tz)}</td>
-                                </tr>
-                            ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <div className="mt-2 text-xs text-gray-500">
-                        (Showing last 12 snapshots; increase the slice if you want all 24.)
-                    </div>
+                {evolutionTables.map((table) => (
+                    <ForecastEvolutionTable
+                        key={table.key}
+                        title={table.title}
+                        dateISO={table.dateISO}
+                        timeZone={tz}
+                        segments={table.segments}
+                    />
+                ))}
+                <div className="mt-2 text-xs text-gray-500">
+                    (Showing last 12 snapshots per target day; increase the slice if you want all 24.)
                 </div>
             </section>
 
@@ -258,6 +393,52 @@ export default function DashboardClient({ locationId }) {
                                 <td className="p-2 border">{r.samples}</td>
                             </tr>
                         ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="border rounded p-4">
+                <h2 className="text-lg font-medium">Same-Day Accuracy vs Lead to Actual High</h2>
+                <div className="text-sm text-gray-600">
+                    leadDays=0 · tolerance ±1°F · grouped by hours before actual high time
+                </div>
+                <div className="mt-1 text-sm">
+                    12h lead within ±1°F:{" "}
+                    <b>
+                        {at12hSameDay
+                            ? `${fmtPct(at12hSameDay.accuracy)} (${at12hSameDay.ok}/${at12hSameDay.total})`
+                            : "—"}
+                    </b>
+                </div>
+
+                <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full text-sm border">
+                        <thead className="bg-gray-50">
+                        <tr>
+                            <th className="text-left p-2 border">Lead to high</th>
+                            <th className="text-left p-2 border">Accuracy</th>
+                            <th className="text-left p-2 border">OK</th>
+                            <th className="text-left p-2 border">Total</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {leadToActualHigh.length === 0 ? (
+                            <tr>
+                                <td className="p-2 border text-gray-500" colSpan={4}>
+                                    No finalized same-day samples yet.
+                                </td>
+                            </tr>
+                        ) : (
+                            leadToActualHigh.map((r) => (
+                                <tr key={r.leadHour} className="border-t">
+                                    <td className="p-2 border">{r.leadHour}h</td>
+                                    <td className="p-2 border">{fmtPct(r.accuracy)}</td>
+                                    <td className="p-2 border">{r.ok}</td>
+                                    <td className="p-2 border">{r.total}</td>
+                                </tr>
+                            ))
+                        )}
                         </tbody>
                     </table>
                 </div>

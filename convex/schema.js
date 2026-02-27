@@ -121,6 +121,7 @@ export default defineSchema({
         timeZone: v.string(),             // "America/Chicago"
         lat: v.number(),
         lon: v.number(),
+        stationIcao: v.optional(v.string()),
         accuweatherLocationKey: v.string(),
         accuweatherType: v.optional(v.string()),
         accuweatherEnglishName: v.optional(v.string()),
@@ -178,6 +179,11 @@ export default defineSchema({
         "leadDays",
         "targetDateISO",
         "fetchedHourBucketMs",
-    ]),
+    ])
+        .index("by_location_target_bucket", [
+            "locationId",
+            "targetDateISO",
+            "fetchedHourBucketMs",
+        ]),
 
 });

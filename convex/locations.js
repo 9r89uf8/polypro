@@ -5,7 +5,7 @@ import {
     internalMutation,
 } from "./_generated/server";
 import { v } from "convex/values";
-
+//convex/locations.js
 export const list = query({
     args: {},
     handler: async (ctx) => {
@@ -43,6 +43,7 @@ export const upsert = internalMutation({
         timeZone: v.string(),
         lat: v.number(),
         lon: v.number(),
+        stationIcao: v.optional(v.string()),
         accuweatherLocationKey: v.string(),
         accuweatherType: v.optional(v.string()),
         accuweatherEnglishName: v.optional(v.string()),
@@ -62,6 +63,7 @@ export const upsert = internalMutation({
                 timeZone: args.timeZone,
                 lat: args.lat,
                 lon: args.lon,
+                stationIcao: args.stationIcao,
                 accuweatherType: args.accuweatherType,
                 accuweatherEnglishName: args.accuweatherEnglishName,
                 active: args.active,

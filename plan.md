@@ -1,457 +1,305 @@
-### Midnight behavior (Feb 25 → Feb 26)
+You’re already *very* close to what you described. Your current model (`highPredictions` snapshots + `finalizeDay` to attach the actual high + error + lead-hours) is the right backbone.
 
-You **do not wait** for Feb 26 to “resolve” before starting Feb 27.
+The big “gotcha” (and it matters a lot for **leadDays = 0 / same‑day**) is this:
 
-* Your collector runs every hour.
-* As soon as the **local date flips to Feb 26 (00:00 America/Chicago)**, the next hourly run will treat:
+### The 72h hourly endpoint only contains *future hours*
 
-    * **“today” = Feb 26**
-    * **“tomorrow” = Feb 27**
-* So yes: **you start collecting predicted highs for Feb 27 immediately at/after midnight Feb 26**.
+So once the real high has already happened, the “daily max” you compute from the remaining hourly forecast is no longer the day’s high — it becomes **“max of the remaining hours”**.
 
-Separately:
+That’s exactly why your original plan says “stop collecting once the highest temperature is reached.” If you don’t stop (or at least filter), then any “lock-in” or “stays-accurate” metric will look worse than it should, because you’re no longer measuring the same thing after the high passes.
 
-* **Finalizing Feb 26** (computing the actual high and attaching errors) happens **after Feb 26 ends**, typically at **00:00 on Feb 27** (or whatever “finalize time” you choose).
-  That finalization does **not block** collecting predictions for Feb 27.
+Your code *already* has the ingredients to fix this cleanly, without changing your collector cadence.
 
 ---
 
-## Why your current setup won’t fully use the 72‑hour forecast (and how to fix it)
+## What you should measure (definitions that won’t bite you later)
 
-Right now (based on the earlier design), you’re only saving **leadDays 0 and 1** (today + tomorrow). That means:
+For each **snapshot hour** (when you fetch the AccuWeather hourly forecast):
 
-* On **Feb 25**, you save predictions for **Feb 26** (tomorrow) ✅
-* On **Feb 25**, you **do not** save predictions for **Feb 27** even though it’s inside the 72‑hour window ❌
-* You only start saving Feb 27 at **midnight Feb 26** ✅
+* **Target date**: `targetDateISO` (e.g. `2026-02-26`)
+* **Prediction**:
 
-To make statements like **“32 hours before the target day starts”** (or even **48+ hours**), you should also save **day+2** (and optionally day+3 when fully covered) *from the same hourly 72-hour forecast response*.
+    * `predictedHighF`: max temp found among forecast hours that fall on `targetDateISO`
+    * `predictedHighTimeEpochMs`: time of that max
+* **Truth**:
 
-### Example (what you want)
+    * `actualHighF`, `actualHighTimeEpochMs` (computed after the day ends)
+* **Lead time**:
 
-For target day **Feb 26**:
+    * `leadHoursToActualHigh`: hours from snapshot → the actual high time
+      (you already compute this in `finalizeDay`)
 
-* **32 hours before Feb 26 00:00** is **Feb 24 16:00**
-* You can only measure that if, on Feb 24 at 4pm, you were already storing a prediction for Feb 26.
-  That requires saving **leadDays = 2** records.
+Then the two most useful accuracy views are:
 
----
+1. **Accuracy at a given lead hour** (your `accuracyByLeadHour` already does this)
 
-# What to add
+    * “When the high was 12 hours away, how often was the predicted high within ±1°F?”
+2. **Earliest time it becomes accurate / lock-in time**
 
-You asked for:
+    * “How many hours before the high did it first become within ±1°F?”
+    * “How many hours before the high did it lock in and never leave ±1°F again (up to the high)?”
 
-1. **Daily summary table** ✅ (you already have it)
-2. **Current day info + “did tomorrow’s predicted max change over time?”** ✅ (you already show the evolution table)
-3. A new table like:
-
-* 12h lead: 90% accurate (MAE 1°F)
-* 16h lead: 82% accurate (MAE 1.5°F)
-* 24h lead: 75% accurate (MAE 2°F)
-
-To do (3) well, we need one extra computed metric per stored prediction:
-
-* **leadHoursToTargetStart** = hours from snapshot → **target day 00:00** (local)
-
-Then we can bucket by lead hours: 12, 16, 24, 32, etc.
+The crucial add-on is: for same-day, “up to the high” must literally mean **stop evaluating after the high occurs**.
 
 ---
 
-# Fix 1: Save predictions for ALL dates found in the 72-hour forecast
+## The main fix: treat “after the high” as out-of-scope for same‑day
 
-Instead of only “today/tomorrow”, compute the max temp for every calendar date in the 72 hourly entries and store each.
-
-## Schema change
-
-Add one field so you can filter out partial days later:
-
-* `hoursCoveredForTarget` (how many hourly entries for that target date were present in the 72h response)
-
-Also add:
-
-* `leadHoursToTargetStart` (computed when the day is finalized)
-
-### `convex/schema.ts` (highPredictions additions)
-
-```ts
-// Add these fields inside highPredictions:
-hoursCoveredForTarget: v.number(),
-
-leadHoursToTargetStart: v.optional(v.number()),
-```
-
-(Keep your existing `leadHoursToActualHigh`, `absErrorF`, etc.)
-
----
-
-## Collector change (weather collector)
-
-### Helper: compute daily maxes from the 72-hour hourly forecast
+You already compute:
 
 ```js
-function daysBetweenISO(aISO, bISO) {
-  // b - a in whole days (UTC-safe)
-  const [ay, am, ad] = aISO.split("-").map(Number);
-  const [by, bm, bd] = bISO.split("-").map(Number);
-  const a = Date.UTC(ay, am - 1, ad);
-  const b = Date.UTC(by, bm - 1, bd);
-  return Math.round((b - a) / 86400000);
-}
+leadHoursToActualHigh = Math.floor((actualHighTimeEpochMs - p.fetchedHourBucketMs) / 3600000)
+```
 
-function computeDailyHighMap(hourlyArray, timeZone, getLocalParts) {
-  // returns Map(dateISO -> { dateISO, count, maxTempF, maxTimeEpochMs })
-  const map = new Map();
+So any snapshot taken after the actual high will have:
 
-  for (const h of hourlyArray) {
-    const epochMs = (h.EpochDateTime ?? 0) * 1000;
-    const tempF = h?.Temperature?.Value;
-    if (!epochMs || typeof tempF !== "number") continue;
+* `leadHoursToActualHigh < 0`
 
-    const { dateISO } = getLocalParts(epochMs, timeZone);
-    const cur = map.get(dateISO) || {
-      dateISO,
-      count: 0,
-      maxTempF: -Infinity,
-      maxTimeEpochMs: null,
+### Rule
+
+For *same-day* evaluation (and honestly it’s safe for all leadDays), only include snapshots where:
+
+* `leadHoursToActualHigh >= 0`
+
+Your `accuracyByLeadHour` query already does this filtering:
+
+```js
+if (lh < 0 || lh > args.maxLeadHours) continue;
+```
+
+But your **daily “lock-in” / summary** logic currently does **not** stop at the high — it tries to reason across the whole day’s snapshots (0..23), which will break for leadDays=0.
+
+### Patch your `summarizeDay` so lock-in only considers snapshots before the actual high
+
+Below is a drop-in style change (keep your overall structure, but compute `lastRelevantHour` and only evaluate up to that).
+
+#### Replace the top of `summarizeDay` with a “relevant predictions” filter
+
+```js
+function summarizeDay(predsForDay, toleranceF) {
+  // Extract actual high fields if already finalized
+  let actualHighF = null;
+  let actualHighTimeEpochMs = null;
+
+  for (const p of predsForDay) {
+    if (typeof p.actualHighF === "number") actualHighF = p.actualHighF;
+    if (typeof p.actualHighTimeEpochMs === "number") actualHighTimeEpochMs = p.actualHighTimeEpochMs;
+  }
+
+  // Only consider snapshots taken BEFORE (or at) the actual high time.
+  // For leadDays=1/2/3 this won't remove anything; for leadDays=0 it fixes the “remaining max” issue.
+  const relevant =
+    typeof actualHighTimeEpochMs === "number"
+      ? predsForDay.filter((p) => (p.fetchedHourBucketMs ?? p.fetchedAtMs) <= actualHighTimeEpochMs)
+      : predsForDay;
+
+  // Map by fetched hour for the “snapshot day”
+  const byHour = Array(24).fill(null);
+
+  let predMin = null;
+  let predMax = null;
+
+  let lastRelevantHour = null;
+
+  for (const p of relevant) {
+    const h = p.fetchedLocalHour;
+    if (h >= 0 && h <= 23) {
+      byHour[h] = p;
+      lastRelevantHour = lastRelevantHour === null ? h : Math.max(lastRelevantHour, h);
+    }
+
+    if (typeof p.predictedHighF === "number") {
+      predMin = predMin === null ? p.predictedHighF : Math.min(predMin, p.predictedHighF);
+      predMax = predMax === null ? p.predictedHighF : Math.max(predMax, p.predictedHighF);
+    }
+  }
+
+  const coverage = relevant.length;
+  const missing = 24 - coverage;
+
+  // ... then keep building your row as before ...
+```
+
+#### Then update “first accurate” and “lock-in” loops to stop at `lastRelevantHour`
+
+Replace your loops with variants that stop at `lastRelevantHour` (instead of 23):
+
+```js
+  // If not finalized yet, return row with null metrics (same as you do today)
+  if (typeof actualHighF !== "number") {
+    return {
+      // ...your row fields...
+      firstAccurateHour: null,
+      firstAccurateLeadHours: null,
+      lockInHourLenient: null,
+      lockInLeadHoursLenient: null,
+      lockInHourStrict: null,
+      lockInLeadHoursStrict: null,
     };
-
-    cur.count += 1;
-    if (tempF > cur.maxTempF) {
-      cur.maxTempF = tempF;
-      cur.maxTimeEpochMs = epochMs;
-    }
-
-    map.set(dateISO, cur);
   }
 
-  return map;
-}
-```
+  const endH = lastRelevantHour ?? 23;
 
-### Update your `saveHighPrediction` mutation signature
-
-Add `hoursCoveredForTarget`:
-
-```js
-export const saveHighPrediction = internalMutation({
-  args: {
-    locationId: v.id("locations"),
-    fetchedAtMs: v.number(),
-    fetchedHourBucketMs: v.number(),
-    fetchedLocalDateISO: v.string(),
-    fetchedLocalHour: v.number(),
-
-    targetDateISO: v.string(),
-    leadDays: v.number(),
-
-    predictedHighF: v.number(),
-    predictedHighTimeEpochMs: v.number(),
-
-    hoursCoveredForTarget: v.number(),
-  },
-  handler: async (ctx, args) => {
-    // ...same idempotency check...
-    return await ctx.db.insert("highPredictions", {
-      ...args,
-      finalizedAtMs: 0,
-    });
-  },
-});
-```
-
-### Update `collectHourly` to store multiple target dates
-
-Inside `collectHourly`, after you fetch `hourly`:
-
-```js
-const dailyMap = computeDailyHighMap(hourly, loc.timeZone, getLocalParts);
-
-for (const d of dailyMap.values()) {
-  const leadDays = daysBetweenISO(fetchedLocalDateISO, d.dateISO);
-
-  // Keep what you want. For 72h data, leadDays typically 0..3.
-  if (leadDays < 0 || leadDays > 3) continue;
-
-  await ctx.runMutation(internal.weather.saveHighPrediction, {
-    locationId: loc._id,
-    fetchedAtMs: now,
-    fetchedHourBucketMs,
-    fetchedLocalDateISO,
-    fetchedLocalHour,
-
-    targetDateISO: d.dateISO,
-    leadDays,
-
-    predictedHighF: d.maxTempF,
-    predictedHighTimeEpochMs: d.maxTimeEpochMs,
-
-    hoursCoveredForTarget: d.count,
-  });
-}
-```
-
-✅ Now you’re collecting **Feb 27** predictions on **Feb 25** (leadDays=2), not just starting at midnight Feb 26.
-
----
-
-# Fix 2: Compute “lead hours before target day start” at finalization
-
-This is what enables your “12h / 16h / 24h / 32h” table.
-
-### Add a robust “local midnight epoch” helper (optional but best)
-
-If you want to keep it simpler, you can compute lead hours from `leadDays*24 - fetchedLocalHour`, but DST can skew it. This version is DST-safe.
-
-In `convex/time.js`:
-
-```js
-export function getLocalParts(ms, timeZone) {
-  const dtf = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-
-  const parts = dtf.formatToParts(new Date(ms));
-  const m = {};
-  for (const p of parts) if (p.type !== "literal") m[p.type] = p.value;
-
-  return {
-    dateISO: `${m.year}-${m.month}-${m.day}`,
-    hour: Number(m.hour),
-    minute: Number(m.minute),
-  };
-}
-
-export function localMidnightEpochMs(dateISO, timeZone) {
-  const [y, mo, d] = dateISO.split("-").map(Number);
-  const utcMidnight = Date.UTC(y, mo - 1, d, 0, 0, 0);
-
-  // Search ±14h in 1-minute steps for local 00:00
-  const start = utcMidnight - 14 * 3600000;
-  for (let i = 0; i <= 28 * 60; i++) {
-    const t = start + i * 60000;
-    const p = getLocalParts(t, timeZone);
-    if (p.dateISO === dateISO && p.hour === 0 && p.minute === 0) return t;
+  // First accurate hour (earliest hour with absError <= tolerance)
+  let firstAccurateHour = null;
+  let firstAccurateLeadHours = null;
+  for (let h = 0; h <= endH; h++) {
+    const p = byHour[h];
+    if (!p || typeof p.absErrorF !== "number") continue;
+    if (p.absErrorF <= toleranceF) {
+      firstAccurateHour = h;
+      firstAccurateLeadHours =
+        typeof p.leadHoursToActualHigh === "number" ? p.leadHoursToActualHigh : null;
+      break;
+    }
   }
 
-  throw new Error(`Could not find local midnight for ${dateISO} in ${timeZone}`);
-}
-```
-
-### Update `finalizeDay` to set `leadHoursToTargetStart`
-
-In `finalizeDay`, after you compute `actualHighTimeEpochMs`, do:
-
-```js
-const loc = await ctx.db.get(args.locationId);
-const tz = loc.timeZone;
-
-const targetStartMs = localMidnightEpochMs(args.dateISO, tz);
-
-for (const p of preds) {
-  const absErrorF = Math.abs(p.predictedHighF - actualHighF);
-
-  const leadHoursToActualHigh = Math.floor(
-    (actualHighTimeEpochMs - p.fetchedHourBucketMs) / 3600000
-  );
-
-  const leadHoursToTargetStart = Math.floor(
-    (targetStartMs - p.fetchedHourBucketMs) / 3600000
-  );
-
-  await ctx.db.patch(p._id, {
-    actualHighF,
-    actualHighTimeEpochMs,
-    absErrorF,
-    leadHoursToActualHigh,
-    leadHoursToTargetStart,
-    finalizedAtMs: now,
-  });
-}
-```
-
----
-
-# New Stats: The exact table you described (12h / 16h / 24h / 32h)
-
-### `convex/stats.js`
-
-This returns accuracy + MAE for a list of lead hours.
-
-```js
-import { query } from "./_generated/server";
-import { v } from "convex/values";
-
-export const leadHourAccuracyTable = query({
-  args: {
-    locationId: v.id("locations"),
-    daysBack: v.number(),          // e.g. 90
-    toleranceF: v.number(),        // e.g. 2
-    leadHours: v.array(v.number()),// e.g. [12,16,24,32]
-    minHoursCovered: v.optional(v.number()), // default 24
-  },
-  handler: async (ctx, args) => {
-    const minHoursCovered = args.minHoursCovered ?? 24;
-    const minFinalizedAt = Date.now() - args.daysBack * 86400000;
-
-    const preds = await ctx.db
-      .query("highPredictions")
-      .withIndex("by_location_finalizedAt", (q) =>
-        q.eq("locationId", args.locationId).gt("finalizedAtMs", minFinalizedAt)
-      )
-      .collect();
-
-    const wanted = new Set(args.leadHours);
-    const agg = new Map(); // leadHour -> {n, ok, sumAbs, sumSigned}
-
-    for (const p of preds) {
-      if (p.finalizedAtMs === 0) continue;
-      if (typeof p.absErrorF !== "number") continue;
-      if (typeof p.actualHighF !== "number") continue;
-      if (typeof p.leadHoursToTargetStart !== "number") continue;
-
-      if (p.hoursCoveredForTarget < minHoursCovered) continue;
-
-      const lh = p.leadHoursToTargetStart;
-      if (!wanted.has(lh)) continue;
-
-      const a = agg.get(lh) || { leadHour: lh, n: 0, ok: 0, sumAbs: 0, sumSigned: 0 };
-      a.n += 1;
-      a.sumAbs += p.absErrorF;
-      a.sumSigned += (p.predictedHighF - p.actualHighF);
-      if (p.absErrorF <= args.toleranceF) a.ok += 1;
-      agg.set(lh, a);
+  // Lock-in (lenient): earliest hour after which ALL later *recorded* snapshots stayed accurate (up to endH)
+  let lockInHourLenient = null;
+  let lockInLeadHoursLenient = null;
+  let allLaterAccurate = true;
+  for (let h = endH; h >= 0; h--) {
+    const p = byHour[h];
+    if (!p || typeof p.absErrorF !== "number") continue; // lenient ignores missing
+    if (p.absErrorF <= toleranceF && allLaterAccurate) {
+      lockInHourLenient = h;
+      lockInLeadHoursLenient =
+        typeof p.leadHoursToActualHigh === "number" ? p.leadHoursToActualHigh : null;
+    } else {
+      allLaterAccurate = false;
     }
+  }
 
-    return args.leadHours
-      .slice()
-      .sort((a, b) => a - b)
-      .map((lh) => {
-        const a = agg.get(lh);
-        if (!a) return { leadHour: lh, samples: 0, accuracy: null, mae: null, bias: null };
-        return {
-          leadHour: lh,
-          samples: a.n,
-          accuracy: a.n ? a.ok / a.n : null,
-          mae: a.n ? a.sumAbs / a.n : null,
-          bias: a.n ? a.sumSigned / a.n : null, // + means forecast too warm
-        };
-      });
-  },
-});
+  // Lock-in (strict): requires complete uninterrupted run h..endH and all accurate
+  let lockInHourStrict = null;
+  let lockInLeadHoursStrict = null;
+  for (let h = 0; h <= endH; h++) {
+    let ok = true;
+    for (let k = h; k <= endH; k++) {
+      const p = byHour[k];
+      if (!p || typeof p.absErrorF !== "number" || p.absErrorF > toleranceF) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      lockInHourStrict = h;
+      lockInLeadHoursStrict =
+        typeof byHour[h]?.leadHoursToActualHigh === "number" ? byHour[h].leadHoursToActualHigh : null;
+      break;
+    }
+  }
 ```
 
-Now you can call it with:
-
-* `[12, 16, 24, 32]` (or add 36/48/60 if you start saving leadDays=2 and 3 with full coverage)
+**Result:** For leadDays=0, your summary metrics won’t be wrecked by “remaining-max” snapshots after the high.
 
 ---
 
-# Dashboard: Add the lead-time accuracy table
+## How to produce the exact statement you want (“12 hours in advance with 1°F error”)
 
-In `DashboardClient.jsx`:
+You already have the best query for that:
 
-```jsx
-const leadTable =
-  useQuery(api.stats.leadHourAccuracyTable, {
-    locationId,
-    daysBack: 90,
-    toleranceF: 2,
-    leadHours: [12, 16, 24, 32],
-    minHoursCovered: 24,
-  }) || [];
-```
+### Use `accuracyByLeadHour`
 
-Render:
+Call it with:
 
-```jsx
-<section className="border rounded p-4">
-  <h2 className="text-lg font-medium">Accuracy vs Lead Time (before target day starts)</h2>
-  <div className="text-sm text-gray-600">Tolerance ±2°F · Full-day coverage only</div>
+* `toleranceF: 1`
+* `maxLeadHours: 36` (or whatever)
+* `daysBack: 60` or `90`
+* optionally `leadDays: 0` (same-day highs) or `leadDays: 1` (tomorrow highs)
 
-  <div className="mt-3 overflow-x-auto">
-    <table className="min-w-full text-sm border">
-      <thead className="bg-gray-50">
-        <tr>
-          <th className="text-left p-2 border">Lead</th>
-          <th className="text-left p-2 border">Accuracy</th>
-          <th className="text-left p-2 border">MAE</th>
-          <th className="text-left p-2 border">Bias</th>
-          <th className="text-left p-2 border">Samples</th>
-        </tr>
-      </thead>
-      <tbody>
-        {leadTable.map((r) => (
-          <tr key={r.leadHour} className="border-t">
-            <td className="p-2 border">{r.leadHour}h</td>
-            <td className="p-2 border">
-              {r.accuracy == null ? "—" : `${Math.round(r.accuracy * 100)}%`}
-            </td>
-            <td className="p-2 border">
-              {r.mae == null ? "—" : `${r.mae.toFixed(1)}°F`}
-            </td>
-            <td className="p-2 border">
-              {r.bias == null ? "—" : `${r.bias.toFixed(1)}°F`}
-            </td>
-            <td className="p-2 border">{r.samples}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-</section>
-```
+Interpretation:
 
-That produces exactly the kind of table you described.
+* The bucket where `leadHour == 12` answers:
+  **“When the actual high was 12 hours away, how often was AccuWeather’s predicted high within ±1°F?”**
+
+If you want a more “human” phrasing like:
+
+> “AccuWeather can predict the daily high 12+ hours in advance within ±1°F on 73% of days.”
+
+Then compute a **cumulative** version:
+
+* include all snapshots where `leadHoursToActualHigh >= 12`
+* accuracy = ok / total
+
+You can do that in the client from the returned buckets, or add a small query.
 
 ---
 
-# About your screenshot (two quick notes)
+## About “stop collecting once high is reached”
 
-### 1) “Today predicted high — (snapshot 12am)” is a UI bug
+You don’t *need* to stop collecting API data (you still want tomorrow + day+2), but you can stop **storing leadDays=0 snapshots for today** once the high is very likely done.
 
-Right now you’re showing `snapshot 12am` even when there is no `latestToday`.
+You already compute this in the UI:
 
-Change:
-
-```jsx
-(snapshot {fmtHour(overview.todayForecast.latest?.fetchedLocalHour ?? 0)})
+```js
+highLikelyPassed =
+  observedHighSoFar != null &&
+  forecastRemainingMax != null &&
+  observedHighSoFar > forecastRemainingMax + 0.5;
 ```
 
-to:
+If you want to enforce your original rule at the storage layer, do the same check inside `collectHourly` **for today only** and skip saving today’s `highPredictions` once it flips true.
 
-```jsx
-{overview.todayForecast.latest
-  ? `(snapshot ${fmtHour(overview.todayForecast.latest.fetchedLocalHour)})`
-  : ""}
-```
+The only extra thing you’d need is reading “observed high so far today” inside `collectHourly` (from your `observations` table), which is easy but is an extra query per location per hour. Many people just keep saving and filter later (simpler + fewer moving parts).
 
-So it doesn’t imply there’s a 12am snapshot when there isn’t.
-
-### 2) Daily Summary table empty is expected if you only started today
-
-Your “completed days” table (leadDays=1) won’t show **Feb 26** until **after Feb 26 ends** (finalize runs at **00:00 Feb 27**). And you won’t have a Feb 25 row unless you were collecting on Feb 24.
+**My recommendation:** keep saving; filter at analysis time using `leadHoursToActualHigh >= 0` (as above). You get correctness *and* simpler ops.
 
 ---
 
-## Does “tomorrow evolution” belong in daily summary?
+## One more important point: don’t let “truth” be AccuWeather if you want a real accuracy test
 
-Not really — it’s **live / in-progress**.
+Right now your “actual high” comes from:
 
-Best practice:
+* `/currentconditions/v1/{key}` hourly snapshots → `observations`
 
-* **Current Day view**: show “tomorrow predicted high” and its changes as the day progresses ✅
-* **Daily Summary**: after the target day finishes, show “when it became accurate” + drift + lock-in ✅
+That’s fine for a prototype, but it’s not ideal if your claim is “AccuWeather forecast accuracy”, because you’re using AccuWeather itself as the observation source.
 
-If you want, I can add 2 more fields to each daily summary row:
+If you want this to be defensible, use an independent ground truth:
 
-* `changeCount` (how many times predictedHigh changed on the prior day)
-* `lastChangeHour` (last hour it changed)
+* METAR (you already ingest it!)
+* NOAA / IEM / official station dataset
 
-Those make it super easy to see “stable by 10pm” patterns.
+A practical compromise:
+
+* keep `observations` for the “live dashboard”
+* but in `finalizeDay`, compute `actualHighF` from `metarObservations` (official mode) when available
+
+That will make your accuracy numbers mean what people assume they mean.
 
 ---
+
+## Showing 3 separate tables for 26 / 27 / 28 (today/tomorrow/day+2)
+
+Your storage already supports it: you’re saving predictions for all target days in `dailyMap`.
+
+To display it, extend `dayOverview` to also fetch:
+
+* `day2ISO = addDaysISO(todayISO, 2)`
+* query `highPredictions` for `targetDateISO == day2ISO` like you do for tomorrow
+
+Then render the same “evolution table” component three times.
+
+---
+
+## Quick checklist of what I’d change (minimal + high impact)
+
+1. **Fix daily summary lock-in logic** to only consider snapshots up to the actual high time (patch above).
+2. Decide which evaluation you want:
+
+    * **leadDays=0** ⇒ “same-day high prediction lead time”
+    * **leadDays=1** ⇒ “tomorrow’s high prediction lead time”
+3. For your headline claim, drive it from `accuracyByLeadHour(toleranceF=1)` and report:
+
+    * accuracy at 12h, 15h, 18h, etc.
+    * and/or the earliest lead-hour where accuracy exceeds a threshold (80%, 90%)
+4. (Strongly recommended) switch `finalizeDay` truth source to METAR for real accuracy.
+
+If you want, I can also propose a single “headline metrics” query that returns something like:
+
+* `p80LeadHoursWithin1F`
+* `p80LeadHoursWithin2F`
+* `maeAt12h`, `maeAt18h`, `maeAt24h`
+* `biasAt12h`, etc.
+
+…but the main thing to fix first is the “after-the-high becomes remaining-max” issue, because that’s the one that will quietly distort your conclusions.

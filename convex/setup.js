@@ -1,7 +1,7 @@
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { awFetchJson } from "./aw";
-
+//convex/setup.js
 export const bootstrapOhare = action({
     args: {},
     handler: async (ctx) => {
@@ -21,6 +21,7 @@ export const bootstrapOhare = action({
             timeZone,
             lat,
             lon,
+            stationIcao: "KORD",
             accuweatherLocationKey: poi.Key,
             accuweatherType: poi.Type,
             accuweatherEnglishName: poi.EnglishName,
