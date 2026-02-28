@@ -30,6 +30,39 @@ function fmtTime(ms, timeZone) {
     }).format(new Date(ms));
 }
 
+function fmtHours(hours) {
+    if (hours === null || hours === undefined) return "—";
+    return `${hours}h`;
+}
+
+function fmtDurationSummary(pred, timeZone) {
+    if (!pred) return "—";
+
+    const streak = pred.predictedHighStreakHours;
+    const total = pred.predictedHighCountHours;
+    const start = pred.predictedHighStreakStartEpochMs;
+    const end = pred.predictedHighStreakEndEpochMs;
+
+    if (
+        typeof streak !== "number" &&
+        typeof total !== "number" &&
+        typeof start !== "number" &&
+        typeof end !== "number"
+    ) {
+        return "—";
+    }
+
+    const parts = [];
+    if (typeof streak === "number") parts.push(`streak ${streak}h`);
+    if (typeof total === "number") parts.push(`total ${total}h`);
+    if (typeof start === "number" && typeof end === "number") {
+        parts.push(`${fmtTime(start, timeZone)} → ${fmtTime(end, timeZone)}`);
+    } else if (typeof start === "number") {
+        parts.push(fmtTime(start, timeZone));
+    }
+    return parts.join(" · ");
+}
+
 function ForecastEvolutionTable({ title, dateISO, timeZone, segments }) {
     return (
         <div className="mt-4">
@@ -47,12 +80,15 @@ function ForecastEvolutionTable({ title, dateISO, timeZone, segments }) {
                         <th className="text-left p-2 border">Snapshot hour</th>
                         <th className="text-left p-2 border">Predicted high</th>
                         <th className="text-left p-2 border">Predicted high time</th>
+                        <th className="text-left p-2 border">High streak</th>
+                        <th className="text-left p-2 border">High count</th>
+                        <th className="text-left p-2 border">Streak window</th>
                     </tr>
                     </thead>
                     <tbody>
                     {segments.length === 0 ? (
                         <tr>
-                            <td className="p-2 border text-gray-500" colSpan={3}>
+                            <td className="p-2 border text-gray-500" colSpan={6}>
                                 No snapshots yet.
                             </td>
                         </tr>
@@ -64,6 +100,17 @@ function ForecastEvolutionTable({ title, dateISO, timeZone, segments }) {
                                 </td>
                                 <td className="p-2 border">{fmtTemp(s.predictedHighF)}</td>
                                 <td className="p-2 border">{fmtTime(s.predictedHighTimeEpochMs, timeZone)}</td>
+                                <td className="p-2 border">{fmtHours(s.predictedHighStreakHours)}</td>
+                                <td className="p-2 border">{fmtHours(s.predictedHighCountHours)}</td>
+                                <td className="p-2 border">
+                                    {typeof s.predictedHighStreakStartEpochMs === "number" &&
+                                    typeof s.predictedHighStreakEndEpochMs === "number"
+                                        ? `${fmtTime(s.predictedHighStreakStartEpochMs, timeZone)} → ${fmtTime(
+                                            s.predictedHighStreakEndEpochMs,
+                                            timeZone
+                                        )}`
+                                        : "—"}
+                                </td>
                             </tr>
                         ))
                     )}
@@ -132,13 +179,20 @@ export default function DashboardClient({ locationId }) {
     function sameForecast(a, b, { includeTimeChange = true } = {}) {
         if (!a || !b) return false;
         const sameHigh = Math.round(a.predictedHighF) === Math.round(b.predictedHighF);
+        const sameCount = (a.predictedHighCountHours ?? null) === (b.predictedHighCountHours ?? null);
+        const sameStreak = (a.predictedHighStreakHours ?? null) === (b.predictedHighStreakHours ?? null);
 
-        if (!includeTimeChange) return sameHigh;
+        if (!includeTimeChange) return sameHigh && sameCount && sameStreak;
 
         // Round predicted-high-time to the hour to avoid minute jitter
         const ta = roundToHour(a.predictedHighTimeEpochMs);
         const tb = roundToHour(b.predictedHighTimeEpochMs);
-        return sameHigh && ta === tb;
+        const sa = roundToHour(a.predictedHighStreakStartEpochMs);
+        const sb = roundToHour(b.predictedHighStreakStartEpochMs);
+        const ea = roundToHour(a.predictedHighStreakEndEpochMs);
+        const eb = roundToHour(b.predictedHighStreakEndEpochMs);
+
+        return sameHigh && sameCount && sameStreak && ta === tb && sa === sb && ea === eb;
     }
 
     function toForecastSegments(history, opts) {
@@ -162,6 +216,10 @@ export default function DashboardClient({ locationId }) {
                 endAtMs: prev.fetchedAtMs,
                 predictedHighF: start.predictedHighF,
                 predictedHighTimeEpochMs: start.predictedHighTimeEpochMs,
+                predictedHighCountHours: start.predictedHighCountHours,
+                predictedHighStreakHours: start.predictedHighStreakHours,
+                predictedHighStreakStartEpochMs: start.predictedHighStreakStartEpochMs,
+                predictedHighStreakEndEpochMs: start.predictedHighStreakEndEpochMs,
             });
 
             start = cur;
@@ -174,6 +232,10 @@ export default function DashboardClient({ locationId }) {
             endAtMs: prev.fetchedAtMs,
             predictedHighF: start.predictedHighF,
             predictedHighTimeEpochMs: start.predictedHighTimeEpochMs,
+            predictedHighCountHours: start.predictedHighCountHours,
+            predictedHighStreakHours: start.predictedHighStreakHours,
+            predictedHighStreakStartEpochMs: start.predictedHighStreakStartEpochMs,
+            predictedHighStreakEndEpochMs: start.predictedHighStreakEndEpochMs,
         });
 
         return segments;
@@ -256,6 +318,9 @@ export default function DashboardClient({ locationId }) {
                         <div className="text-sm text-gray-600">
                             Forecast max time: {fmtTime(todayLatest?.predictedHighTimeEpochMs, tz)}
                         </div>
+                        <div className="text-sm text-gray-600">
+                            Forecast high duration: {fmtDurationSummary(todayLatest, tz)}
+                        </div>
                     </div>
 
                     <div className="border rounded p-3">
@@ -273,6 +338,9 @@ export default function DashboardClient({ locationId }) {
                         <div className="text-sm text-gray-600">
                             Predicted high time:{" "}
                             {fmtTime(overview.tomorrowForecast.latest?.predictedHighTimeEpochMs, tz)}
+                        </div>
+                        <div className="text-sm text-gray-600">
+                            Predicted high duration: {fmtDurationSummary(overview.tomorrowForecast.latest, tz)}
                         </div>
 
                         <div className="mt-2 text-sm">
@@ -326,6 +394,7 @@ export default function DashboardClient({ locationId }) {
                             <th className="text-left p-2 border">Actual high</th>
                             <th className="text-left p-2 border">Pred @ 10pm</th>
                             <th className="text-left p-2 border">Err @ 10pm</th>
+                            <th className="text-left p-2 border">High duration @ 10pm</th>
                             <th className="text-left p-2 border">First accurate</th>
                             <th className="text-left p-2 border">Lock-in (lenient)</th>
                             <th className="text-left p-2 border">Drift</th>
@@ -340,6 +409,26 @@ export default function DashboardClient({ locationId }) {
                                 <td className="p-2 border">{fmtTemp(d.predAt10pmF)}</td>
                                 <td className="p-2 border">
                                     {d.absErrorAt10pmF == null ? "—" : `${Math.round(d.absErrorAt10pmF)}°F`}
+                                </td>
+                                <td className="p-2 border">
+                                    {d.predictedHighStreakHoursAt10pm == null &&
+                                    d.predictedHighCountHoursAt10pm == null ? (
+                                        "—"
+                                    ) : (
+                                        <>
+                                            {fmtHours(d.predictedHighStreakHoursAt10pm)} streak /{" "}
+                                            {fmtHours(d.predictedHighCountHoursAt10pm)} total
+                                            {typeof d.predictedHighStreakStartAt10pmEpochMs === "number" &&
+                                            typeof d.predictedHighStreakEndAt10pmEpochMs === "number" ? (
+                                                <span className="text-gray-500">
+                                                    {" "}
+                                                    (
+                                                    {fmtTime(d.predictedHighStreakStartAt10pmEpochMs, tz)} →{" "}
+                                                    {fmtTime(d.predictedHighStreakEndAt10pmEpochMs, tz)})
+                                                </span>
+                                            ) : null}
+                                        </>
+                                    )}
                                 </td>
                                 <td className="p-2 border">
                                     {d.firstAccurateHour == null ? "—" : fmtHour(d.firstAccurateHour)}

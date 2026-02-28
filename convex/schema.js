@@ -156,6 +156,10 @@ export default defineSchema({
 
         predictedHighF: v.number(),
         predictedHighTimeEpochMs: v.number(),
+        predictedHighCountHours: v.optional(v.number()),
+        predictedHighStreakHours: v.optional(v.number()),
+        predictedHighStreakStartEpochMs: v.optional(v.number()),
+        predictedHighStreakEndEpochMs: v.optional(v.number()),
 
         // Filled in at local midnight AFTER the target day ends
         actualHighF: v.optional(v.number()),

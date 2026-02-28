@@ -271,6 +271,10 @@ function summarizeDay(predsForDay, toleranceF) {
         absErrorAt10pmF: typeof p10?.absErrorF === "number" ? p10.absErrorF : null,
         predAt11pmF: p11?.predictedHighF ?? null,
         absErrorAt11pmF: typeof p11?.absErrorF === "number" ? p11.absErrorF : null,
+        predictedHighCountHoursAt10pm: p10?.predictedHighCountHours ?? null,
+        predictedHighStreakHoursAt10pm: p10?.predictedHighStreakHours ?? null,
+        predictedHighStreakStartAt10pmEpochMs: p10?.predictedHighStreakStartEpochMs ?? null,
+        predictedHighStreakEndAt10pmEpochMs: p10?.predictedHighStreakEndEpochMs ?? null,
     };
 
     // If not finalized yet, accuracy/lock-in is unknown
@@ -484,6 +488,10 @@ export const dayOverview = query({
                 predictedHighF: p.predictedHighF,
                 predictedHighTimeEpochMs: p.predictedHighTimeEpochMs,
                 hoursCoveredForTarget: p.hoursCoveredForTarget,
+                predictedHighCountHours: p.predictedHighCountHours ?? null,
+                predictedHighStreakHours: p.predictedHighStreakHours ?? null,
+                predictedHighStreakStartEpochMs: p.predictedHighStreakStartEpochMs ?? null,
+                predictedHighStreakEndEpochMs: p.predictedHighStreakEndEpochMs ?? null,
             };
         }
 

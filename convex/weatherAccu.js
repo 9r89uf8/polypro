@@ -18,30 +18,102 @@ function daysBetweenISO(aISO, bISO) {
 }
 
 function computeDailyHighMap(hourlyArray, timeZone) {
-    const map = new Map();
+    const byDate = new Map();
+
     for (const h of hourlyArray) {
         const epochMs = (h.EpochDateTime ?? 0) * 1000;
         const tempF = h?.Temperature?.Value;
         if (!epochMs || typeof tempF !== "number") continue;
 
         const { dateISO } = getLocalParts(epochMs, timeZone);
-        const cur = map.get(dateISO) || {
-            dateISO,
-            count: 0,
-            maxTempF: -Infinity,
-            maxTimeEpochMs: null,
-        };
-
-        cur.count += 1;
-        if (tempF > cur.maxTempF) {
-            cur.maxTempF = tempF;
-            cur.maxTimeEpochMs = epochMs;
-        }
-
-        map.set(dateISO, cur);
+        const rows = byDate.get(dateISO) || [];
+        rows.push({ epochMs, tempF });
+        byDate.set(dateISO, rows);
     }
 
-    return map;
+    const out = new Map();
+
+    for (const [dateISO, rows] of byDate.entries()) {
+        rows.sort((a, b) => a.epochMs - b.epochMs);
+
+        const count = rows.length;
+        let maxTempF = -Infinity;
+
+        for (const row of rows) {
+            if (row.tempF > maxTempF) maxTempF = row.tempF;
+        }
+        if (!Number.isFinite(maxTempF)) continue;
+
+        const maxRows = rows.filter((row) => row.tempF === maxTempF);
+        const predictedHighCountHours = maxRows.length;
+
+        let bestLen = 0;
+        let bestStart = null;
+        let bestEnd = null;
+
+        let curLen = 0;
+        let curStart = null;
+        let curEnd = null;
+
+        for (const row of rows) {
+            if (row.tempF !== maxTempF) {
+                if (curLen > bestLen) {
+                    bestLen = curLen;
+                    bestStart = curStart;
+                    bestEnd = curEnd;
+                }
+                curLen = 0;
+                curStart = null;
+                curEnd = null;
+                continue;
+            }
+
+            if (curLen === 0) {
+                curLen = 1;
+                curStart = row.epochMs;
+                curEnd = row.epochMs;
+                continue;
+            }
+
+            if (row.epochMs - curEnd === 3600000) {
+                curLen += 1;
+                curEnd = row.epochMs;
+            } else {
+                if (curLen > bestLen) {
+                    bestLen = curLen;
+                    bestStart = curStart;
+                    bestEnd = curEnd;
+                }
+                curLen = 1;
+                curStart = row.epochMs;
+                curEnd = row.epochMs;
+            }
+        }
+
+        if (curLen > bestLen) {
+            bestLen = curLen;
+            bestStart = curStart;
+            bestEnd = curEnd;
+        }
+
+        const maxTimeEpochMs =
+            typeof bestStart === "number" ? bestStart : (maxRows[0]?.epochMs ?? null);
+
+        if (typeof maxTimeEpochMs !== "number") continue;
+
+        out.set(dateISO, {
+            dateISO,
+            count,
+            maxTempF,
+            maxTimeEpochMs,
+            predictedHighCountHours,
+            predictedHighStreakHours: bestLen,
+            predictedHighStreakStartEpochMs: bestStart,
+            predictedHighStreakEndEpochMs: bestEnd,
+        });
+    }
+
+    return out;
 }
 
 export const saveObservation = internalMutation({
@@ -78,6 +150,10 @@ export const saveHighPrediction = internalMutation({
         predictedHighF: v.number(),
         predictedHighTimeEpochMs: v.number(),
         hoursCoveredForTarget: v.number(),
+        predictedHighCountHours: v.optional(v.number()),
+        predictedHighStreakHours: v.optional(v.number()),
+        predictedHighStreakStartEpochMs: v.optional(v.number()),
+        predictedHighStreakEndEpochMs: v.optional(v.number()),
     },
     handler: async (ctx, args) => {
         const existing = await ctx.db
@@ -91,7 +167,24 @@ export const saveHighPrediction = internalMutation({
             )
             .first();
 
-        if (existing) return existing._id;
+        if (existing) {
+            const missingDurationFields =
+                existing.predictedHighCountHours === undefined ||
+                existing.predictedHighStreakHours === undefined ||
+                existing.predictedHighStreakStartEpochMs === undefined ||
+                existing.predictedHighStreakEndEpochMs === undefined;
+
+            if (missingDurationFields) {
+                await ctx.db.patch(existing._id, {
+                    predictedHighCountHours: args.predictedHighCountHours,
+                    predictedHighStreakHours: args.predictedHighStreakHours,
+                    predictedHighStreakStartEpochMs: args.predictedHighStreakStartEpochMs,
+                    predictedHighStreakEndEpochMs: args.predictedHighStreakEndEpochMs,
+                });
+            }
+
+            return existing._id;
+        }
 
         return await ctx.db.insert("highPredictions", {
             ...args,
@@ -247,6 +340,10 @@ export const collectHourly = internalAction({
                     predictedHighF: d.maxTempF,
                     predictedHighTimeEpochMs: d.maxTimeEpochMs,
                     hoursCoveredForTarget: d.count,
+                    predictedHighCountHours: d.predictedHighCountHours,
+                    predictedHighStreakHours: d.predictedHighStreakHours,
+                    predictedHighStreakStartEpochMs: d.predictedHighStreakStartEpochMs,
+                    predictedHighStreakEndEpochMs: d.predictedHighStreakEndEpochMs,
                 });
             }
 
