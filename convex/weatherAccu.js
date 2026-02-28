@@ -1,5 +1,5 @@
-import { internalAction, internalMutation } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { action, internalAction, internalMutation } from "./_generated/server";
+import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import { awFetchJson } from "./aw";
 import {
@@ -115,6 +115,56 @@ function computeDailyHighMap(hourlyArray, timeZone) {
 
     return out;
 }
+
+function mapHourlyForecastRow(row, timeZone) {
+    const epochMs = (row?.EpochDateTime ?? 0) * 1000;
+    const local = epochMs ? getLocalParts(epochMs, timeZone) : null;
+
+    return {
+        epochMs: epochMs || null,
+        localDateISO: local?.dateISO ?? null,
+        localHour: local?.hour ?? null,
+        tempF: row?.Temperature?.Value ?? null,
+        realFeelF: row?.RealFeelTemperature?.Value ?? null,
+        relativeHumidity: row?.RelativeHumidity ?? null,
+        precipitationProbability: row?.PrecipitationProbability ?? null,
+        rainProbability: row?.RainProbability ?? null,
+        snowProbability: row?.SnowProbability ?? null,
+        iceProbability: row?.IceProbability ?? null,
+        windMph: row?.Wind?.Speed?.Value ?? null,
+        windDirection: row?.Wind?.Direction?.English ?? null,
+        iconPhrase: row?.IconPhrase ?? null,
+    };
+}
+
+export const fetchHourly72 = action({
+    args: {
+        locationId: v.id("locations"),
+    },
+    handler: async (ctx, args) => {
+        const loc = await ctx.runQuery(api.locations.get, { id: args.locationId });
+        if (!loc) throw new Error("Location not found");
+
+        const hourly = await awFetchJson(
+            `/forecasts/v1/hourly/72hour/${loc.accuweatherLocationKey}`,
+            { language: "en-us", details: true, metric: false }
+        );
+
+        const rows = Array.isArray(hourly)
+            ? hourly
+                .map((row) => mapHourlyForecastRow(row, loc.timeZone))
+                .filter((row) => typeof row.epochMs === "number")
+                .sort((a, b) => a.epochMs - b.epochMs)
+            : [];
+
+        return {
+            fetchedAtMs: Date.now(),
+            locationName: loc.name,
+            timeZone: loc.timeZone,
+            rows,
+        };
+    },
+});
 
 export const saveObservation = internalMutation({
     args: {

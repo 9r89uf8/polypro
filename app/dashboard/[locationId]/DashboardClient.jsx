@@ -1,7 +1,9 @@
 "use client";
 //app/dashboard/[locationId]/DashboardClient.jsx
-import { useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 function fmtHour(h) {
     const ampm = h >= 12 ? "pm" : "am";
@@ -19,6 +21,11 @@ function fmtPct(x) {
     return `${Math.round(x * 100)}%`;
 }
 
+function fmtPctWhole(x) {
+    if (x === null || x === undefined) return "—";
+    return `${Math.round(x)}%`;
+}
+
 function fmtTime(ms, timeZone) {
     if (!ms) return "—";
     return new Intl.DateTimeFormat("en-US", {
@@ -33,6 +40,12 @@ function fmtTime(ms, timeZone) {
 function fmtHours(hours) {
     if (hours === null || hours === undefined) return "—";
     return `${hours}h`;
+}
+
+function fmtWind(speedMph, direction) {
+    if (speedMph === null || speedMph === undefined) return "—";
+    const dir = direction ? ` ${direction}` : "";
+    return `${Math.round(speedMph)} mph${dir}`;
 }
 
 function fmtDurationSummary(pred, timeZone) {
@@ -153,10 +166,69 @@ export default function DashboardClient({ locationId }) {
             maxLeadHours: 36,
             leadDays: 0,
         }) || [];
+    const fetchHourly72 = useAction(api.weatherAccu.fetchHourly72);
+    const [hourly72, setHourly72] = useState(null);
+    const [hourly72Loading, setHourly72Loading] = useState(false);
+    const [hourly72Error, setHourly72Error] = useState("");
+    const loadedForLocationRef = useRef(null);
+
+    const loadHourly72 = useCallback(async () => {
+        setHourly72Loading(true);
+        setHourly72Error("");
+        try {
+            const res = await fetchHourly72({ locationId });
+            setHourly72(res);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to load 72-hour forecast.";
+            setHourly72Error(message);
+        } finally {
+            setHourly72Loading(false);
+        }
+    }, [fetchHourly72, locationId]);
+
+    useEffect(() => {
+        if (loadedForLocationRef.current === locationId) return;
+        loadedForLocationRef.current = locationId;
+        void loadHourly72();
+    }, [locationId, loadHourly72]);
+
+    const hourlyRows = hourly72?.rows ?? [];
+    const hourlyDailySummary = useMemo(() => {
+        const byDate = new Map();
+
+        for (const row of hourlyRows) {
+            if (!row.localDateISO) continue;
+
+            const cur = byDate.get(row.localDateISO) || {
+                dateISO: row.localDateISO,
+                hours: 0,
+                minF: null,
+                maxF: null,
+                precipMax: null,
+            };
+
+            cur.hours += 1;
+            if (typeof row.tempF === "number") {
+                cur.minF = cur.minF === null ? row.tempF : Math.min(cur.minF, row.tempF);
+                cur.maxF = cur.maxF === null ? row.tempF : Math.max(cur.maxF, row.tempF);
+            }
+            if (typeof row.precipitationProbability === "number") {
+                cur.precipMax =
+                    cur.precipMax === null
+                        ? row.precipitationProbability
+                        : Math.max(cur.precipMax, row.precipitationProbability);
+            }
+
+            byDate.set(row.localDateISO, cur);
+        }
+
+        return [...byDate.values()].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+    }, [hourlyRows]);
 
     if (!overview || !daily) return <div className="p-6">Loading…</div>;
 
     const tz = overview.timeZone;
+    const hourlyTimeZone = hourly72?.timeZone ?? tz;
     const todayLatest = overview.todayForecast.latest;
     const observedHighSoFar = overview.observations.highSoFarF ?? null;
     const forecastRemainingMax = todayLatest?.predictedHighF ?? null;
@@ -269,12 +341,20 @@ export default function DashboardClient({ locationId }) {
 
     return (
         <main className="p-6 max-w-5xl mx-auto space-y-6">
-            <div>
-                <h1 className="text-2xl font-semibold">Forecast Accuracy Dashboard</h1>
-                <div className="text-sm text-gray-600">
-                    Timezone: {tz} · Today: {overview.todayISO} · Tomorrow: {overview.tomorrowISO} · Day +2:{" "}
-                    {overview.day2ISO}
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <h1 className="text-2xl font-semibold">Forecast Accuracy Dashboard</h1>
+                    <div className="text-sm text-gray-600">
+                        Timezone: {tz} · Today: {overview.todayISO} · Tomorrow: {overview.tomorrowISO} · Day +2:{" "}
+                        {overview.day2ISO}
+                    </div>
                 </div>
+                <Link
+                    href="/"
+                    className="inline-flex items-center rounded border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                    Home
+                </Link>
             </div>
 
             {/* LIVE VIEW */}
@@ -375,6 +455,89 @@ export default function DashboardClient({ locationId }) {
                 ))}
                 <div className="mt-2 text-xs text-gray-500">
                     (Showing last 12 snapshots per target day; increase the slice if you want all 24.)
+                </div>
+            </section>
+
+            <section className="border rounded p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h2 className="text-lg font-medium">Current 72-Hour Forecast</h2>
+                        <div className="text-sm text-gray-600">
+                            Pulled on demand from AccuWeather. {hourlyRows.length} hourly points.
+                            {hourly72?.fetchedAtMs ? ` Last refresh ${fmtTime(hourly72.fetchedAtMs, hourlyTimeZone)}.` : ""}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => void loadHourly72()}
+                        disabled={hourly72Loading}
+                        className="inline-flex items-center rounded border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {hourly72Loading ? "Refreshing..." : "Refresh 72h"}
+                    </button>
+                </div>
+
+                {hourly72Error ? (
+                    <div className="mt-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                        {hourly72Error}
+                    </div>
+                ) : null}
+
+                <div className="mt-3 grid gap-3 md:grid-cols-4">
+                    {hourlyDailySummary.length === 0 ? (
+                        <div className="rounded border p-3 text-sm text-gray-500 md:col-span-4">
+                            {hourly72Loading ? "Loading forecast rows..." : "No hourly forecast rows returned."}
+                        </div>
+                    ) : (
+                        hourlyDailySummary.map((day) => (
+                            <div key={day.dateISO} className="rounded border p-3">
+                                <div className="text-sm font-medium">{day.dateISO}</div>
+                                <div className="mt-1 text-sm text-gray-700">
+                                    Temp range: <b>{fmtTemp(day.minF)}</b> to <b>{fmtTemp(day.maxF)}</b>
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                    Hours: {day.hours} · Max precip: {fmtPctWhole(day.precipMax)}
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+
+                <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full text-sm border">
+                        <thead className="bg-gray-50">
+                        <tr>
+                            <th className="text-left p-2 border">Local time</th>
+                            <th className="text-left p-2 border">Temp</th>
+                            <th className="text-left p-2 border">RealFeel</th>
+                            <th className="text-left p-2 border">Humidity</th>
+                            <th className="text-left p-2 border">Precip</th>
+                            <th className="text-left p-2 border">Wind</th>
+                            <th className="text-left p-2 border">Condition</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {hourlyRows.length === 0 ? (
+                            <tr>
+                                <td className="p-2 border text-gray-500" colSpan={7}>
+                                    {hourly72Loading ? "Loading forecast rows..." : "No hourly forecast rows."}
+                                </td>
+                            </tr>
+                        ) : (
+                            hourlyRows.map((row) => (
+                                <tr key={row.epochMs} className="border-t">
+                                    <td className="p-2 border">{fmtTime(row.epochMs, hourlyTimeZone)}</td>
+                                    <td className="p-2 border">{fmtTemp(row.tempF)}</td>
+                                    <td className="p-2 border">{fmtTemp(row.realFeelF)}</td>
+                                    <td className="p-2 border">{fmtPctWhole(row.relativeHumidity)}</td>
+                                    <td className="p-2 border">{fmtPctWhole(row.precipitationProbability)}</td>
+                                    <td className="p-2 border">{fmtWind(row.windMph, row.windDirection)}</td>
+                                    <td className="p-2 border">{row.iconPhrase ?? "—"}</td>
+                                </tr>
+                            ))
+                        )}
+                        </tbody>
+                    </table>
                 </div>
             </section>
 
