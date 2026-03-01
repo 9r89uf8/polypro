@@ -8,13 +8,7 @@ import Link from "next/link";
 //app/page.js
 export default function Home() {
     const router = useRouter();
-    const locations = useQuery(api.locations.list) || [];
-    const bootstrap = useAction(api.setup.bootstrapOhare);
 
-    async function onBootstrap() {
-        const res = await bootstrap();
-        router.push(`/dashboard/${res.locationId}`);
-    }
 
 
   return (
@@ -57,12 +51,6 @@ export default function Home() {
             Open Notes
           </Link>
 
-            <button
-                onClick={onBootstrap}
-                className="mt-3 px-4 py-2 rounded bg-black text-white"
-            >
-                Bootstrap O&apos;Hare (one click)
-            </button>
         </div>
       </section>
     </main>

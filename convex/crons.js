@@ -36,11 +36,6 @@ crons.cron(
     { stationIcao: "KORD" },
 );
 
-// Cron syntax is UTC. This fires at :00 every UTC hour.
-crons.cron(
-    "accuweather_hourly_collector",
-    "0 * * * *",
-    internal.weatherAccu.collectHourly
-);
+
 
 export default crons;

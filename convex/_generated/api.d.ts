@@ -8,18 +8,13 @@
  * @module
  */
 
-import type * as aw from "../aw.js";
 import type * as crons from "../crons.js";
 import type * as http from "../http.js";
 import type * as kordPhone from "../kordPhone.js";
 import type * as kordPhoneNode from "../kordPhoneNode.js";
-import type * as locations from "../locations.js";
 import type * as notes from "../notes.js";
-import type * as setup from "../setup.js";
-import type * as stats from "../stats.js";
 import type * as time from "../time.js";
 import type * as weather from "../weather.js";
-import type * as weatherAccu from "../weatherAccu.js";
 
 import type {
   ApiFromModules,
@@ -28,18 +23,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  aw: typeof aw;
   crons: typeof crons;
   http: typeof http;
   kordPhone: typeof kordPhone;
   kordPhoneNode: typeof kordPhoneNode;
-  locations: typeof locations;
   notes: typeof notes;
-  setup: typeof setup;
-  stats: typeof stats;
   time: typeof time;
   weather: typeof weather;
-  weatherAccu: typeof weatherAccu;
 }>;
 
 /**
