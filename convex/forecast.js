@@ -15,6 +15,7 @@ const LOCATION_STAGGER_MS = 550;
 const JITTER_MIN_MS = 15 * 1000;
 const JITTER_MAX_MS = 75 * 1000;
 const NEAR_PEAK_DELTA_F = 1;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const ENDPOINT_TYPE = {
   LOCATION: "location",
@@ -91,6 +92,29 @@ function getDateParts(formatter, date) {
 
 function formatChicagoDate(epochMs) {
   const parts = getDateParts(chicagoDateFormatter, new Date(epochMs));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function buildDateFormatter(timeZone) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+const dateFormatterCache = new Map();
+function getDateFormatter(timeZone) {
+  if (!dateFormatterCache.has(timeZone)) {
+    dateFormatterCache.set(timeZone, buildDateFormatter(timeZone));
+  }
+  return dateFormatterCache.get(timeZone);
+}
+
+function formatDateForZone(epochMs, timeZone) {
+  const formatter = getDateFormatter(timeZone || CHICAGO_TIMEZONE);
+  const parts = getDateParts(formatter, new Date(epochMs));
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
@@ -217,8 +241,14 @@ function parseCurrentConditions(payload, timeZone) {
   const realFeelF = toFiniteNumber(row?.RealFeelTemperature?.Imperial?.Value);
   const realFeelC = toFiniteNumber(row?.RealFeelTemperature?.Metric?.Value);
   const weatherIcon = toFiniteNumber(row?.WeatherIcon);
+  const localDateISO =
+    extractDateIso(row?.LocalObservationDateTime) ??
+    (observedAtEpochMs !== undefined
+      ? formatDateForZone(observedAtEpochMs, timeZone)
+      : undefined);
 
   return {
+    ...(localDateISO ? { localDateISO } : {}),
     observedAtEpochMs,
     ...(observedAtEpochMs !== undefined
       ? { observedAtLocal: formatDateTimeForZone(observedAtEpochMs, timeZone) }
@@ -611,21 +641,82 @@ export const getForecastDashboard = queryGeneric({
       if (!comparison) {
         continue;
       }
+      const derivedForecastErrRawF =
+        comparison.accuHighF_latest !== undefined &&
+        comparison.accuHighF_latest !== null &&
+        comparison.metarMaxF !== undefined &&
+        comparison.metarMaxF !== null
+          ? roundToTenth(comparison.accuHighF_latest - comparison.metarMaxF)
+          : null;
+      const derivedForecastErrRoundedF =
+        comparison.accuHighF_latest !== undefined &&
+        comparison.accuHighF_latest !== null &&
+        comparison.metarMaxF !== undefined &&
+        comparison.metarMaxF !== null
+          ? roundToTenth(comparison.accuHighF_latest - Math.round(comparison.metarMaxF))
+          : null;
+      const derivedObservedErrRawF =
+        comparison.accuObservedMaxF !== undefined &&
+        comparison.accuObservedMaxF !== null &&
+        comparison.metarMaxF !== undefined &&
+        comparison.metarMaxF !== null
+          ? roundToTenth(comparison.accuObservedMaxF - comparison.metarMaxF)
+          : null;
+      const derivedObservedErrRoundedF =
+        comparison.accuObservedMaxF !== undefined &&
+        comparison.accuObservedMaxF !== null &&
+        comparison.metarMaxF !== undefined &&
+        comparison.metarMaxF !== null
+          ? roundToTenth(comparison.accuObservedMaxF - Math.round(comparison.metarMaxF))
+          : null;
+
       ohareComparisons[dateKey] = {
-        metarAllMaxF: comparison.metarAllMaxF ?? null,
-        metarAllMaxAtUtc: comparison.metarAllMaxAtUtc ?? null,
+        metarOfficialMaxF: comparison.metarMaxF ?? null,
+        metarOfficialMaxAtUtc: comparison.metarMaxAtUtc ?? null,
         accuHighF_latest: comparison.accuHighF_latest ?? null,
         accuLowF_latest: comparison.accuLowF_latest ?? null,
+        accuObservedMaxF: comparison.accuObservedMaxF ?? null,
+        accuObservedMaxAtUtc: comparison.accuObservedMaxAtUtc ?? null,
+        accuObservedObsCount: comparison.accuObservedObsCount ?? null,
         accuPeakStartUtc_latest: comparison.accuPeakStartUtc_latest ?? null,
         accuPeakEndUtc_latest: comparison.accuPeakEndUtc_latest ?? null,
         accuPeakDurationMinutes_latest: comparison.accuPeakDurationMinutes_latest ?? null,
-        errRawF: comparison.errRawF ?? null,
-        errRoundedF: comparison.errRoundedF ?? null,
+        errRawF: derivedForecastErrRawF,
+        errRoundedF: derivedForecastErrRoundedF,
+        errObservedRawF: derivedObservedErrRawF,
+        errObservedRoundedF: derivedObservedErrRoundedF,
         peakHit: comparison.peakHit ?? null,
         peakTimingDeltaMinutes: comparison.peakTimingDeltaMinutes ?? null,
         accuSnapshotAtUtc_latest: comparison.accuSnapshotAtUtc_latest ?? null,
       };
     }
+
+    const historyStartDate = formatChicagoDate(Date.now() - 60 * DAY_MS);
+    const historicalRows = await ctx.db
+      .query("dailyComparisons")
+      .withIndex("by_station_date", (query) =>
+        query.eq("stationIcao", O_HARE_ICAO).gte("date", historyStartDate),
+      )
+      .collect();
+    const observedComparisonRows = historicalRows
+      .filter(
+        (row) =>
+          row.accuObservedMaxF !== undefined &&
+          row.accuObservedMaxF !== null &&
+          row.metarMaxF !== undefined &&
+          row.metarMaxF !== null,
+      )
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 60)
+      .map((row) => ({
+        date: row.date,
+        noaaHighF: row.metarMaxF,
+        noaaHighAtUtc: row.metarMaxAtUtc ?? null,
+        accuHighF: row.accuObservedMaxF,
+        accuHighAtUtc: row.accuObservedMaxAtUtc ?? null,
+        accuObsCount: row.accuObservedObsCount ?? null,
+        deltaF: roundToTenth(row.accuObservedMaxF - row.metarMaxF),
+      }));
 
     const run = await ctx.db
       .query("forecastRuns")
@@ -639,6 +730,7 @@ export const getForecastDashboard = queryGeneric({
       locations,
       dates: ohareDates,
       ohareComparisons,
+      observedComparisonRows,
       run: run
         ? {
             lastStatus: run.lastStatus,
@@ -772,6 +864,7 @@ export const insertSnapshot = internalMutationGeneric({
 export const upsertCurrentConditions = internalMutationGeneric({
   args: {
     locationKey: v.string(),
+    localDateISO: v.optional(v.string()),
     observedAtEpochMs: v.optional(v.number()),
     observedAtLocal: v.optional(v.string()),
     tempF: v.optional(v.number()),
@@ -838,6 +931,158 @@ export const upsertCurrentConditions = internalMutationGeneric({
       ...patch,
       createdAt: now,
     });
+  },
+});
+
+export const upsertObservedDailyHigh = internalMutationGeneric({
+  args: {
+    locationKey: v.string(),
+    stationIcao: v.optional(v.string()),
+    timeZone: v.string(),
+    localDateISO: v.optional(v.string()),
+    observedAtEpochMs: v.optional(v.number()),
+    observedAtLocal: v.optional(v.string()),
+    tempF: v.optional(v.number()),
+    tempC: v.optional(v.number()),
+    sourceFetchedAtMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (
+      args.observedAtEpochMs === undefined ||
+      args.observedAtEpochMs === null ||
+      args.tempF === undefined ||
+      args.tempF === null
+    ) {
+      return { updated: false, reason: "missing_observation" };
+    }
+
+    const location = await ctx.db
+      .query("locations")
+      .withIndex("by_accuweatherKey", (query) =>
+        query.eq("accuweatherLocationKey", args.locationKey),
+      )
+      .first();
+    if (!location) {
+      throw new Error(`Location ${args.locationKey} is not configured.`);
+    }
+
+    const localDateISO =
+      args.localDateISO ||
+      formatDateForZone(args.observedAtEpochMs, args.timeZone || location.timeZone);
+    const observedAtLocal =
+      args.observedAtLocal ||
+      formatDateTimeForZone(args.observedAtEpochMs, args.timeZone || location.timeZone);
+    const now = Date.now();
+    const roundedTempF = roundToTenth(args.tempF);
+    const roundedTempC =
+      args.tempC === undefined || args.tempC === null
+        ? undefined
+        : roundToTenth(args.tempC);
+
+    const existing = await ctx.db
+      .query("forecastObservedDailyHighs")
+      .withIndex("by_location_date", (query) =>
+        query.eq("locationKey", args.locationKey).eq("localDateISO", localDateISO),
+      )
+      .first();
+
+    let maxTempF = roundedTempF;
+    let maxTempC = roundedTempC;
+    let maxObservedAtEpochMs = args.observedAtEpochMs;
+    let maxObservedAtLocal = observedAtLocal;
+    let sampleCount = 1;
+
+    if (existing) {
+      sampleCount = (existing.sampleCount ?? 0) + 1;
+      const shouldReplaceMax =
+        roundedTempF > existing.maxTempF ||
+        (roundedTempF === existing.maxTempF &&
+          args.observedAtEpochMs > existing.maxObservedAtEpochMs);
+      if (!shouldReplaceMax) {
+        maxTempF = existing.maxTempF;
+        maxTempC = existing.maxTempC;
+        maxObservedAtEpochMs = existing.maxObservedAtEpochMs;
+        maxObservedAtLocal = existing.maxObservedAtLocal;
+      }
+
+      await ctx.db.patch(existing._id, {
+        maxTempF,
+        ...(maxTempC !== undefined ? { maxTempC } : {}),
+        maxObservedAtEpochMs,
+        maxObservedAtLocal,
+        sampleCount,
+        lastObservedAtEpochMs: args.observedAtEpochMs,
+        lastObservedAtLocal: observedAtLocal,
+        sourceFetchedAtMs: args.sourceFetchedAtMs,
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert("forecastObservedDailyHighs", {
+        locationId: location._id,
+        locationKey: args.locationKey,
+        localDateISO,
+        maxTempF,
+        ...(maxTempC !== undefined ? { maxTempC } : {}),
+        maxObservedAtEpochMs,
+        maxObservedAtLocal,
+        sampleCount,
+        lastObservedAtEpochMs: args.observedAtEpochMs,
+        lastObservedAtLocal: observedAtLocal,
+        sourceFetchedAtMs: args.sourceFetchedAtMs,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    if ((args.stationIcao ?? "").toUpperCase() !== O_HARE_ICAO) {
+      return {
+        updated: true,
+        localDateISO,
+        maxTempF,
+        sampleCount,
+      };
+    }
+
+    const comparison = await ctx.db
+      .query("dailyComparisons")
+      .withIndex("by_station_date", (query) =>
+        query.eq("stationIcao", O_HARE_ICAO).eq("date", localDateISO),
+      )
+      .first();
+
+    const comparisonPatch = {
+      accuObservedMaxF: maxTempF,
+      ...(maxTempC !== undefined ? { accuObservedMaxC: maxTempC } : {}),
+      accuObservedMaxAtUtc: maxObservedAtEpochMs,
+      accuObservedMaxAtLocal: maxObservedAtLocal,
+      accuObservedObsCount: sampleCount,
+      updatedAt: now,
+    };
+
+    const metarOfficialMaxF = comparison?.metarMaxF;
+    if (metarOfficialMaxF !== undefined && metarOfficialMaxF !== null) {
+      comparisonPatch.errObservedRawF = roundToTenth(maxTempF - metarOfficialMaxF);
+      comparisonPatch.errObservedRoundedF = roundToTenth(
+        maxTempF - Math.round(metarOfficialMaxF),
+      );
+    }
+
+    if (comparison) {
+      await ctx.db.patch(comparison._id, comparisonPatch);
+    } else {
+      await ctx.db.insert("dailyComparisons", {
+        stationIcao: O_HARE_ICAO,
+        date: localDateISO,
+        ...comparisonPatch,
+      });
+    }
+
+    return {
+      updated: true,
+      localDateISO,
+      maxTempF,
+      sampleCount,
+    };
   },
 });
 
@@ -952,10 +1197,10 @@ export const upsertDailySummaries = internalMutationGeneric({
         updatedAt: now,
       };
 
-      if (comparison?.metarAllMaxF !== undefined && comparison.metarAllMaxF !== null) {
-        const rawErrorF = roundToTenth(summary.forecastHighF - comparison.metarAllMaxF);
+      if (comparison?.metarMaxF !== undefined && comparison.metarMaxF !== null) {
+        const rawErrorF = roundToTenth(summary.forecastHighF - comparison.metarMaxF);
         const roundedErrorF = roundToTenth(
-          summary.forecastHighF - Math.round(comparison.metarAllMaxF),
+          summary.forecastHighF - Math.round(comparison.metarMaxF),
         );
         comparisonPatch.errRawF = rawErrorF;
         comparisonPatch.errRoundedF = roundedErrorF;
@@ -1164,6 +1409,17 @@ async function refreshSingleLocation({ ctx, configured, apiKey, force }) {
     await ctx.runMutation("forecast:upsertCurrentConditions", {
       locationKey: configured.locationKey,
       ...parsedCurrent,
+      sourceFetchedAtMs: currentConditionsResponse.fetchedAtMs,
+    });
+    await ctx.runMutation("forecast:upsertObservedDailyHigh", {
+      locationKey: configured.locationKey,
+      stationIcao: configured.stationIcao,
+      timeZone: locationDetails.timeZone,
+      localDateISO: parsedCurrent.localDateISO,
+      observedAtEpochMs: parsedCurrent.observedAtEpochMs,
+      observedAtLocal: parsedCurrent.observedAtLocal,
+      tempF: parsedCurrent.tempF,
+      tempC: parsedCurrent.tempC,
       sourceFetchedAtMs: currentConditionsResponse.fetchedAtMs,
     });
   } catch (error) {

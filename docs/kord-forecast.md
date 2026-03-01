@@ -13,6 +13,10 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
   - Shows a selected-day side table `Now` column for quick cross-location current comparisons.
   - Shows a location detail panel with an hourly sparkline plus full current conditions.
   - Shows an O'Hare verification card using `dailyComparisons` observed METAR fields.
+  - Shows an O'Hare daily table comparing:
+    - NOAA official observed high (`metarMaxF`, the same "Official Max" shown on `/kord/day/[date]`)
+    - AccuWeather observed high built from current-conditions snapshots (`accuObservedMaxF`)
+    - Delta by day (`AccuWeather - NOAA`)
 
 ## Data Sources
 
@@ -23,7 +27,7 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
   - Fallback hourly endpoint (when 120h plan access is unavailable): `/forecasts/v1/hourly/72hour/{locationKey}`
   - Location details endpoint: `/locations/v1/{locationKey}`
 - Truth source for O'Hare verification:
-  - `dailyComparisons.metarAllMaxF`, `metarAllMaxAtUtc`, `metarMaxAtUtc`
+  - `dailyComparisons.metarMaxF`, `metarMaxAtUtc` (official hourly reports)
 
 ## Backend Module
 
@@ -55,6 +59,8 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
   - Derived per-location day rows used directly by `/kord/forecast`.
 - `forecastCurrentConditions`
   - Latest current conditions row per location for map/table/detail rendering.
+- `forecastObservedDailyHighs`
+  - Per-location per-day maximum temperature derived from current-conditions snapshots.
 - `forecastRuns`
   - Last run status/error + endpoint fetch/skip counts.
 - `dailyComparisons` new fields for O'Hare forecast verification:
@@ -63,6 +69,10 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
   - `accuPeakStartLocal_latest`, `accuPeakEndLocal_latest`
   - `accuPeakDurationMinutes_latest`, `accuSnapshotAtUtc_latest`
   - `errRawF`, `errRoundedF`
+  - `accuObservedMaxC`, `accuObservedMaxF`
+  - `accuObservedMaxAtUtc`, `accuObservedMaxAtLocal`
+  - `accuObservedObsCount`
+  - `errObservedRawF`, `errObservedRoundedF`
   - `peakHit`, `peakTimingDeltaMinutes`
 
 ## Environment

@@ -750,6 +750,15 @@ export const upsertOfficialObservation = internalMutationGeneric({
       if (comparison.manualMaxF !== undefined && comparison.manualMaxF !== null) {
         patch.deltaF = roundToTenth(comparison.manualMaxF - tempF);
       }
+      if (
+        comparison.accuObservedMaxF !== undefined &&
+        comparison.accuObservedMaxF !== null
+      ) {
+        patch.errObservedRawF = roundToTenth(comparison.accuObservedMaxF - tempF);
+        patch.errObservedRoundedF = roundToTenth(
+          comparison.accuObservedMaxF - Math.round(tempF),
+        );
+      }
     }
 
     await ctx.db.patch(comparison._id, patch);
@@ -1417,6 +1426,17 @@ export const upsertMetarMonthResults = internalMutationGeneric({
         }
         if (existing?.manualMaxF !== undefined) {
           patch.deltaF = roundToTenth(existing.manualMaxF - metarMaxF);
+        }
+        if (
+          existing?.accuObservedMaxF !== undefined &&
+          existing?.accuObservedMaxF !== null
+        ) {
+          patch.errObservedRawF = roundToTenth(
+            existing.accuObservedMaxF - metarMaxF,
+          );
+          patch.errObservedRoundedF = roundToTenth(
+            existing.accuObservedMaxF - Math.round(metarMaxF),
+          );
         }
       }
 

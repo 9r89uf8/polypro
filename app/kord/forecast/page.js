@@ -652,9 +652,11 @@ export default function KordForecastPage() {
                 </p>
               </div>
               <div className="rounded-xl border border-black/10 bg-white/80 p-3">
-                <p className="text-xs uppercase tracking-wide text-black/55">Observed METAR High</p>
+                <p className="text-xs uppercase tracking-wide text-black/55">
+                  Observed METAR High (Official)
+                </p>
                 <p className="mt-1 text-xl font-semibold text-black">
-                  {formatTempF(ohareComparison?.metarAllMaxF)}
+                  {formatTempF(ohareComparison?.metarOfficialMaxF)}
                 </p>
               </div>
               <div className="rounded-xl border border-black/10 bg-white/80 p-3">
@@ -670,6 +672,24 @@ export default function KordForecastPage() {
                 <p className="mt-1 text-sm font-semibold text-black">
                   {Number.isFinite(ohareComparison?.errRoundedF)
                     ? `${ohareComparison.errRoundedF > 0 ? "+" : ""}${ohareComparison.errRoundedF.toFixed(1)}°F`
+                    : "—"}
+                </p>
+              </div>
+              <div className="rounded-xl border border-black/10 bg-white/80 p-3">
+                <p className="text-xs uppercase tracking-wide text-black/55">
+                  AccuWeather Observed High
+                </p>
+                <p className="mt-1 text-sm font-semibold text-black">
+                  {formatTempF(ohareComparison?.accuObservedMaxF)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-black/10 bg-white/80 p-3">
+                <p className="text-xs uppercase tracking-wide text-black/55">
+                  Observed High Error (AW - NOAA)
+                </p>
+                <p className="mt-1 text-sm font-semibold text-black">
+                  {Number.isFinite(ohareComparison?.errObservedRawF)
+                    ? `${ohareComparison.errObservedRawF > 0 ? "+" : ""}${ohareComparison.errObservedRawF.toFixed(1)}°F`
                     : "—"}
                 </p>
               </div>
@@ -713,6 +733,61 @@ export default function KordForecastPage() {
               </p>
             </div>
           </article>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-panel/90 p-5 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <h2 className="text-lg font-semibold text-foreground">
+            O&apos;Hare Daily High Comparison (AccuWeather Current vs NOAA METAR)
+          </h2>
+          <p className="mt-2 text-sm text-black/65">
+            Uses AccuWeather current-conditions snapshots to track each day&apos;s highest observed
+            AccuWeather temperature and compares it to NOAA&apos;s daily observed high.
+          </p>
+          <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/80">
+            <table className="min-w-full text-sm">
+              <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                <tr>
+                  <th className="px-3 py-2">Date</th>
+                  <th className="px-3 py-2">NOAA High</th>
+                  <th className="px-3 py-2">AW Observed High</th>
+                  <th className="px-3 py-2">Delta (AW-NOAA)</th>
+                  <th className="px-3 py-2">NOAA Time</th>
+                  <th className="px-3 py-2">AW Time</th>
+                  <th className="px-3 py-2">AW Samples</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(dashboard?.observedComparisonRows ?? []).map((row) => (
+                  <tr key={row.date} className="border-t border-black/10">
+                    <td className="px-3 py-2 font-semibold text-black/80">
+                      {toLocalDateLabel(row.date, "America/Chicago")}
+                    </td>
+                    <td className="px-3 py-2 text-black/80">{formatTempF(row.noaaHighF)}</td>
+                    <td className="px-3 py-2 text-black/80">{formatTempF(row.accuHighF)}</td>
+                    <td className="px-3 py-2 text-black/80">
+                      {Number.isFinite(row.deltaF)
+                        ? `${row.deltaF > 0 ? "+" : ""}${row.deltaF.toFixed(1)}°F`
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-black/70">
+                      {toLocalTimeLabel(row.noaaHighAtUtc, "America/Chicago")}
+                    </td>
+                    <td className="px-3 py-2 text-black/70">
+                      {toLocalTimeLabel(row.accuHighAtUtc, "America/Chicago")}
+                    </td>
+                    <td className="px-3 py-2 text-black/70">{row.accuObsCount ?? "—"}</td>
+                  </tr>
+                ))}
+                {(dashboard?.observedComparisonRows ?? []).length === 0 ? (
+                  <tr>
+                    <td className="px-3 py-4 text-sm text-black/60" colSpan={7}>
+                      No completed comparison rows yet. Leave forecast refresh running through the day.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
         </section>
       </div>
     </main>

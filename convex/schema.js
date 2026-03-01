@@ -73,6 +73,13 @@ export default defineSchema({
     accuSnapshotAtUtc_latest: v.optional(v.number()),
     errRawF: v.optional(v.number()),
     errRoundedF: v.optional(v.number()),
+    accuObservedMaxC: v.optional(v.number()),
+    accuObservedMaxF: v.optional(v.number()),
+    accuObservedMaxAtUtc: v.optional(v.number()),
+    accuObservedMaxAtLocal: v.optional(v.string()),
+    accuObservedObsCount: v.optional(v.number()),
+    errObservedRawF: v.optional(v.number()),
+    errObservedRoundedF: v.optional(v.number()),
     peakHit: v.optional(v.boolean()),
     peakTimingDeltaMinutes: v.optional(v.number()),
     updatedAt: v.number(),
@@ -218,6 +225,24 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_location", ["locationKey"]),
+
+  forecastObservedDailyHighs: defineTable({
+    locationId: v.id("locations"),
+    locationKey: v.string(),
+    localDateISO: v.string(),
+    maxTempF: v.number(),
+    maxTempC: v.optional(v.number()),
+    maxObservedAtEpochMs: v.number(),
+    maxObservedAtLocal: v.string(),
+    sampleCount: v.number(),
+    lastObservedAtEpochMs: v.number(),
+    lastObservedAtLocal: v.string(),
+    sourceFetchedAtMs: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_location", ["locationKey"])
+    .index("by_location_date", ["locationKey", "localDateISO"]),
 
 
     locations: defineTable({

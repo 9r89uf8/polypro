@@ -119,6 +119,8 @@ polypro2/
   - Per-location/per-day derived forecast rows used by `/kord/forecast`.
 - `forecastCurrentConditions`
   - Latest per-location current condition snapshot (now temp/realfeel/text/timestamps).
+- `forecastObservedDailyHighs`
+  - Per-location daily max temperature from AccuWeather current-conditions snapshots.
 - `forecastRuns`
   - Forecast refresh run status and counters.
 - `metarObservations`
