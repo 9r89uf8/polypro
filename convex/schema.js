@@ -63,6 +63,18 @@ export default defineSchema({
     metarAllMaxSource: v.optional(v.string()),
     deltaAllC: v.optional(v.number()),
     deltaAllF: v.optional(v.number()),
+    accuHighF_latest: v.optional(v.number()),
+    accuLowF_latest: v.optional(v.number()),
+    accuPeakStartUtc_latest: v.optional(v.number()),
+    accuPeakEndUtc_latest: v.optional(v.number()),
+    accuPeakStartLocal_latest: v.optional(v.string()),
+    accuPeakEndLocal_latest: v.optional(v.string()),
+    accuPeakDurationMinutes_latest: v.optional(v.number()),
+    accuSnapshotAtUtc_latest: v.optional(v.number()),
+    errRawF: v.optional(v.number()),
+    errRoundedF: v.optional(v.number()),
+    peakHit: v.optional(v.boolean()),
+    peakTimingDeltaMinutes: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_station_date", ["stationIcao", "date"]),
 
@@ -114,6 +126,98 @@ export default defineSchema({
     noaaFirstSeenAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_station_mode_date_ts", ["stationIcao", "mode", "date", "tsUtc"]),
+
+  forecastSnapshots: defineTable({
+    locationKey: v.string(),
+    endpointType: v.union(
+      v.literal("location"),
+      v.literal("currentconditions"),
+      v.literal("daily5day"),
+      v.literal("hourly72hour"),
+      v.literal("hourly120hour"),
+    ),
+    fetchedAtMs: v.number(),
+    headerDateMs: v.optional(v.number()),
+    expiresAtMs: v.optional(v.number()),
+    payloadHash: v.string(),
+    payloadJson: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_location_endpoint_fetched", [
+      "locationKey",
+      "endpointType",
+      "fetchedAtMs",
+    ])
+    .index("by_fetchedAt", ["fetchedAtMs"]),
+
+  forecastDailySummaries: defineTable({
+    locationId: v.id("locations"),
+    locationKey: v.string(),
+    locationName: v.string(),
+    timeZone: v.string(),
+    localDateISO: v.string(),
+    dayIndex: v.number(),
+    forecastHighF: v.number(),
+    forecastLowF: v.optional(v.number()),
+    peakMethod: v.string(),
+    nearPeakThresholdF: v.optional(v.number()),
+    peakStartEpochMs: v.optional(v.number()),
+    peakEndEpochMs: v.optional(v.number()),
+    peakDurationMinutes: v.optional(v.number()),
+    peakStartLocal: v.optional(v.string()),
+    peakEndLocal: v.optional(v.string()),
+    snapshotFetchedAtMs: v.number(),
+    hourlyPoints: v.array(
+      v.object({
+        epochMs: v.number(),
+        tempF: v.number(),
+      }),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_location", ["locationKey"])
+    .index("by_location_date", ["locationKey", "localDateISO"])
+    .index("by_date", ["localDateISO"]),
+
+  forecastRuns: defineTable({
+    runKey: v.string(),
+    lastStatus: v.union(
+      v.literal("idle"),
+      v.literal("running"),
+      v.literal("ok"),
+      v.literal("error"),
+    ),
+    lastStartedAt: v.optional(v.number()),
+    lastFinishedAt: v.optional(v.number()),
+    lastSuccessAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    locationsProcessed: v.optional(v.number()),
+    endpointsFetched: v.optional(v.number()),
+    endpointsSkipped: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_runKey", ["runKey"]),
+
+  forecastCurrentConditions: defineTable({
+    locationId: v.id("locations"),
+    locationKey: v.string(),
+    observedAtEpochMs: v.optional(v.number()),
+    observedAtLocal: v.optional(v.string()),
+    tempF: v.optional(v.number()),
+    tempC: v.optional(v.number()),
+    realFeelF: v.optional(v.number()),
+    realFeelC: v.optional(v.number()),
+    weatherText: v.optional(v.string()),
+    weatherIcon: v.optional(v.number()),
+    isDayTime: v.optional(v.boolean()),
+    hasPrecipitation: v.optional(v.boolean()),
+    precipitationType: v.optional(v.string()),
+    mobileLink: v.optional(v.string()),
+    link: v.optional(v.string()),
+    sourceFetchedAtMs: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_location", ["locationKey"]),
 
 
     locations: defineTable({

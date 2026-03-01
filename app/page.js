@@ -1,16 +1,9 @@
 "use client";
 
-import { useAction, useQuery } from "convex/react";
-import { api } from "../convex/_generated/api";
-import { useRouter } from "next/navigation";
-
 import Link from "next/link";
+
 //app/page.js
 export default function Home() {
-    const router = useRouter();
-
-
-
   return (
     <main className="min-h-screen px-5 py-10 md:px-8">
       <section className="mx-auto max-w-3xl rounded-3xl border border-line/80 bg-panel/90 p-8 shadow-[0_18px_50px_rgba(37,35,27,0.12)]">
@@ -22,10 +15,16 @@ export default function Home() {
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-black/70">
           Compare monthly manual vs METAR highs, open today&apos;s live METAR day
-          chart, run KORD phone-call temperature captures, and keep notes in one
-          place.
+          chart, run KORD phone-call temperature captures, view 3-day regional
+          forecasts with O&apos;Hare verification, and keep notes in one place.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
+          <Link
+            href="/kord/forecast"
+            className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-900 transition hover:-translate-y-0.5 hover:border-amber-500"
+          >
+            Open KORD Forecast Map
+          </Link>
           <Link
             href="/kord/month"
             className="inline-flex items-center rounded-full border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-black"

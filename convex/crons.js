@@ -27,6 +27,14 @@ crons.cron(
     { stationIem: "ORD", stationIcao: "KORD" },
 );
 
+// Runs every 20 minutes for 5-location AccuWeather snapshots and 3-day summaries.
+crons.cron(
+    "kord_accuweather_forecast_every_20_min",
+    "*/20 * * * *",
+    api.forecast.refreshForecastNow,
+    { withJitter: true },
+);
+
 // Runs every hour at minutes 49 and 52 UTC.
 // The function itself checks America/Chicago time and only runs 12:49/12:52 through 16:49/16:52 local.
 crons.cron(

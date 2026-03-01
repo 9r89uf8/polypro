@@ -31,6 +31,8 @@ polypro2/
 │   ├── notes/
 │   │   └── page.js
 │   └── kord/
+│       ├── forecast/
+│       │   └── page.js
 │       ├── month/
 │       │   └── page.js
 │       ├── metar-today/
@@ -43,6 +45,7 @@ polypro2/
 ├── convex/
 │   ├── schema.js
 │   ├── weather.js
+│   ├── forecast.js
 │   ├── notes.js
 │   ├── kordPhone.js
 │   ├── kordPhoneNode.js
@@ -56,6 +59,7 @@ polypro2/
 │       └── dataModel.d.ts
 ├── docs/
 │   ├── project-structure.md
+│   ├── kord-forecast.md
 │   ├── kord-pages.md
 │   ├── kord-live-today.md
 │   └── kord-phone-calls.md
@@ -73,6 +77,8 @@ polypro2/
   - Home landing page with navigation links.
 - `/notes` -> `app/notes/page.js`
   - Notes + image uploads + date filtering.
+- `/kord/forecast` -> `app/kord/forecast/page.js`
+  - 3-day regional AccuWeather forecast map + O'Hare METAR verification card.
 - `/kord/month` -> `app/kord/month/page.js`
   - Monthly manual-vs-METAR comparison workflow.
 - `/kord/day/[date]` -> `app/kord/day/[date]/page.js`
@@ -86,6 +92,8 @@ polypro2/
 
 - `convex/weather.js`
   - METAR ingestion, month compute, day/month queries, manual value upsert.
+- `convex/forecast.js`
+  - AccuWeather 5-location refresh, snapshot cache/history, derived 3-day summaries, O'Hare forecast-vs-METAR fields.
 - `convex/notes.js`
   - Notes CRUD-style operations (create/list) + upload URL generation.
 - `convex/kordPhone.js`
@@ -105,6 +113,14 @@ polypro2/
   - Per station/month compute status for official and all modes.
 - `dailyComparisons`
   - Daily manual max + official max + all max + deltas.
+- `forecastSnapshots`
+  - Raw AccuWeather endpoint snapshot history and freshness metadata.
+- `forecastDailySummaries`
+  - Per-location/per-day derived forecast rows used by `/kord/forecast`.
+- `forecastCurrentConditions`
+  - Latest per-location current condition snapshot (now temp/realfeel/text/timestamps).
+- `forecastRuns`
+  - Forecast refresh run status and counters.
 - `metarObservations`
   - Per observation rows for chart/raw table (`official` and `all` modes).
 - `kordPhoneCalls`
