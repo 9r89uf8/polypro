@@ -18,6 +18,13 @@ function formatTempF(value) {
   return `${value.toFixed(1)}°F`;
 }
 
+function formatDeltaF(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}°F`;
+}
+
 function toLocalDateLabel(dateISO, timeZone) {
   if (!dateISO) {
     return "—";
@@ -282,6 +289,14 @@ export default function KordForecastPage() {
     const hourSpans = Math.max(1, selectedHourlyTicks.length - 1);
     return Math.max(320, hourSpans * 42);
   }, [selectedHourlyTicks]);
+  const selectedForecastHighChanges = useMemo(() => {
+    const rows = Array.isArray(selectedLocation?.forecastHighChanges)
+      ? selectedLocation.forecastHighChanges
+      : [];
+    return [...rows].sort((a, b) =>
+      String(a?.localDateISO ?? "").localeCompare(String(b?.localDateISO ?? "")),
+    );
+  }, [selectedLocation]);
 
   const rowsForSelectedDay = useMemo(() => {
     return locations.map((location) => ({
@@ -787,6 +802,76 @@ export default function KordForecastPage() {
                       {formatDuration(selectedLocationSummary?.peakDurationMinutes)}
                     </p>
                   </div>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-black/10 bg-white/80 p-3">
+                  <p className="text-xs uppercase tracking-wide text-black/55">
+                    Forecast Change Tracker
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    Daily high delta versus the first AccuWeather daily forecast snapshot captured
+                    today.
+                  </p>
+                  {selectedForecastHighChanges.length > 0 ? (
+                    <div className="mt-3 overflow-auto rounded-xl border border-black/10 bg-white/70">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-black/5 text-left uppercase tracking-wide text-black/65">
+                          <tr>
+                            <th className="px-2.5 py-2">Date</th>
+                            <th className="px-2.5 py-2">Latest</th>
+                            <th className="px-2.5 py-2">First Today</th>
+                            <th className="px-2.5 py-2">Delta Today</th>
+                            <th className="px-2.5 py-2">Latest Fetch</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedForecastHighChanges.map((row) => {
+                            const delta = row?.deltaFromFirstTodayF;
+                            const deltaClass = Number.isFinite(delta)
+                              ? delta > 0
+                                ? "text-red-700"
+                                : delta < 0
+                                  ? "text-sky-700"
+                                  : "text-black/75"
+                              : "text-black/55";
+                            const isSelectedDate =
+                              selectedDate && row?.localDateISO === selectedDate;
+                            return (
+                              <tr
+                                key={row.localDateISO}
+                                className={`border-t border-black/10 ${
+                                  isSelectedDate ? "bg-black/5" : ""
+                                }`}
+                              >
+                                <td className="px-2.5 py-2 font-semibold text-black/80">
+                                  {row?.localDateISO
+                                    ? toLocalDateLabel(row.localDateISO, selectedLocation.timeZone)
+                                    : "—"}
+                                </td>
+                                <td className="px-2.5 py-2 text-black/80">
+                                  {formatTempF(row?.latestHighF)}
+                                </td>
+                                <td className="px-2.5 py-2 text-black/70">
+                                  {formatTempF(row?.firstTodayHighF)}
+                                </td>
+                                <td className={`px-2.5 py-2 font-semibold ${deltaClass}`}>
+                                  {formatDeltaF(delta)}
+                                </td>
+                                <td className="px-2.5 py-2 text-black/70">
+                                  {formatAgeMinutes(row?.latestSnapshotAtMs)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-black/60">
+                      No daily snapshot history yet. Run refresh a few times to start tracking
+                      forecast deltas.
+                    </p>
+                  )}
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-black/10 bg-white/80 p-3">

@@ -16,6 +16,7 @@ const JITTER_MIN_MS = 15 * 1000;
 const JITTER_MAX_MS = 75 * 1000;
 const NEAR_PEAK_DELTA_F = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const FORECAST_CHANGE_SNAPSHOT_LIMIT = 72;
 
 const ENDPOINT_TYPE = {
   LOCATION: "location",
@@ -315,6 +316,76 @@ function parseHourlyForecasts(payload, timeZone) {
   return parsed;
 }
 
+function parseSnapshotPayload(payloadJson) {
+  if (typeof payloadJson !== "string" || payloadJson.length === 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(payloadJson);
+  } catch {
+    return null;
+  }
+}
+
+function buildDailyHighChangeRows(snapshotRows, trackedDates) {
+  const chicagoTodayIso = formatChicagoDate(Date.now());
+  const targetDates = Array.isArray(trackedDates)
+    ? [...new Set(trackedDates.filter((value) => typeof value === "string" && value.length > 0))]
+    : [];
+  const targetDateSet = new Set(targetDates);
+  const historyByDate = new Map();
+
+  for (const snapshot of snapshotRows) {
+    const payload = parseSnapshotPayload(snapshot.payloadJson);
+    if (!payload) {
+      continue;
+    }
+    const dailyForecasts = parseDailyForecasts(payload);
+    for (const forecast of dailyForecasts) {
+      if (targetDateSet.size > 0 && !targetDateSet.has(forecast.localDateISO)) {
+        continue;
+      }
+      if (!historyByDate.has(forecast.localDateISO)) {
+        historyByDate.set(forecast.localDateISO, []);
+      }
+      historyByDate.get(forecast.localDateISO).push({
+        fetchedAtMs: snapshot.fetchedAtMs,
+        snapshotChicagoDate: formatChicagoDate(snapshot.fetchedAtMs),
+        highF: forecast.forecastHighF,
+      });
+    }
+  }
+
+  const orderedDates =
+    targetDates.length > 0
+      ? [...targetDates].sort((a, b) => a.localeCompare(b))
+      : [...historyByDate.keys()].sort((a, b) => a.localeCompare(b));
+
+  return orderedDates.map((localDateISO) => {
+    const history = historyByDate.get(localDateISO) ?? [];
+    const latest = history[0] ?? null;
+    const previous = history[1] ?? null;
+    const todayHistory = history.filter(
+      (entry) => entry.snapshotChicagoDate === chicagoTodayIso,
+    );
+    const firstToday = todayHistory[todayHistory.length - 1] ?? null;
+    return {
+      localDateISO,
+      latestHighF: latest ? roundToTenth(latest.highF) : null,
+      latestSnapshotAtMs: latest?.fetchedAtMs ?? null,
+      previousHighF: previous ? roundToTenth(previous.highF) : null,
+      previousSnapshotAtMs: previous?.fetchedAtMs ?? null,
+      deltaFromPreviousF:
+        latest && previous ? roundToTenth(latest.highF - previous.highF) : null,
+      firstTodayHighF: firstToday ? roundToTenth(firstToday.highF) : null,
+      firstTodaySnapshotAtMs: firstToday?.fetchedAtMs ?? null,
+      deltaFromFirstTodayF:
+        latest && firstToday ? roundToTenth(latest.highF - firstToday.highF) : null,
+      snapshotsTracked: history.length,
+    };
+  });
+}
+
 function chooseBetterRun(candidate, currentBest) {
   if (!currentBest) {
     return candidate;
@@ -582,6 +653,17 @@ export const getForecastDashboard = queryGeneric({
       summaries.sort(
         (a, b) => a.dayIndex - b.dayIndex || a.localDateISO.localeCompare(b.localDateISO),
       );
+      const trackedDates = [...new Set(summaries.map((summary) => summary.localDateISO))];
+      const dailySnapshots = await ctx.db
+        .query("forecastSnapshots")
+        .withIndex("by_location_endpoint_fetched", (query) =>
+          query
+            .eq("locationKey", location.accuweatherLocationKey)
+            .eq("endpointType", ENDPOINT_TYPE.DAILY_5DAY),
+        )
+        .order("desc")
+        .take(FORECAST_CHANGE_SNAPSHOT_LIMIT);
+      const forecastHighChanges = buildDailyHighChangeRows(dailySnapshots, trackedDates);
 
       locations.push({
         locationKey: location.accuweatherLocationKey,
@@ -624,6 +706,7 @@ export const getForecastDashboard = queryGeneric({
           snapshotFetchedAtMs: summary.snapshotFetchedAtMs,
           hourlyPoints: summary.hourlyPoints,
         })),
+        forecastHighChanges,
       });
     }
 

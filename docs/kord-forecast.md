@@ -20,6 +20,9 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
   - Shows a selected-day side table (high, peak window, peak duration).
   - Shows a selected-day side table `Now` column for quick cross-location current comparisons.
   - Shows a location detail panel with an hourly sparkline plus full current conditions.
+  - Shows a location-level `Forecast Change Tracker` table for daily highs:
+    - Latest daily high vs first daily snapshot captured today.
+    - Signed delta (`+/- °F`) so small forecast shifts (for example `+1°F`, `-2°F`) are visible.
   - Shows an O'Hare verification card using `dailyComparisons` observed METAR fields.
   - Shows an O'Hare daily table comparing:
     - NOAA official observed high (`metarMaxF`, the same "Official Max" shown on `/kord/day/[date]`)
@@ -52,6 +55,7 @@ Note: the 3-day JSON export intentionally excludes all METAR/NOAA truth fields a
     - Updates O'Hare comparison fields in `dailyComparisons`.
   - `forecast:getForecastDashboard` (query)
     - Returns active locations, 3-day summaries, run status, and O'Hare comparison rows.
+    - Returns per-location daily-high change rows derived from recent `forecastSnapshots` `daily5day` payload history.
 
 ## Scheduler
 
