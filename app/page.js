@@ -44,6 +44,12 @@ export default function Home() {
             Open KORD Phone Calls Today
           </Link>
           <Link
+            href="/polymarket/chicago-weather"
+            className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-5 py-2.5 text-sm font-semibold text-indigo-900 transition hover:-translate-y-0.5 hover:border-indigo-400"
+          >
+            Open Polymarket Chicago
+          </Link>
+          <Link
             href="/notes"
             className="inline-flex items-center rounded-full border border-black/15 bg-white/70 px-5 py-2.5 text-sm font-semibold text-black transition hover:-translate-y-0.5 hover:border-black"
           >

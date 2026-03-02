@@ -9,6 +9,7 @@ const DAY_OPTIONS = [
   { dayIndex: 1, label: "2 days", subtitle: "Tomorrow" },
   { dayIndex: 2, label: "3 days", subtitle: "Day 3" },
 ];
+const HOUR_MS = 60 * 60 * 1000;
 
 function formatTempF(value) {
   if (value === undefined || value === null || !Number.isFinite(value)) {
@@ -44,6 +45,16 @@ function toLocalTimeLabel(epochMs, timeZone) {
   }).format(new Date(epochMs));
 }
 
+function toLocalHourLabel(epochMs, timeZone) {
+  if (!Number.isFinite(epochMs)) {
+    return "—";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timeZone || "America/Chicago",
+    hour: "numeric",
+  }).format(new Date(epochMs));
+}
+
 function formatPeakWindow(summary, timeZone) {
   if (!summary || !Number.isFinite(summary.peakStartEpochMs)) {
     return "—";
@@ -68,6 +79,21 @@ function formatDuration(minutes) {
     return `${hours}h`;
   }
   return `${hours}h ${remainder}m`;
+}
+
+function toLocalDateTimeLabel(epochMs, timeZone) {
+  if (!Number.isFinite(epochMs)) {
+    return null;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timeZone || "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(epochMs));
 }
 
 function formatAgeMinutes(epochMs) {
@@ -135,21 +161,54 @@ function projectMarker(location, bounds) {
   };
 }
 
-function buildSparklinePath(points, width, height) {
+function buildSparklinePath(points, width, height, domainStartEpochMs, domainEndEpochMs) {
   if (!Array.isArray(points) || points.length < 2) {
     return "";
   }
   const min = Math.min(...points.map((point) => point.tempF));
   const max = Math.max(...points.map((point) => point.tempF));
   const spread = Math.max(0.1, max - min);
-  const xStep = width / (points.length - 1);
+  const startEpochMs = Number.isFinite(domainStartEpochMs)
+    ? domainStartEpochMs
+    : points[0].epochMs;
+  const endEpochMs = Number.isFinite(domainEndEpochMs)
+    ? domainEndEpochMs
+    : points[points.length - 1].epochMs;
+  const spanMs = Math.max(HOUR_MS, endEpochMs - startEpochMs);
   return points
     .map((point, index) => {
-      const x = index * xStep;
+      const x = ((point.epochMs - startEpochMs) / spanMs) * width;
       const y = height - ((point.tempF - min) / spread) * height;
       return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(" ");
+}
+
+function normalizeHourlyPoints(points) {
+  if (!Array.isArray(points)) {
+    return [];
+  }
+  return points
+    .filter((point) => Number.isFinite(point?.epochMs) && Number.isFinite(point?.tempF))
+    .map((point) => ({
+      epochMs: point.epochMs,
+      tempF: point.tempF,
+    }))
+    .sort((a, b) => a.epochMs - b.epochMs);
+}
+
+function buildHourlyTicks(hourlyPoints) {
+  if (!Array.isArray(hourlyPoints) || !hourlyPoints.length) {
+    return [];
+  }
+  const startHourMs = Math.floor(hourlyPoints[0].epochMs / HOUR_MS) * HOUR_MS;
+  const endHourMs =
+    Math.floor(hourlyPoints[hourlyPoints.length - 1].epochMs / HOUR_MS) * HOUR_MS;
+  const ticks = [];
+  for (let epochMs = startHourMs; epochMs <= endHourMs; epochMs += HOUR_MS) {
+    ticks.push(epochMs);
+  }
+  return ticks;
 }
 
 function getSummaryForDay(location, selectedDayIndex, selectedDate) {
@@ -177,6 +236,8 @@ export default function KordForecastPage() {
   const [selectedLocationKey, setSelectedLocationKey] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState("");
+  const [showLlmJson, setShowLlmJson] = useState(false);
+  const [llmJsonMessage, setLlmJsonMessage] = useState("");
 
   const locations = dashboard?.locations ?? [];
   const mainLocation =
@@ -209,6 +270,18 @@ export default function KordForecastPage() {
     selectedDate,
   );
   const selectedCurrent = selectedLocation?.currentConditions ?? null;
+  const selectedHourlyPoints = useMemo(
+    () => normalizeHourlyPoints(selectedLocationSummary?.hourlyPoints),
+    [selectedLocationSummary?.hourlyPoints],
+  );
+  const selectedHourlyTicks = useMemo(
+    () => buildHourlyTicks(selectedHourlyPoints),
+    [selectedHourlyPoints],
+  );
+  const hourlyStripWidth = useMemo(() => {
+    const hourSpans = Math.max(1, selectedHourlyTicks.length - 1);
+    return Math.max(320, hourSpans * 42);
+  }, [selectedHourlyTicks]);
 
   const rowsForSelectedDay = useMemo(() => {
     return locations.map((location) => ({
@@ -258,6 +331,95 @@ export default function KordForecastPage() {
   const ohareComparison = selectedDate
     ? dashboard?.ohareComparisons?.[selectedDate] ?? null
     : null;
+
+  const llmPayload = useMemo(() => {
+    if (!locations.length || !dates.length) {
+      return null;
+    }
+
+    const limitedDates = dates.slice(0, 3);
+    const mainKey = dashboard?.mainLocationKey ?? null;
+    const orderedLocations = [...locations].sort((a, b) => {
+      if (a.locationKey === mainKey) {
+        return -1;
+      }
+      if (b.locationKey === mainKey) {
+        return 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    const supportLocationKeys = orderedLocations
+      .filter((location) => location.locationKey !== mainKey)
+      .map((location) => location.locationKey);
+
+    return {
+      generatedAtMs: Date.now(),
+      source: "accuweather",
+      includeMetar: false,
+      horizonDays: 3,
+      primaryLocation: {
+        locationKey: mainKey,
+        name: "Chicago O'Hare Airport",
+      },
+      supportLocationKeys,
+      days: limitedDates.map((dateKey, dayIndex) => ({
+        dayIndex,
+        localDateISO: dateKey,
+        localDateLabel: toLocalDateLabel(dateKey, "America/Chicago"),
+        locations: orderedLocations.map((location) => {
+          const summary = getSummaryForDay(location, dayIndex, dateKey);
+          const hourlyPoints = Array.isArray(summary?.hourlyPoints)
+            ? summary.hourlyPoints.map((point) => ({
+                epochMs: point.epochMs,
+                localDateTime: toLocalDateTimeLabel(point.epochMs, location.timeZone),
+                tempF: point.tempF,
+              }))
+            : [];
+          return {
+            role: location.locationKey === mainKey ? "primary" : "support",
+            locationKey: location.locationKey,
+            name:
+              location.locationKey === mainKey ? "Chicago O'Hare Airport" : location.name,
+            timeZone: location.timeZone,
+            lat: location.lat,
+            lon: location.lon,
+            dayForecast: {
+              forecastHighF: summary?.forecastHighF ?? null,
+              forecastLowF: summary?.forecastLowF ?? null,
+              peakWindowLocal: formatPeakWindow(summary, location.timeZone),
+              peakDurationMinutes: summary?.peakDurationMinutes ?? null,
+            },
+            hourlyForecast: hourlyPoints,
+          };
+        }),
+      })),
+    };
+  }, [locations, dates, dashboard?.mainLocationKey]);
+
+  const llmJson = useMemo(() => {
+    if (!llmPayload) {
+      return "";
+    }
+    return JSON.stringify(llmPayload, null, 2);
+  }, [llmPayload]);
+
+  async function handleCopyLlmJson() {
+    if (!llmJson) {
+      setLlmJsonMessage("No forecast JSON available yet.");
+      return;
+    }
+    if (!navigator?.clipboard?.writeText) {
+      setLlmJsonMessage("Clipboard API not available in this browser.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(llmJson);
+      setLlmJsonMessage("JSON copied to clipboard.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLlmJsonMessage(`Copy failed: ${message}`);
+    }
+  }
 
   async function handleManualRefresh() {
     if (isRefreshing) {
@@ -330,6 +492,27 @@ export default function KordForecastPage() {
             >
               {isRefreshing ? "Refreshing..." : "Refresh Forecasts Now"}
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowLlmJson((value) => !value);
+                setLlmJsonMessage("");
+              }}
+              disabled={!llmPayload}
+              className="rounded-full border border-black/25 bg-white/90 px-4 py-2 text-sm font-semibold text-black transition hover:border-black disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {showLlmJson ? "Hide 3-Day JSON" : "Generate 3-Day JSON"}
+            </button>
+            {showLlmJson ? (
+              <button
+                type="button"
+                onClick={handleCopyLlmJson}
+                disabled={!llmJson}
+                className="rounded-full border border-black/25 bg-white/90 px-4 py-2 text-sm font-semibold text-black transition hover:border-black disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Copy JSON
+              </button>
+            ) : null}
           </div>
           <p className="mt-3 text-xs text-black/65">
             {refreshMessage ||
@@ -341,6 +524,23 @@ export default function KordForecastPage() {
             <p className="mt-2 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
               {dashboard.run.lastError}
             </p>
+          ) : null}
+          {showLlmJson ? (
+            <div className="mt-4 rounded-2xl border border-black/15 bg-white/90 p-3">
+              <p className="text-xs uppercase tracking-wide text-black/55">
+                3-Day Forecast JSON (No METAR)
+              </p>
+              <p className="mt-2 text-xs text-black/65">
+                Includes Chicago O&apos;Hare Airport as `primary` plus 4 suburb support
+                locations. Each day includes day forecast and hourly forecast.
+              </p>
+              <pre className="mt-3 max-h-[360px] overflow-auto rounded-xl border border-black/10 bg-black/95 p-3 text-[11px] leading-5 text-emerald-100">
+                {llmJson || "No forecast data available yet. Click Refresh Forecasts Now."}
+              </pre>
+              {llmJsonMessage ? (
+                <p className="mt-2 text-xs text-black/65">{llmJsonMessage}</p>
+              ) : null}
+            </div>
           ) : null}
         </header>
 
@@ -591,33 +791,67 @@ export default function KordForecastPage() {
 
                 <div className="mt-4 rounded-2xl border border-black/10 bg-white/80 p-3">
                   <p className="text-xs uppercase tracking-wide text-black/55">Hourly Strip</p>
-                  {selectedLocationSummary?.hourlyPoints?.length > 1 ? (
-                    <div className="mt-3">
-                      <svg viewBox="0 0 320 90" className="h-[90px] w-full">
-                        <path
-                          d={buildSparklinePath(selectedLocationSummary.hourlyPoints, 320, 80)}
-                          fill="none"
-                          stroke="#0f766e"
-                          strokeWidth="2.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                      <div className="mt-1 flex items-center justify-between text-[11px] text-black/60">
-                        <span>
-                          {toLocalTimeLabel(
-                            selectedLocationSummary.hourlyPoints[0]?.epochMs,
-                            selectedLocation.timeZone,
-                          )}
-                        </span>
-                        <span>
-                          {toLocalTimeLabel(
-                            selectedLocationSummary.hourlyPoints[
-                              selectedLocationSummary.hourlyPoints.length - 1
-                            ]?.epochMs,
-                            selectedLocation.timeZone,
-                          )}
-                        </span>
+                  {selectedHourlyPoints.length > 1 ? (
+                    <div className="mt-3 overflow-x-auto pb-1">
+                      <div style={{ width: `${hourlyStripWidth}px` }}>
+                        <svg viewBox={`0 0 ${hourlyStripWidth} 90`} className="h-[90px] w-full">
+                          {selectedHourlyTicks.map((tickEpochMs, tickIndex) => {
+                            const percent =
+                              selectedHourlyTicks.length > 1
+                                ? tickIndex / (selectedHourlyTicks.length - 1)
+                                : 0;
+                            const x = percent * hourlyStripWidth;
+                            return (
+                              <line
+                                key={tickEpochMs}
+                                x1={x}
+                                y1="2"
+                                x2={x}
+                                y2="82"
+                                stroke="#0f766e"
+                                strokeOpacity="0.12"
+                                strokeWidth="1"
+                              />
+                            );
+                          })}
+                          <path
+                            d={buildSparklinePath(
+                              selectedHourlyPoints,
+                              hourlyStripWidth,
+                              80,
+                              selectedHourlyTicks[0],
+                              selectedHourlyTicks[selectedHourlyTicks.length - 1],
+                            )}
+                            fill="none"
+                            stroke="#0f766e"
+                            strokeWidth="2.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                        <div className="relative mt-1 h-4 text-[11px] text-black/60">
+                          {selectedHourlyTicks.map((tickEpochMs, tickIndex) => {
+                            const percent =
+                              selectedHourlyTicks.length > 1
+                                ? tickIndex / (selectedHourlyTicks.length - 1)
+                                : 0;
+                            const anchorClass =
+                              tickIndex === 0
+                                ? "translate-x-0 text-left"
+                                : tickIndex === selectedHourlyTicks.length - 1
+                                  ? "-translate-x-full text-right"
+                                  : "-translate-x-1/2 text-center";
+                            return (
+                              <span
+                                key={tickEpochMs}
+                                className={`absolute top-0 whitespace-nowrap ${anchorClass}`}
+                                style={{ left: `${percent * 100}%` }}
+                              >
+                                {toLocalHourLabel(tickEpochMs, selectedLocation.timeZone)}
+                              </span>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   ) : (

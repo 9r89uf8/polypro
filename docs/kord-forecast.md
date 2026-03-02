@@ -7,6 +7,14 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
 - `/kord/forecast` (`app/kord/forecast/page.js`)
   - Displays 5 locations: O'Hare + 4 nearby suburbs.
   - Provides day toggles (`1 day`, `2 days`, `3 days`).
+  - Provides `Generate 3-Day JSON` button for LLM-ready output (no METAR fields).
+  - JSON output includes:
+    - Primary location: Chicago O'Hare Airport (`role: "primary"`).
+    - Support locations: 4 suburbs (`role: "support"`).
+    - For each of 3 days:
+      - Day forecast (high/low + peak timing window/duration).
+      - Hourly forecast array (`epochMs`, local datetime label, `tempF`).
+  - Provides `Copy JSON` when the JSON panel is open.
   - Shows a clickable position-based map using stored lat/lon per location.
   - Shows current temperature (`Now`) on each marker.
   - Shows a selected-day side table (high, peak window, peak duration).
@@ -28,6 +36,8 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
   - Location details endpoint: `/locations/v1/{locationKey}`
 - Truth source for O'Hare verification:
   - `dailyComparisons.metarMaxF`, `metarMaxAtUtc` (official hourly reports)
+
+Note: the 3-day JSON export intentionally excludes all METAR/NOAA truth fields and only uses AccuWeather-derived forecast data.
 
 ## Backend Module
 
