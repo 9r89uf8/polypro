@@ -25,6 +25,19 @@ function formatDeltaF(value) {
   return `${value > 0 ? "+" : ""}${value.toFixed(1)}°F`;
 }
 
+function deltaToneClass(value) {
+  if (!Number.isFinite(value)) {
+    return "text-black/55";
+  }
+  if (value > 0) {
+    return "text-red-700";
+  }
+  if (value < 0) {
+    return "text-sky-700";
+  }
+  return "text-black/75";
+}
+
 function toLocalDateLabel(dateISO, timeZone) {
   if (!dateISO) {
     return "—";
@@ -809,8 +822,8 @@ export default function KordForecastPage() {
                     Forecast Change Tracker
                   </p>
                   <p className="mt-1 text-xs text-black/60">
-                    Daily high delta versus the first AccuWeather daily forecast snapshot captured
-                    today.
+                    Tracks latest daily high against the first snapshot today and the first-ever
+                    snapshot captured for that forecast date.
                   </p>
                   {selectedForecastHighChanges.length > 0 ? (
                     <div className="mt-3 overflow-auto rounded-xl border border-black/10 bg-white/70">
@@ -821,19 +834,13 @@ export default function KordForecastPage() {
                             <th className="px-2.5 py-2">Latest</th>
                             <th className="px-2.5 py-2">First Today</th>
                             <th className="px-2.5 py-2">Delta Today</th>
+                            <th className="px-2.5 py-2">First Ever</th>
                             <th className="px-2.5 py-2">Latest Fetch</th>
                           </tr>
                         </thead>
                         <tbody>
                           {selectedForecastHighChanges.map((row) => {
-                            const delta = row?.deltaFromFirstTodayF;
-                            const deltaClass = Number.isFinite(delta)
-                              ? delta > 0
-                                ? "text-red-700"
-                                : delta < 0
-                                  ? "text-sky-700"
-                                  : "text-black/75"
-                              : "text-black/55";
+                            const deltaToday = row?.deltaFromFirstTodayF;
                             const isSelectedDate =
                               selectedDate && row?.localDateISO === selectedDate;
                             return (
@@ -854,8 +861,13 @@ export default function KordForecastPage() {
                                 <td className="px-2.5 py-2 text-black/70">
                                   {formatTempF(row?.firstTodayHighF)}
                                 </td>
-                                <td className={`px-2.5 py-2 font-semibold ${deltaClass}`}>
-                                  {formatDeltaF(delta)}
+                                <td
+                                  className={`px-2.5 py-2 font-semibold ${deltaToneClass(deltaToday)}`}
+                                >
+                                  {formatDeltaF(deltaToday)}
+                                </td>
+                                <td className="px-2.5 py-2 text-black/70">
+                                  {formatTempF(row?.firstRecordedHighF)}
                                 </td>
                                 <td className="px-2.5 py-2 text-black/70">
                                   {formatAgeMinutes(row?.latestSnapshotAtMs)}

@@ -16,7 +16,6 @@ const JITTER_MIN_MS = 15 * 1000;
 const JITTER_MAX_MS = 75 * 1000;
 const NEAR_PEAK_DELTA_F = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const FORECAST_CHANGE_SNAPSHOT_LIMIT = 72;
 
 const ENDPOINT_TYPE = {
   LOCATION: "location",
@@ -94,6 +93,34 @@ function getDateParts(formatter, date) {
 function formatChicagoDate(epochMs) {
   const parts = getDateParts(chicagoDateFormatter, new Date(epochMs));
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function parseDateIsoToEpochMs(dateISO) {
+  if (typeof dateISO !== "string" || dateISO.length !== 10) {
+    return null;
+  }
+  const epochMs = Date.parse(`${dateISO}T00:00:00Z`);
+  return Number.isFinite(epochMs) ? epochMs : null;
+}
+
+function computeSnapshotHistoryWindowStartMs(trackedDates) {
+  if (!Array.isArray(trackedDates) || trackedDates.length === 0) {
+    return null;
+  }
+  let minDateEpochMs = Infinity;
+  for (const dateISO of trackedDates) {
+    const parsedEpochMs = parseDateIsoToEpochMs(dateISO);
+    if (parsedEpochMs === null) {
+      continue;
+    }
+    minDateEpochMs = Math.min(minDateEpochMs, parsedEpochMs);
+  }
+  if (!Number.isFinite(minDateEpochMs)) {
+    return null;
+  }
+  // A 5-day forecast can include a target date up to ~4 days in advance.
+  // Use a wider buffer so "first recorded for date" remains stable around timezone boundaries.
+  return minDateEpochMs - 6 * DAY_MS;
 }
 
 function buildDateFormatter(timeZone) {
@@ -363,25 +390,26 @@ function buildDailyHighChangeRows(snapshotRows, trackedDates) {
 
   return orderedDates.map((localDateISO) => {
     const history = historyByDate.get(localDateISO) ?? [];
-    const latest = history[0] ?? null;
-    const previous = history[1] ?? null;
-    const todayHistory = history.filter(
+    const orderedHistory = [...history].sort((a, b) => a.fetchedAtMs - b.fetchedAtMs);
+    const firstRecorded = orderedHistory[0] ?? null;
+    const latest = orderedHistory[orderedHistory.length - 1] ?? null;
+    const todayHistory = orderedHistory.filter(
       (entry) => entry.snapshotChicagoDate === chicagoTodayIso,
     );
-    const firstToday = todayHistory[todayHistory.length - 1] ?? null;
+    const firstToday = todayHistory[0] ?? null;
     return {
       localDateISO,
       latestHighF: latest ? roundToTenth(latest.highF) : null,
       latestSnapshotAtMs: latest?.fetchedAtMs ?? null,
-      previousHighF: previous ? roundToTenth(previous.highF) : null,
-      previousSnapshotAtMs: previous?.fetchedAtMs ?? null,
-      deltaFromPreviousF:
-        latest && previous ? roundToTenth(latest.highF - previous.highF) : null,
       firstTodayHighF: firstToday ? roundToTenth(firstToday.highF) : null,
       firstTodaySnapshotAtMs: firstToday?.fetchedAtMs ?? null,
       deltaFromFirstTodayF:
         latest && firstToday ? roundToTenth(latest.highF - firstToday.highF) : null,
-      snapshotsTracked: history.length,
+      firstRecordedHighF: firstRecorded ? roundToTenth(firstRecorded.highF) : null,
+      firstRecordedSnapshotAtMs: firstRecorded?.fetchedAtMs ?? null,
+      deltaFromFirstRecordedF:
+        latest && firstRecorded ? roundToTenth(latest.highF - firstRecorded.highF) : null,
+      snapshotsTracked: orderedHistory.length,
     };
   });
 }
@@ -654,15 +682,23 @@ export const getForecastDashboard = queryGeneric({
         (a, b) => a.dayIndex - b.dayIndex || a.localDateISO.localeCompare(b.localDateISO),
       );
       const trackedDates = [...new Set(summaries.map((summary) => summary.localDateISO))];
-      const dailySnapshots = await ctx.db
-        .query("forecastSnapshots")
-        .withIndex("by_location_endpoint_fetched", (query) =>
-          query
-            .eq("locationKey", location.accuweatherLocationKey)
-            .eq("endpointType", ENDPOINT_TYPE.DAILY_5DAY),
-        )
-        .order("desc")
-        .take(FORECAST_CHANGE_SNAPSHOT_LIMIT);
+      const historyWindowStartMs = computeSnapshotHistoryWindowStartMs(trackedDates);
+      const dailySnapshots =
+        trackedDates.length === 0
+          ? []
+          : await ctx.db
+              .query("forecastSnapshots")
+              .withIndex("by_location_endpoint_fetched", (query) =>
+                Number.isFinite(historyWindowStartMs)
+                  ? query
+                      .eq("locationKey", location.accuweatherLocationKey)
+                      .eq("endpointType", ENDPOINT_TYPE.DAILY_5DAY)
+                      .gte("fetchedAtMs", historyWindowStartMs)
+                  : query
+                      .eq("locationKey", location.accuweatherLocationKey)
+                      .eq("endpointType", ENDPOINT_TYPE.DAILY_5DAY),
+              )
+              .collect();
       const forecastHighChanges = buildDailyHighChangeRows(dailySnapshots, trackedDates);
 
       locations.push({
