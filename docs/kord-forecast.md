@@ -19,7 +19,10 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
   - Shows current temperature (`Now`) on each marker.
   - Shows a selected-day side table (high, peak window, peak duration).
   - Shows a selected-day side table `Now` column for quick cross-location current comparisons.
-  - Shows a location detail panel with an hourly sparkline plus full current conditions.
+  - Shows a location detail panel with:
+    - Full current conditions.
+    - 1-hour forecast card (valid time, temp, RealFeel, precip chance, wind, freshness).
+    - Hourly sparkline for the selected day.
   - Shows a location-level `Forecast Change Tracker` table for daily highs:
     - Latest daily high vs first daily snapshot captured today.
     - Latest daily high vs first-ever snapshot captured for that forecast date.
@@ -35,6 +38,7 @@ This document covers the 3-day regional forecast route and its AccuWeather + MET
 - Forecast source: AccuWeather API
   - Current conditions endpoint: `/currentconditions/v1/{locationKey}` (`details=true`)
   - Daily endpoint: `/forecasts/v1/daily/5day/{locationKey}` (`metric=false`)
+  - 1-hour endpoint: `/forecasts/v1/hourly/1hour/{locationKey}` (`metric=false`)
   - Hourly endpoint: `/forecasts/v1/hourly/120hour/{locationKey}` (`metric=false`)
   - Fallback hourly endpoint (when 120h plan access is unavailable): `/forecasts/v1/hourly/72hour/{locationKey}`
   - Location details endpoint: `/locations/v1/{locationKey}`
@@ -50,12 +54,16 @@ Note: the 3-day JSON export intentionally excludes all METAR/NOAA truth fields a
     - Refreshes all configured locations.
     - Uses `Expires` cache headers to skip endpoint calls when still fresh.
     - Fetches/stores latest current conditions per location.
+    - Fetches/stores a cached 1-hour hourly payload per location (`hourly/1hour`).
+    - Always re-fetches `currentconditions` and `hourly/1hour` on each run (does not use snapshot cache for those two endpoint types) to keep near-term values fresh.
+    - Treats 1-hour fetch errors as non-fatal warnings so the 3-day flow still updates.
     - Falls back from 120-hour hourly to 72-hour hourly when 120-hour access is not available for the API key.
     - Stores endpoint payload snapshots for history.
     - Derives 3-day summaries (high/low, peak window, duration, hourly points).
     - Updates O'Hare comparison fields in `dailyComparisons`.
   - `forecast:getForecastDashboard` (query)
     - Returns active locations, 3-day summaries, run status, and O'Hare comparison rows.
+    - Returns per-location normalized `oneHourForecast` from latest `forecastSnapshots` `hourly1hour` payload.
     - Returns per-location daily-high change rows derived from `forecastSnapshots` `daily5day` payload history.
 
 ## Scheduler
@@ -69,7 +77,12 @@ Note: the 3-day JSON export intentionally excludes all METAR/NOAA truth fields a
 ## Schema Additions
 
 - `forecastSnapshots`
-  - Raw endpoint payload history + freshness metadata (`Date`/`Expires`).
+  - Raw endpoint payload history + freshness metadata (`Date`/`Expires`) for:
+    - `location`
+    - `currentconditions`
+    - `daily5day`
+    - `hourly1hour`
+    - `hourly120hour` / `hourly72hour`
 - `forecastDailySummaries`
   - Derived per-location day rows used directly by `/kord/forecast`.
 - `forecastCurrentConditions`

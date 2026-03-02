@@ -140,6 +140,7 @@ export default defineSchema({
       v.literal("location"),
       v.literal("currentconditions"),
       v.literal("daily5day"),
+      v.literal("hourly1hour"),
       v.literal("hourly72hour"),
       v.literal("hourly120hour"),
     ),

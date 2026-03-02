@@ -21,6 +21,7 @@ const ENDPOINT_TYPE = {
   LOCATION: "location",
   CURRENT_CONDITIONS: "currentconditions",
   DAILY_5DAY: "daily5day",
+  HOURLY_1HOUR: "hourly1hour",
   HOURLY_72HOUR: "hourly72hour",
   HOURLY_120HOUR: "hourly120hour",
 };
@@ -29,6 +30,7 @@ const endpointTypeValidator = v.union(
   v.literal(ENDPOINT_TYPE.LOCATION),
   v.literal(ENDPOINT_TYPE.CURRENT_CONDITIONS),
   v.literal(ENDPOINT_TYPE.DAILY_5DAY),
+  v.literal(ENDPOINT_TYPE.HOURLY_1HOUR),
   v.literal(ENDPOINT_TYPE.HOURLY_72HOUR),
   v.literal(ENDPOINT_TYPE.HOURLY_120HOUR),
 );
@@ -180,6 +182,25 @@ function roundToTenth(value) {
 function toFiniteNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toAccuPhrase(value) {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (typeof value.Localized === "string" && value.Localized.trim().length > 0) {
+    return value.Localized.trim();
+  }
+  if (typeof value.English === "string" && value.English.trim().length > 0) {
+    return value.English.trim();
+  }
+  if (typeof value.Name === "string" && value.Name.trim().length > 0) {
+    return value.Name.trim();
+  }
+  return null;
 }
 
 function parseHttpDateMs(rawValue) {
@@ -341,6 +362,60 @@ function parseHourlyForecasts(payload, timeZone) {
   }
   parsed.sort((a, b) => a.epochMs - b.epochMs);
   return parsed;
+}
+
+function parseOneHourForecast(payload, timeZone) {
+  const row = Array.isArray(payload) ? payload[0] : null;
+  if (!row || typeof row !== "object") {
+    return null;
+  }
+
+  const dateTime = row?.DateTime;
+  const parsedDateTimeMs = Date.parse(dateTime ?? "");
+  const epochSeconds = toFiniteNumber(row?.EpochDateTime);
+  const epochMs = Number.isFinite(parsedDateTimeMs)
+    ? parsedDateTimeMs
+    : epochSeconds === null
+      ? null
+      : Math.round(epochSeconds * 1000);
+  const localDateISO =
+    extractDateIso(dateTime) ??
+    (epochMs !== null ? formatDateForZone(epochMs, timeZone) : null);
+
+  const tempF = toFiniteNumber(row?.Temperature?.Value);
+  const realFeelF = toFiniteNumber(row?.RealFeelTemperature?.Value);
+  const weatherIcon = toFiniteNumber(row?.WeatherIcon);
+  const precipitationProbability = toFiniteNumber(row?.PrecipitationProbability);
+  const windSpeedMph = toFiniteNumber(row?.Wind?.Speed?.Value);
+  const windDirection =
+    toAccuPhrase(row?.Wind?.Direction?.English) ??
+    toAccuPhrase(row?.Wind?.Direction?.Localized);
+  const precipitationType = toAccuPhrase(row?.PrecipitationType);
+  const precipitationIntensity = toAccuPhrase(row?.PrecipitationIntensity);
+
+  const parsed = {
+    ...(epochMs !== null ? { epochMs } : {}),
+    ...(localDateISO ? { localDateISO } : {}),
+    ...(tempF !== null ? { tempF: roundToTenth(tempF) } : {}),
+    ...(realFeelF !== null ? { realFeelF: roundToTenth(realFeelF) } : {}),
+    ...(row?.IconPhrase ? { iconPhrase: String(row.IconPhrase) } : {}),
+    ...(weatherIcon !== null ? { weatherIcon: Math.round(weatherIcon) } : {}),
+    ...(typeof row?.HasPrecipitation === "boolean"
+      ? { hasPrecipitation: row.HasPrecipitation }
+      : {}),
+    ...(precipitationType ? { precipitationType } : {}),
+    ...(precipitationIntensity ? { precipitationIntensity } : {}),
+    ...(precipitationProbability !== null
+      ? { precipitationProbability: Math.round(precipitationProbability) }
+      : {}),
+    ...(typeof row?.IsDaylight === "boolean" ? { isDaylight: row.IsDaylight } : {}),
+    ...(windSpeedMph !== null ? { windSpeedMph: roundToTenth(windSpeedMph) } : {}),
+    ...(windDirection ? { windDirection } : {}),
+    ...(row?.MobileLink ? { mobileLink: String(row.MobileLink) } : {}),
+    ...(row?.Link ? { link: String(row.Link) } : {}),
+  };
+
+  return Object.keys(parsed).length > 0 ? parsed : null;
 }
 
 function parseSnapshotPayload(payloadJson) {
@@ -678,6 +753,19 @@ export const getForecastDashboard = queryGeneric({
           query.eq("locationKey", location.accuweatherLocationKey),
         )
         .first();
+      const oneHourSnapshot = await ctx.db
+        .query("forecastSnapshots")
+        .withIndex("by_location_endpoint_fetched", (query) =>
+          query
+            .eq("locationKey", location.accuweatherLocationKey)
+            .eq("endpointType", ENDPOINT_TYPE.HOURLY_1HOUR),
+        )
+        .order("desc")
+        .first();
+      const oneHourPayload = oneHourSnapshot
+        ? parseSnapshotPayload(oneHourSnapshot.payloadJson)
+        : null;
+      const oneHourForecast = parseOneHourForecast(oneHourPayload, location.timeZone);
       summaries.sort(
         (a, b) => a.dayIndex - b.dayIndex || a.localDateISO.localeCompare(b.localDateISO),
       );
@@ -725,6 +813,26 @@ export const getForecastDashboard = queryGeneric({
               mobileLink: current.mobileLink ?? null,
               link: current.link ?? null,
               sourceFetchedAtMs: current.sourceFetchedAtMs ?? null,
+            }
+          : null,
+        oneHourForecast: oneHourForecast
+          ? {
+              epochMs: oneHourForecast.epochMs ?? null,
+              localDateISO: oneHourForecast.localDateISO ?? null,
+              tempF: oneHourForecast.tempF ?? null,
+              realFeelF: oneHourForecast.realFeelF ?? null,
+              iconPhrase: oneHourForecast.iconPhrase ?? null,
+              weatherIcon: oneHourForecast.weatherIcon ?? null,
+              hasPrecipitation: oneHourForecast.hasPrecipitation ?? null,
+              precipitationType: oneHourForecast.precipitationType ?? null,
+              precipitationIntensity: oneHourForecast.precipitationIntensity ?? null,
+              precipitationProbability: oneHourForecast.precipitationProbability ?? null,
+              isDaylight: oneHourForecast.isDaylight ?? null,
+              windSpeedMph: oneHourForecast.windSpeedMph ?? null,
+              windDirection: oneHourForecast.windDirection ?? null,
+              mobileLink: oneHourForecast.mobileLink ?? null,
+              link: oneHourForecast.link ?? null,
+              sourceFetchedAtMs: oneHourSnapshot?.fetchedAtMs ?? null,
             }
           : null,
         summaries: summaries.map((summary) => ({
@@ -1420,9 +1528,10 @@ async function fetchEndpointWithCache({
   endpointType,
   url,
   force = false,
+  ignoreCache = false,
 }) {
   const now = Date.now();
-  if (!force) {
+  if (!force && !ignoreCache) {
     const latest = await ctx.runQuery("forecast:getLatestSnapshot", {
       locationKey,
       endpointType,
@@ -1516,6 +1625,7 @@ async function refreshSingleLocation({ ctx, configured, apiKey, force }) {
         },
       ),
       force,
+      ignoreCache: true,
     });
     currentConditionsFetched = Number(currentConditionsResponse.skippedFetch === false);
     currentConditionsSkipped = Number(currentConditionsResponse.skippedFetch === true);
@@ -1598,6 +1708,32 @@ async function refreshSingleLocation({ ctx, configured, apiKey, force }) {
     });
   }
 
+  let oneHourForecastFetched = 0;
+  let oneHourForecastSkipped = 0;
+  let oneHourForecastError = "";
+  let oneHourForecastSnapshotAtMs = 0;
+  try {
+    const oneHourResponse = await fetchEndpointWithCache({
+      ctx,
+      locationKey: configured.locationKey,
+      endpointType: ENDPOINT_TYPE.HOURLY_1HOUR,
+      url: buildAccuweatherUrl(
+        `/forecasts/v1/hourly/1hour/${configured.locationKey}`,
+        apiKey,
+        {
+          metric: "false",
+        },
+      ),
+      force,
+      ignoreCache: true,
+    });
+    oneHourForecastFetched = Number(oneHourResponse.skippedFetch === false);
+    oneHourForecastSkipped = Number(oneHourResponse.skippedFetch === true);
+    oneHourForecastSnapshotAtMs = oneHourResponse.fetchedAtMs;
+  } catch (error) {
+    oneHourForecastError = error instanceof Error ? error.message : String(error);
+  }
+
   const dailyForecasts = parseDailyForecasts(dailyResponse.payload);
   if (dailyForecasts.length === 0) {
     throw new Error("No daily forecasts returned.");
@@ -1611,6 +1747,7 @@ async function refreshSingleLocation({ ctx, configured, apiKey, force }) {
     currentConditionsSnapshotAtMs,
     dailyResponse.fetchedAtMs,
     hourlyResponse.fetchedAtMs,
+    oneHourForecastSnapshotAtMs,
   );
 
   const summaries = buildDailySummaries({
@@ -1631,12 +1768,14 @@ async function refreshSingleLocation({ ctx, configured, apiKey, force }) {
     Number(locationResponse.skippedFetch === false) +
     currentConditionsFetched +
     Number(dailyResponse.skippedFetch === false) +
-    Number(hourlyResponse.skippedFetch === false);
+    Number(hourlyResponse.skippedFetch === false) +
+    oneHourForecastFetched;
   const endpointsSkipped =
     Number(locationResponse.skippedFetch === true) +
     currentConditionsSkipped +
     Number(dailyResponse.skippedFetch === true) +
-    Number(hourlyResponse.skippedFetch === true);
+    Number(hourlyResponse.skippedFetch === true) +
+    oneHourForecastSkipped;
 
   return {
     locationKey: configured.locationKey,
@@ -1647,6 +1786,9 @@ async function refreshSingleLocation({ ctx, configured, apiKey, force }) {
     snapshotFetchedAtMs,
     ...(currentConditionsError
       ? { currentConditionsError: currentConditionsError.slice(0, 220) }
+      : {}),
+    ...(oneHourForecastError
+      ? { oneHourForecastError: oneHourForecastError.slice(0, 220) }
       : {}),
     hourlyFallbackUsed,
     hourlyFallbackReason,
@@ -1721,6 +1863,9 @@ export const refreshForecastNow = actionGeneric({
           snapshotFetchedAtMs: refreshed.snapshotFetchedAtMs,
           ...(refreshed.currentConditionsError
             ? { currentConditionsError: refreshed.currentConditionsError }
+            : {}),
+          ...(refreshed.oneHourForecastError
+            ? { oneHourForecastError: refreshed.oneHourForecastError }
             : {}),
           hourlyFallbackUsed: refreshed.hourlyFallbackUsed,
           ...(refreshed.hourlyFallbackReason

@@ -32,6 +32,7 @@ const STATION_IEM = "ORD";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ENABLE_DAY_PAGE_NOAA_POLL = false;
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -442,10 +443,12 @@ export default function KordDayPage() {
         }
       }
 
-      await safeCall(
-        () => pollLatest({ stationIcao: STATION_ICAO }),
-        (result) => formatLivePollMessage(result, "Live poll"),
-      );
+      if (ENABLE_DAY_PAGE_NOAA_POLL) {
+        await safeCall(
+          () => pollLatest({ stationIcao: STATION_ICAO }),
+          (result) => formatLivePollMessage(result, "Live poll"),
+        );
+      }
 
       if (cancelled) {
         return;
@@ -476,13 +479,19 @@ export default function KordDayPage() {
         stationIem: STATION_IEM,
         stationIcao: STATION_ICAO,
       });
-      const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-      setLiveMessage(
-        `${formatBackfillMessage(allResult, "Manual all backfill")} ${formatLivePollMessage(
-          pollResult,
-          "Manual refresh",
-        )}`,
-      );
+      if (ENABLE_DAY_PAGE_NOAA_POLL) {
+        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
+        setLiveMessage(
+          `${formatBackfillMessage(allResult, "Manual all backfill")} ${formatLivePollMessage(
+            pollResult,
+            "Manual refresh",
+          )}`,
+        );
+      } else {
+        setLiveMessage(
+          `${formatBackfillMessage(allResult, "Manual all backfill")} Manual NOAA poll is disabled on day page.`,
+        );
+      }
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -819,7 +828,7 @@ export default function KordDayPage() {
           {isToday ? (
             <p className="mt-3 text-xs text-black/65">
               {liveMessage ||
-                "Live mode backfills official + all once, then does one immediate NOAA poll. Ongoing official ingest runs via Convex cron."}
+                "Live mode backfills official + all once from this page. NOAA latest polling is disabled on this page; ongoing official ingest runs via Convex cron."}
             </p>
           ) : null}
         </header>

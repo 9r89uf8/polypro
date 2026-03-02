@@ -91,15 +91,15 @@ Behavior details:
 - If route date equals Chicago today:
   - Runs one-time backfill action: `weather:backfillTodayOfficialFromIem` (IEM last 24h, report types 3/4, filtered to today local date).
   - Runs one-time backfill action: `weather:backfillTodayAllFromIem` (IEM last 24h, report types 1/3/4, filtered to today local date).
-  - Runs immediate live poll action: `weather:pollLatestNoaaMetar` (NOAA latest station TXT).
+  - NOAA latest poll call exists in page code but is disabled (`ENABLE_DAY_PAGE_NOAA_POLL = false`), so day-page load does not trigger `weather:pollLatestNoaaMetar`.
   - Does not run a recurring client poll interval.
   - Ongoing official ingest runs via Convex crons (`kord_official_metar_every_2_min` plus `kord_official_metar_minute_51`).
   - Ongoing all-mode ingest runs via Convex cron (`kord_all_metar_every_5_min`).
-  - Manual refresh triggers an all-mode today backfill + immediate NOAA poll.
+  - Manual refresh triggers all-mode today backfill only (no day-page NOAA poll).
   - Inserts are deduped by `(stationIcao, mode, date, tsUtc)` via:
     - `weather:upsertOfficialObservation` for `mode=official`
     - `weather:upsertAllObservation` for `mode=all`
-  - Official rows may include `noaaFirstSeenAt` once seen by NOAA latest poll (including patching an existing backfilled row on first NOAA sighting).
+  - Official rows may include `noaaFirstSeenAt` when seen by NOAA latest poll jobs (cron-driven; includes patching an existing backfilled row on first NOAA sighting).
   - `dailyComparisons` official/all max/count fields are updated incrementally when new rows are inserted.
 - Manual/WU max can be saved directly from this page for the selected day:
   - Uses `weather:upsertManualMonth` with a single day value (`values: [{ date, value }]`).

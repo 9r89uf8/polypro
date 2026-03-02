@@ -45,12 +45,12 @@ When `/kord/day/[date]` is opened for today's Chicago date:
    - Action: `weather:backfillTodayAllFromIem`
    - Source: IEM ASOS endpoint with `hours=24`, `report_type=1,3,4`, `data=metar`, `tz=UTC`, `format=onlycomma`
    - Filters to today's Chicago date before insert.
-3. Run immediate NOAA latest poll:
-   - Action: `weather:pollLatestNoaaMetar`
-   - Source: NOAA latest station TXT (`.../stations/KORD.TXT`)
+3. Day-page NOAA latest poll path is currently disabled:
+   - In page code: `ENABLE_DAY_PAGE_NOAA_POLL = false`
+   - Result: opening the day page does not trigger `weather:pollLatestNoaaMetar`.
 4. Do not start recurring client-side interval polling.
 5. Live updates continue via Convex subscriptions as server cron ingests rows.
-6. Manual "Refresh now" triggers all-mode backfill + immediate NOAA poll.
+6. Manual "Refresh now" triggers all-mode backfill only.
 
 ## Backend Actions and Mutation
 
@@ -72,6 +72,8 @@ Defined in `convex/weather.js`:
 - `weather:backfillTodayAllFromIem`
   - Fetches recent all-mode reports from IEM (`report_type=1,3,4`).
   - Parses UTC times, converts to Chicago date keys, keeps only today's date.
+  - Skips rows where extracted temperature source is `remark_T`.
+  - As a result, source `iem_backfill_all:remark_T` is not stored.
   - Inserts via `weather:upsertAllObservation`.
 
 - `weather:upsertOfficialObservation` (internal mutation)
@@ -118,7 +120,7 @@ Related scheduler in `convex/crons.js`:
   - `source` is tagged with prefixes:
     - `noaa_latest:<temp_source>`
     - `iem_backfill:<temp_source>`
-    - `iem_backfill_all:<temp_source>`
+    - `iem_backfill_all:<temp_source>` (excluding `remark_T`)
 - `dailyComparisons`
   - Official and all aggregate fields are updated incrementally as new rows arrive.
 
@@ -130,7 +132,7 @@ In `app/kord/day/[date]/page.js` when date is today:
 - Chart renders official + all series.
 - Raw table renders official + all rows.
 - "All Max" summary card is visible.
-- Live status message reflects backfill/poll outcomes.
+- Live status message reflects backfill outcomes (with poll-disabled note for manual refresh).
 - No recurring client-side 2-minute poll is scheduled.
 
 When date is not today:
@@ -140,7 +142,7 @@ When date is not today:
 ## Known Limitations
 
 - NOAA station TXT contains only the latest report. If two new reports arrive between polls, one can be missed.
-- Official cron and manual refresh can fetch the same official report; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
+- Official cron jobs can overlap with each other; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
 - All-mode cron, page bootstrap, and manual refresh can fetch overlapping all-mode rows; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
 - `noaaFirstSeenAt` reflects first time this app observed the report from NOAA latest polling, not NOAA's upstream publish timestamp; precision is bounded by poll cadence and tab-visibility pauses.
 

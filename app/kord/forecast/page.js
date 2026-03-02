@@ -25,6 +25,13 @@ function formatDeltaF(value) {
   return `${value > 0 ? "+" : ""}${value.toFixed(1)}°F`;
 }
 
+function formatPercent(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${Math.round(value)}%`;
+}
+
 function deltaToneClass(value) {
   if (!Number.isFinite(value)) {
     return "text-black/55";
@@ -290,6 +297,7 @@ export default function KordForecastPage() {
     selectedDate,
   );
   const selectedCurrent = selectedLocation?.currentConditions ?? null;
+  const selectedOneHour = selectedLocation?.oneHourForecast ?? null;
   const selectedHourlyPoints = useMemo(
     () => normalizeHourlyPoints(selectedLocationSummary?.hourlyPoints),
     [selectedLocationSummary?.hourlyPoints],
@@ -465,8 +473,11 @@ export default function KordForecastPage() {
         const currentWarnings = Array.isArray(result.results)
           ? result.results.filter((row) => row.currentConditionsError).length
           : 0;
+        const oneHourWarnings = Array.isArray(result.results)
+          ? result.results.filter((row) => row.oneHourForecastError).length
+          : 0;
         setRefreshMessage(
-          `${modeLabel}: ${result.locationsProcessed} location(s) updated, ${result.endpointsFetched} endpoint fetches, ${result.endpointsSkipped} cache hits${fallbackCount > 0 ? `, ${fallbackCount} used 72h fallback` : ""}${currentWarnings > 0 ? `, ${currentWarnings} current-conditions warning(s)` : ""}.`,
+          `${modeLabel}: ${result.locationsProcessed} location(s) updated, ${result.endpointsFetched} endpoint fetches, ${result.endpointsSkipped} cache hits${fallbackCount > 0 ? `, ${fallbackCount} used 72h fallback` : ""}${currentWarnings > 0 ? `, ${currentWarnings} current-conditions warning(s)` : ""}${oneHourWarnings > 0 ? `, ${oneHourWarnings} 1-hour warning(s)` : ""}.`,
         );
       } else {
         const failures = Array.isArray(result?.results)
@@ -786,6 +797,79 @@ export default function KordForecastPage() {
                           : selectedCurrent?.hasPrecipitation === false
                             ? "No"
                             : "—"}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 rounded-2xl border border-black/10 bg-white/80 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-wide text-black/55">
+                      Next-Hour Forecast
+                    </p>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                        isCurrentStale(selectedOneHour?.sourceFetchedAtMs)
+                          ? "bg-amber-100 text-amber-900"
+                          : "bg-emerald-100 text-emerald-800"
+                      }`}
+                    >
+                      {isCurrentStale(selectedOneHour?.sourceFetchedAtMs) ? "Stale" : "Fresh"}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <p className="text-xs text-black/60 sm:col-span-2">
+                      Forecast for the next valid hour from AccuWeather, not the current observation.
+                    </p>
+                    <p className="text-sm text-black/75">
+                      Valid Time:{" "}
+                      <span className="font-semibold text-black">
+                        {toLocalTimeLabel(selectedOneHour?.epochMs, selectedLocation.timeZone)}
+                      </span>
+                    </p>
+                    <p className="text-sm text-black/75">
+                      Temp:{" "}
+                      <span className="font-semibold text-black">
+                        {formatTempF(selectedOneHour?.tempF)}
+                      </span>
+                    </p>
+                    <p className="text-sm text-black/75">
+                      RealFeel:{" "}
+                      <span className="font-semibold text-black">
+                        {formatTempF(selectedOneHour?.realFeelF)}
+                      </span>
+                    </p>
+                    <p className="text-sm text-black/75">
+                      Conditions:{" "}
+                      <span className="font-semibold text-black">
+                        {selectedOneHour?.iconPhrase || "—"}
+                      </span>
+                    </p>
+                    <p className="text-sm text-black/75">
+                      Precip Chance:{" "}
+                      <span className="font-semibold text-black">
+                        {Number.isFinite(selectedOneHour?.precipitationProbability)
+                          ? formatPercent(selectedOneHour.precipitationProbability)
+                          : selectedOneHour?.hasPrecipitation === false
+                            ? "0%"
+                            : "—"}
+                      </span>
+                    </p>
+                    <p className="text-sm text-black/75">
+                      Wind:{" "}
+                      <span className="font-semibold text-black">
+                        {Number.isFinite(selectedOneHour?.windSpeedMph)
+                          ? `${selectedOneHour.windSpeedMph.toFixed(1)} mph${
+                              selectedOneHour?.windDirection
+                                ? ` ${selectedOneHour.windDirection}`
+                                : ""
+                            }`
+                          : "—"}
+                      </span>
+                    </p>
+                    <p className="text-sm text-black/75 sm:col-span-2">
+                      Fetched:{" "}
+                      <span className="font-semibold text-black">
+                        {formatAgeMinutes(selectedOneHour?.sourceFetchedAtMs)}
                       </span>
                     </p>
                   </div>

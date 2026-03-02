@@ -26,6 +26,7 @@ const SOURCE_PRIORITY = {
   metar_integer: 1,
   remark_T: 2,
 };
+const SKIP_IEM_BACKFILL_ALL_TEMP_SOURCES = new Set(["remark_T"]);
 
 const chicagoDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: CHICAGO_TIMEZONE,
@@ -1066,6 +1067,9 @@ export const backfillTodayAllFromIem = actionGeneric({
       const rawMetar = observation.metar ?? "";
       const tempInfo = extractTempInfo(rawMetar, undefined);
       if (!tempInfo) {
+        continue;
+      }
+      if (SKIP_IEM_BACKFILL_ALL_TEMP_SOURCES.has(tempInfo.source)) {
         continue;
       }
 
