@@ -3,7 +3,7 @@ import { query, mutation, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 const CHICAGO_TIMEZONE = "America/Chicago";
-const SCHEDULED_LOCAL_HOURS = new Set([12, 13, 14, 15, 16]);
+const DEFAULT_SCHEDULED_LOCAL_HOURS = new Set([12, 13, 14, 15, 16]);
 const SCHEDULED_LOCAL_MINUTES = new Set([49, 52]);
 
 const chicagoDateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -55,6 +55,54 @@ function roundToTenth(value) {
 
 function toFahrenheit(celsius) {
     return roundToTenth((celsius * 9) / 5 + 32);
+}
+
+function getChicagoHour(epochMs) {
+    if (!Number.isFinite(epochMs)) {
+        return null;
+    }
+    const parts = getDateParts(chicagoDateTimeFormatter, new Date(epochMs));
+    const hour = Number(parts.hour);
+    return Number.isFinite(hour) ? hour : null;
+}
+
+function toSortedHourArray(hours) {
+    return [...hours].sort((a, b) => a - b);
+}
+
+async function getScheduledHoursForDate(ctx, { stationIcao, dateKey }) {
+    const comparison = await ctx.db
+        .query("dailyComparisons")
+        .withIndex("by_station_date", (q) =>
+            q.eq("stationIcao", stationIcao).eq("date", dateKey),
+        )
+        .first();
+
+    const peakHours = new Set();
+    const peakStartHour = getChicagoHour(comparison?.accuPeakStartUtc_latest);
+    const peakEndHour = getChicagoHour(comparison?.accuPeakEndUtc_latest);
+    if (peakStartHour !== null) {
+        peakHours.add(peakStartHour);
+    }
+    if (peakEndHour !== null) {
+        peakHours.add(peakEndHour);
+    }
+
+    if (peakHours.size > 0) {
+        return {
+            source: "forecast_peak_hours",
+            hours: peakHours,
+            peakStartUtc: comparison?.accuPeakStartUtc_latest ?? null,
+            peakEndUtc: comparison?.accuPeakEndUtc_latest ?? null,
+        };
+    }
+
+    return {
+        source: "default_midday_window",
+        hours: new Set(DEFAULT_SCHEDULED_LOCAL_HOURS),
+        peakStartUtc: comparison?.accuPeakStartUtc_latest ?? null,
+        peakEndUtc: comparison?.accuPeakEndUtc_latest ?? null,
+    };
 }
 
 async function enqueueCallForSlot(ctx, { stationIcao, dateKey, slotLocal }) {
@@ -110,7 +158,9 @@ export const getDayPhoneReadings = query({
 
 /**
  * Internal mutation invoked by cron at :49 and :52 UTC.
- * It checks Chicago local time and enqueues only 12:49/12:52 through 16:49/16:52 local.
+ * It checks Chicago local time and enqueues only at selected local peak hour(s).
+ * Peak hours come from today's dailyComparisons AccuWeather peak window fields,
+ * with a 12-16 fallback when peak fields are unavailable.
  */
 export const enqueueScheduledCall = internalMutation({
     args: {
@@ -122,17 +172,39 @@ export const enqueueScheduledCall = internalMutation({
         const hour = Number(parts.hour);
         const minute = Number(parts.minute);
         const dateKey = `${parts.year}-${parts.month}-${parts.day}`;
+        const schedule = await getScheduledHoursForDate(ctx, {
+            stationIcao: args.stationIcao,
+            dateKey,
+        });
+        const scheduledHours = schedule.hours;
 
-        if (!SCHEDULED_LOCAL_MINUTES.has(minute) || !SCHEDULED_LOCAL_HOURS.has(hour)) {
-            return { ok: false, reason: "outside_window", dateKey, hour, minute };
+        if (!SCHEDULED_LOCAL_MINUTES.has(minute) || !scheduledHours.has(hour)) {
+            return {
+                ok: false,
+                reason: "outside_window",
+                dateKey,
+                hour,
+                minute,
+                scheduleSource: schedule.source,
+                scheduledHours: toSortedHourArray(scheduledHours),
+                peakStartUtc: schedule.peakStartUtc,
+                peakEndUtc: schedule.peakEndUtc,
+            };
         }
 
         const slotLocal = `${dateKey} ${pad2(hour)}:${pad2(minute)}`;
-        return enqueueCallForSlot(ctx, {
+        const result = await enqueueCallForSlot(ctx, {
             stationIcao: args.stationIcao,
             dateKey,
             slotLocal,
         });
+        return {
+            ...result,
+            scheduleSource: schedule.source,
+            scheduledHours: toSortedHourArray(scheduledHours),
+            peakStartUtc: schedule.peakStartUtc,
+            peakEndUtc: schedule.peakEndUtc,
+        };
     },
 });
 

@@ -36,7 +36,8 @@ crons.cron(
 );
 
 // Runs every hour at minutes 49 and 52 UTC.
-// The function itself checks America/Chicago time and only runs 12:49/12:52 through 16:49/16:52 local.
+// The function itself checks America/Chicago time and enqueues only for peak-derived local hour(s),
+// with a 12..16 local fallback when forecast peak fields are unavailable.
 crons.cron(
     "kord_phone_calls_hourly_49_52",
     "49,52 * * * *",
