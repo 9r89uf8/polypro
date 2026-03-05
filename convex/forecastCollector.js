@@ -27,10 +27,17 @@ const GOOGLE_CURRENT_CONDITIONS_URL =
   `${GOOGLE_WEATHER_BASE_URL}/currentConditions:lookup`;
 const GOOGLE_DAILY_FORECAST_URL =
   `${GOOGLE_WEATHER_BASE_URL}/forecast/days:lookup`;
+const WEATHERCOM_TENDAY_BASE_URL = "https://weather.com/weather/tenday/l";
+const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
+const WEATHERCOM_LOCATION_POINT_URL = `${WEATHERCOM_API_BASE_URL}/v3/location/point`;
+const WEATHERCOM_DAILY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/daily/10day`;
+const WEATHERCOM_CURRENT_CONDITIONS_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/observations/current`;
+const WEATHERCOM_FALLBACK_API_KEY = "71f92ea9dd2f4790b92ea9dd2f779061";
 const DEFAULT_MICROSOFT_UNIT = "imperial";
 const DEFAULT_MICROSOFT_LANGUAGE = "en-US";
 const DEFAULT_ACCUWEATHER_LANGUAGE = "en-us";
 const DEFAULT_GOOGLE_LANGUAGE = "en";
+const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
 const ALLOWED_FORECAST_DURATIONS = new Set([1, 5, 10, 15, 25, 45]);
 const MAX_QUERY_LIMIT = 240;
 const RETRY_DELAYS_MS = [1000, 3000];
@@ -57,6 +64,11 @@ const GOOGLE_STATUS = {
   ERROR: "error",
 };
 
+const WEATHERCOM_STATUS = {
+  OK: "ok",
+  ERROR: "error",
+};
+
 const SOURCE_STATUS = {
   OK: "ok",
   ERROR: "error",
@@ -69,6 +81,8 @@ const STATIONS = {
     stationName: "Chicago O'Hare International Airport",
     lat: 41.9742,
     lon: -87.9073,
+    weatherComPlaceId:
+      "5473f6c4da1a6479bbeaa444d174bea30ba2252fbbb29ec330b761a58a55287b",
   },
 };
 
@@ -742,6 +756,379 @@ function normalizeGoogleCurrentTemp(payload, requestedUnit) {
   return null;
 }
 
+function normalizeWeatherComLanguage(language) {
+  return toNonEmptyString(language) ?? DEFAULT_WEATHERCOM_LANGUAGE;
+}
+
+function toWeatherComUnits(unit) {
+  return unit === "metric" ? "m" : "e";
+}
+
+function getWeatherComApiKey() {
+  return (
+    toNonEmptyString(process.env.WEATHERCOM_API_KEY) ??
+    WEATHERCOM_FALLBACK_API_KEY
+  );
+}
+
+function extractWeatherComPlaceId(rawUrl) {
+  const value = String(rawUrl ?? "");
+  const match = value.match(/\/weather\/tenday\/l\/([0-9a-f]{32,})/i);
+  return match ? match[1] : null;
+}
+
+function normalizeWeatherComTempPair(value, requestedUnit) {
+  const parsed = toFiniteNumber(value);
+  if (parsed === null) {
+    return {};
+  }
+  if (requestedUnit === "metric") {
+    const tempC = roundToTenth(parsed);
+    return { tempC, tempF: toFahrenheit(tempC) };
+  }
+  const tempF = roundToTenth(parsed);
+  return { tempF, tempC: toCelsius(tempF) };
+}
+
+function normalizeWeatherComForecastDays(payload, durationDays, requestedUnit) {
+  const fallbackStartDate = formatChicagoDate(Date.now());
+  const normalizedRows = [];
+  const maxRows = Math.min(durationDays, 10);
+  const daypartNode =
+    Array.isArray(payload?.daypart) && payload.daypart.length > 0
+      ? payload.daypart[0]
+      : null;
+  const daypartNarratives = Array.isArray(daypartNode?.narrative)
+    ? daypartNode.narrative
+    : [];
+  const rowCount = Math.max(
+    Array.isArray(payload?.validTimeLocal) ? payload.validTimeLocal.length : 0,
+    Array.isArray(payload?.validTimeUtc) ? payload.validTimeUtc.length : 0,
+    Array.isArray(payload?.temperatureMax) ? payload.temperatureMax.length : 0,
+    Array.isArray(payload?.calendarDayTemperatureMax)
+      ? payload.calendarDayTemperatureMax.length
+      : 0,
+    Array.isArray(payload?.temperatureMin) ? payload.temperatureMin.length : 0,
+    Array.isArray(payload?.calendarDayTemperatureMin)
+      ? payload.calendarDayTemperatureMin.length
+      : 0,
+    Array.isArray(payload?.narrative) ? payload.narrative.length : 0,
+  );
+
+  for (let i = 0; i < rowCount && normalizedRows.length < maxRows; i += 1) {
+    const validTimeLocal = payload?.validTimeLocal?.[i];
+    const validTimeUtc = toFiniteNumber(payload?.validTimeUtc?.[i]);
+    const date =
+      extractIsoDate(validTimeLocal) ??
+      (validTimeUtc !== null ? formatChicagoDate(validTimeUtc * 1000) : null) ??
+      addUtcDays(fallbackStartDate, i);
+    const maxValue =
+      payload?.temperatureMax?.[i] ?? payload?.calendarDayTemperatureMax?.[i];
+    const minValue =
+      payload?.temperatureMin?.[i] ?? payload?.calendarDayTemperatureMin?.[i];
+    const maximum = normalizeWeatherComTempPair(maxValue, requestedUnit);
+    const minimum = normalizeWeatherComTempPair(minValue, requestedUnit);
+    const dayPhrase =
+      toNonEmptyString(daypartNarratives[i * 2]) ??
+      toNonEmptyString(payload?.narrative?.[i]);
+    const nightPhrase = toNonEmptyString(daypartNarratives[i * 2 + 1]);
+
+    if (
+      !date &&
+      minimum.tempC === undefined &&
+      minimum.tempF === undefined &&
+      maximum.tempC === undefined &&
+      maximum.tempF === undefined &&
+      !dayPhrase &&
+      !nightPhrase
+    ) {
+      continue;
+    }
+
+    normalizedRows.push({
+      date,
+      ...(minimum.tempC !== undefined ? { minTempC: minimum.tempC } : {}),
+      ...(minimum.tempF !== undefined ? { minTempF: minimum.tempF } : {}),
+      ...(maximum.tempC !== undefined ? { maxTempC: maximum.tempC } : {}),
+      ...(maximum.tempF !== undefined ? { maxTempF: maximum.tempF } : {}),
+      ...(dayPhrase ? { dayPhrase } : {}),
+      ...(nightPhrase ? { nightPhrase } : {}),
+    });
+  }
+
+  return normalizedRows;
+}
+
+function normalizeWeatherComCurrentTemp(payload, requestedUnit) {
+  const normalized = normalizeWeatherComTempPair(payload?.temperature, requestedUnit);
+  if (Number.isFinite(normalized.tempC) && Number.isFinite(normalized.tempF)) {
+    return {
+      tempC: roundToTenth(normalized.tempC),
+      tempF: roundToTenth(normalized.tempF),
+    };
+  }
+  return null;
+}
+
+async function fetchWeatherComTendayPage(station) {
+  const placeId = toNonEmptyString(station.weatherComPlaceId);
+  if (!placeId) {
+    throw new Error(
+      `Missing Weather.com place id for station ${station.stationIcao}.`,
+    );
+  }
+
+  const url = `${WEATHERCOM_TENDAY_BASE_URL}/${placeId}`;
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: {
+      Accept: "text/html",
+      "Cache-Control": "no-cache",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Weather.com tenday page failed (${response.status}).`);
+  }
+
+  const html = await response.text();
+  const canonicalMatch = html.match(
+    /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i,
+  );
+  const canonicalUrl = canonicalMatch?.[1] ?? response.url ?? url;
+  const canonicalPlaceId =
+    extractWeatherComPlaceId(canonicalUrl) ??
+    extractWeatherComPlaceId(response.url) ??
+    placeId;
+
+  return {
+    canonicalUrl,
+    placeId: canonicalPlaceId,
+  };
+}
+
+async function fetchWeatherComLocationPoint({ placeId, language, apiKey }) {
+  const url = new URL(WEATHERCOM_LOCATION_POINT_URL);
+  url.searchParams.set("placeid", placeId);
+  url.searchParams.set("language", language);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("apiKey", apiKey);
+
+  const response = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Weather.com location point failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  const payload = await response.json();
+  const location = payload?.location ?? payload;
+  const lat = toFiniteNumber(location?.latitude);
+  const lon = toFiniteNumber(location?.longitude);
+  if (lat === null || lon === null) {
+    throw new Error("Weather.com location point response missing geocode.");
+  }
+
+  return {
+    lat,
+    lon,
+  };
+}
+
+async function fetchWeatherComDailyForecast({
+  geocode,
+  durationDays,
+  unit,
+  language,
+  apiKey,
+}) {
+  const url = new URL(WEATHERCOM_DAILY_FORECAST_URL);
+  url.searchParams.set("geocode", geocode);
+  url.searchParams.set("units", toWeatherComUnits(unit));
+  url.searchParams.set("language", language);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("apiKey", apiKey);
+
+  const response = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Weather.com daily forecast failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  const payload = await response.json();
+  const forecastDays = normalizeWeatherComForecastDays(payload, durationDays, unit);
+  const minimumRequiredRows = durationDays >= 5 ? 5 : 1;
+  if (forecastDays.length < minimumRequiredRows) {
+    throw new Error(
+      `Weather.com daily forecast returned ${forecastDays.length} usable rows.`,
+    );
+  }
+  return forecastDays;
+}
+
+async function fetchWeatherComCurrentReading({ geocode, unit, language, apiKey }) {
+  const url = new URL(WEATHERCOM_CURRENT_CONDITIONS_URL);
+  url.searchParams.set("geocode", geocode);
+  url.searchParams.set("units", toWeatherComUnits(unit));
+  url.searchParams.set("language", language);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("apiKey", apiKey);
+
+  const response = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Weather.com current conditions failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  const payload = await response.json();
+  const normalizedTemp = normalizeWeatherComCurrentTemp(payload, unit);
+  if (!normalizedTemp) {
+    throw new Error("Weather.com current conditions response missing temperature.");
+  }
+
+  const validTimeUtcSeconds = toFiniteNumber(payload?.validTimeUtc);
+  const observedAtUtc =
+    (validTimeUtcSeconds !== null ? Math.round(validTimeUtcSeconds * 1000) : null) ??
+    parseValidUtcEpoch(payload?.validTimeLocal) ??
+    Date.now();
+  const phrase =
+    toNonEmptyString(payload?.wxPhraseLong) ??
+    toNonEmptyString(payload?.wxPhraseMedium) ??
+    toNonEmptyString(payload?.wxPhraseShort) ??
+    null;
+
+  return {
+    source: "weathercom_current",
+    status: SOURCE_STATUS.OK,
+    observedAtUtc,
+    observedAtLocal: formatChicagoDateTime(observedAtUtc),
+    tempC: normalizedTemp.tempC,
+    tempF: normalizedTemp.tempF,
+    ...(phrase ? { raw: phrase } : {}),
+  };
+}
+
+async function fetchWeatherComForecastAndCurrent({
+  station,
+  durationDays,
+  unit,
+  language,
+}) {
+  const apiKey = getWeatherComApiKey();
+  if (!apiKey) {
+    const error = "Missing WEATHERCOM_API_KEY.";
+    return {
+      status: WEATHERCOM_STATUS.ERROR,
+      error,
+      forecastDays: [],
+      currentReading: makeSourceErrorReading("weathercom_current", error),
+    };
+  }
+
+  const weatherComLanguage = normalizeWeatherComLanguage(language);
+  let placeId = toNonEmptyString(station.weatherComPlaceId);
+  let crawlError = null;
+
+  try {
+    const page = await fetchWeatherComTendayPage(station);
+    placeId = page.placeId ?? placeId;
+  } catch (error) {
+    crawlError = formatErrorMessage(error);
+  }
+
+  if (!placeId) {
+    const error = crawlError ?? "Unable to resolve Weather.com place id.";
+    return {
+      status: WEATHERCOM_STATUS.ERROR,
+      error,
+      forecastDays: [],
+      currentReading: makeSourceErrorReading("weathercom_current", error),
+    };
+  }
+
+  let geocode = `${station.lat},${station.lon}`;
+  try {
+    const point = await fetchWeatherComLocationPoint({
+      placeId,
+      language: weatherComLanguage,
+      apiKey,
+    });
+    geocode = `${point.lat},${point.lon}`;
+  } catch (error) {
+    if (!crawlError) {
+      crawlError = formatErrorMessage(error);
+    }
+  }
+
+  const [forecastResult, currentReading] = await Promise.all([
+    (async () => {
+      try {
+        const forecastDays = await fetchWeatherComDailyForecast({
+          geocode,
+          durationDays,
+          unit,
+          language: weatherComLanguage,
+          apiKey,
+        });
+        return {
+          status: WEATHERCOM_STATUS.OK,
+          error: null,
+          forecastDays,
+        };
+      } catch (error) {
+        const providerError = formatErrorMessage(error);
+        return {
+          status: WEATHERCOM_STATUS.ERROR,
+          error:
+            crawlError && !providerError.includes(crawlError)
+              ? `${providerError}; crawl=${crawlError}`
+              : providerError,
+          forecastDays: [],
+        };
+      }
+    })(),
+    resolveSourceReading("weathercom_current", () =>
+      fetchWeatherComCurrentReading({
+        geocode,
+        unit,
+        language: weatherComLanguage,
+        apiKey,
+      }),
+    ),
+  ]);
+
+  return {
+    status: forecastResult.status,
+    error: forecastResult.error,
+    forecastDays: forecastResult.forecastDays,
+    currentReading,
+  };
+}
+
 function formatErrorMessage(error) {
   const message =
     error instanceof Error
@@ -1371,6 +1758,12 @@ export const insertSnapshot = internalMutationGeneric({
     ),
     googleError: v.optional(v.string()),
     googleForecastDays: v.array(microsoftForecastDayValidator),
+    weathercomStatus: v.union(
+      v.literal(WEATHERCOM_STATUS.OK),
+      v.literal(WEATHERCOM_STATUS.ERROR),
+    ),
+    weathercomError: v.optional(v.string()),
+    weathercomForecastDays: v.array(microsoftForecastDayValidator),
     actualReadings: v.array(sourceReadingValidator),
   },
   handler: async (ctx, args) => {
@@ -1416,6 +1809,7 @@ export const collectKordHourlySnapshot = actionGeneric({
       microsoftResult,
       accuweatherResult,
       googleResult,
+      weathercomResult,
       microsoftCurrentResult,
       noaaResult,
       iemResult,
@@ -1439,6 +1833,12 @@ export const collectKordHourlySnapshot = actionGeneric({
         unit,
         language,
       }),
+      fetchWeatherComForecastAndCurrent({
+        station,
+        durationDays,
+        unit,
+        language,
+      }),
       resolveSourceReading("microsoft_current", () =>
         fetchMicrosoftCurrentReading({ station, unit, language }),
       ),
@@ -1457,6 +1857,7 @@ export const collectKordHourlySnapshot = actionGeneric({
       microsoftCurrentResult,
       accuweatherResult.currentReading,
       googleResult.currentReading,
+      weathercomResult.currentReading,
       noaaResult,
       iemResult,
       openMeteoResult,
@@ -1468,11 +1869,12 @@ export const collectKordHourlySnapshot = actionGeneric({
       microsoftResult.status,
       accuweatherResult.status,
       googleResult.status,
+      weathercomResult.status,
     ].filter((providerStatus) => providerStatus === "error").length;
 
     let status = SNAPSHOT_STATUS.OK;
     if (
-      forecastProviderErrorCount === 3 &&
+      forecastProviderErrorCount === 4 &&
       successfulActualCount === 0
     ) {
       status = SNAPSHOT_STATUS.ERROR;
@@ -1506,6 +1908,9 @@ export const collectKordHourlySnapshot = actionGeneric({
       googleStatus: googleResult.status,
       ...(googleResult.error ? { googleError: googleResult.error } : {}),
       googleForecastDays: googleResult.forecastDays,
+      weathercomStatus: weathercomResult.status,
+      ...(weathercomResult.error ? { weathercomError: weathercomResult.error } : {}),
+      weathercomForecastDays: weathercomResult.forecastDays,
       actualReadings,
     });
 
@@ -1530,6 +1935,9 @@ export const collectKordHourlySnapshot = actionGeneric({
       googleStatus: googleResult.status,
       googleError: googleResult.error ?? null,
       googleForecastDayCount: googleResult.forecastDays.length,
+      weathercomStatus: weathercomResult.status,
+      weathercomError: weathercomResult.error ?? null,
+      weathercomForecastDayCount: weathercomResult.forecastDays.length,
       actualReadings,
     };
   },

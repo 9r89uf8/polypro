@@ -28,8 +28,8 @@ crons.cron(
 );
 
 // Runs every hour and stores a new KORD snapshot:
-// - Microsoft + AccuWeather + Google 5-day forecasts
-// - Current temperature from Microsoft, AccuWeather, Google, NOAA, IEM, and Open-Meteo
+// - Microsoft + AccuWeather + Google + Weather.com 5-day forecasts
+// - Current temperature from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo
 crons.cron(
     "kord_microsoft_5day_hourly",
     "0 * * * *",

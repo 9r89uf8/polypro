@@ -14,12 +14,14 @@ const SOURCE_ORDER = [
   "microsoft_current",
   "accuweather_current",
   "google_weather_current",
+  "weathercom_current",
 ];
 
 const SOURCE_LABELS = {
   microsoft_current: "Microsoft Current",
   accuweather_current: "AccuWeather Current",
   google_weather_current: "Google Weather Current",
+  weathercom_current: "Weather.com Current",
   noaa_latest_metar: "NOAA METAR",
   iem_asos_latest: "IEM ASOS",
   open_meteo_current: "Open-Meteo",
@@ -226,8 +228,8 @@ function ForecastSnapshotWorkspace() {
             KORD Forecast Snapshots
           </h1>
           <p className="mt-2 text-sm text-black/65">
-            Hourly stored snapshots with Microsoft, AccuWeather, and Google
-            5-day forecasts plus current temperatures from six sources.
+            Hourly stored snapshots with Microsoft, AccuWeather, Google, and
+            Weather.com 5-day forecasts plus current temperatures from seven sources.
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -267,7 +269,7 @@ function ForecastSnapshotWorkspace() {
               the top-of-hour cron run.
             </p>
           ) : (
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
               <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
                 <p className="text-xs uppercase tracking-wide text-black/60">Captured</p>
                 <p className="mt-1 text-sm font-semibold text-black">
@@ -338,6 +340,25 @@ function ForecastSnapshotWorkspace() {
                 </p>
               </div>
               <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                <p className="text-xs uppercase tracking-wide text-black/60">Weather.com</p>
+                <p className="mt-1">
+                  <span
+                    className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                      latestSnapshot.weathercomStatus === "ok"
+                        ? "ok"
+                        : latestSnapshot.weathercomStatus === "error"
+                          ? "error"
+                          : "",
+                    )}`}
+                  >
+                    {latestSnapshot.weathercomStatus ?? "missing"}
+                  </span>
+                </p>
+                <p className="mt-1 text-xs text-black/60">
+                  {latestSnapshot.weathercomForecastDays?.length ?? 0} forecast day rows
+                </p>
+              </div>
+              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
                 <p className="text-xs uppercase tracking-wide text-black/60">Actual Sources</p>
                 <p className="mt-1 text-sm font-semibold text-black">
                   {latestSourceStats.okCount}/{latestSourceStats.total} ok
@@ -361,6 +382,11 @@ function ForecastSnapshotWorkspace() {
           {latestSnapshot?.googleError ? (
             <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
               Google error: {latestSnapshot.googleError}
+            </p>
+          ) : null}
+          {latestSnapshot?.weathercomError ? (
+            <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+              Weather.com error: {latestSnapshot.weathercomError}
             </p>
           ) : null}
         </section>
@@ -588,6 +614,40 @@ function ForecastSnapshotWorkspace() {
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <h2 className="text-lg font-semibold text-foreground">Weather.com 5-Day Forecast</h2>
+          <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+            <table className="min-w-full text-sm">
+              <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                <tr>
+                  <th className="px-3 py-2">Date</th>
+                  <th className="px-3 py-2">Max F</th>
+                  <th className="px-3 py-2">Day Phrase</th>
+                  <th className="px-3 py-2">Night Phrase</th>
+                </tr>
+              </thead>
+              <tbody>
+                {!latestSnapshot?.weathercomForecastDays?.length ? (
+                  <tr>
+                    <td className="px-3 py-3 text-black/60" colSpan={4}>
+                      No forecast rows in latest snapshot.
+                    </td>
+                  </tr>
+                ) : (
+                  latestSnapshot.weathercomForecastDays.map((day) => (
+                    <tr key={day.date} className="border-t border-black/10">
+                      <td className="px-3 py-2 font-semibold text-black">{day.date}</td>
+                      <td className="px-3 py-2 text-black/75">{formatTemp(day.maxTempF, "F")}</td>
+                      <td className="px-3 py-2 text-black/75">{day.dayPhrase || "—"}</td>
+                      <td className="px-3 py-2 text-black/75">{day.nightPhrase || "—"}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
           <h2 className="text-lg font-semibold text-foreground">Recent Hourly History</h2>
           <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
             <table className="min-w-full text-sm">
@@ -598,9 +658,11 @@ function ForecastSnapshotWorkspace() {
                   <th className="px-3 py-2">Microsoft</th>
                   <th className="px-3 py-2">AccuWeather</th>
                   <th className="px-3 py-2">Google</th>
+                  <th className="px-3 py-2">Weather.com</th>
                   <th className="px-3 py-2">MS Current F</th>
                   <th className="px-3 py-2">Accu Current F</th>
                   <th className="px-3 py-2">Google Current F</th>
+                  <th className="px-3 py-2">Weather.com Current F</th>
                   <th className="px-3 py-2">NOAA F</th>
                   <th className="px-3 py-2">IEM F</th>
                   <th className="px-3 py-2">Open-Meteo F</th>
@@ -609,7 +671,7 @@ function ForecastSnapshotWorkspace() {
               <tbody>
                 {!snapshots.length ? (
                   <tr>
-                    <td className="px-3 py-3 text-black/60" colSpan={11}>
+                    <td className="px-3 py-3 text-black/60" colSpan={13}>
                       No snapshot history yet.
                     </td>
                   </tr>
@@ -626,6 +688,10 @@ function ForecastSnapshotWorkspace() {
                     const googleCurrent = getReadingBySource(
                       snapshot,
                       "google_weather_current",
+                    );
+                    const weatherComCurrent = getReadingBySource(
+                      snapshot,
+                      "weathercom_current",
                     );
                     const noaa = getReadingBySource(snapshot, "noaa_latest_metar");
                     const iem = getReadingBySource(snapshot, "iem_asos_latest");
@@ -673,6 +739,19 @@ function ForecastSnapshotWorkspace() {
                             {snapshot.googleStatus ?? "missing"}
                           </span>
                         </td>
+                        <td className="px-3 py-2">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                              snapshot.weathercomStatus === "ok"
+                                ? "ok"
+                                : snapshot.weathercomStatus === "error"
+                                  ? "error"
+                                  : "",
+                            )}`}
+                          >
+                            {snapshot.weathercomStatus ?? "missing"}
+                          </span>
+                        </td>
                         <td className="px-3 py-2 text-black/75">
                           {formatTemp(microsoftCurrent?.tempF, "F")}
                         </td>
@@ -681,6 +760,9 @@ function ForecastSnapshotWorkspace() {
                         </td>
                         <td className="px-3 py-2 text-black/75">
                           {formatTemp(googleCurrent?.tempF, "F")}
+                        </td>
+                        <td className="px-3 py-2 text-black/75">
+                          {formatTemp(weatherComCurrent?.tempF, "F")}
                         </td>
                         <td className="px-3 py-2 text-black/75">
                           {formatTemp(noaa?.tempF, "F")}

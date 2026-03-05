@@ -5,8 +5,8 @@ This document covers how O'Hare forecast and current-temperature data flows work
 ## Purpose
 
 - Store hourly forecast snapshots for KORD.
-- Show the latest Microsoft, AccuWeather, and Google 5-day forecasts on one page.
-- Show current temperatures from Microsoft, AccuWeather, Google, NOAA, IEM, and Open-Meteo.
+- Show the latest Microsoft, AccuWeather, Google, and Weather.com 5-day forecasts on one page.
+- Show current temperatures from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo.
 - Show NOAA official max temperature for Chicago today using the same official-max path used on `/kord/day/[date]`.
 
 ## Route and UI
@@ -17,13 +17,14 @@ This document covers how O'Hare forecast and current-temperature data flows work
   - `forecastCollector:collectKordHourlySnapshot` for manual "Collect Now".
   - `weather:getDayObservations` (today's date, Chicago timezone) for NOAA official max table.
 - Sections:
-  - `Latest Snapshot`: capture time, overall status, Microsoft status, AccuWeather status, Google status, source health counts.
-  - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google current readings.
+  - `Latest Snapshot`: capture time, overall status, Microsoft status, AccuWeather status, Google status, Weather.com status, source health counts.
+  - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google + Weather.com current readings.
   - `Latest NOAA METAR Max (Official Max Today)`: `metarMaxF` and related official fields from `dailyComparisons`.
   - `Microsoft 5-Day Forecast`: latest `microsoftForecastDays` (displayed columns: date, max F, day phrase, night phrase).
   - `AccuWeather 5-Day Forecast`: latest `accuweatherForecastDays` (displayed columns: date, max F, day phrase, night phrase).
   - `Google 5-Day Forecast`: latest `googleForecastDays` (displayed columns: date, max F, day phrase, night phrase).
-  - `Recent Hourly History`: per-snapshot status + provider statuses + current readings for Microsoft/AccuWeather/Google/NOAA/IEM/Open-Meteo.
+  - `Weather.com 5-Day Forecast`: latest `weathercomForecastDays` (displayed columns: date, max F, day phrase, night phrase).
+  - `Recent Hourly History`: per-snapshot status + provider statuses + current readings for Microsoft/AccuWeather/Google/Weather.com/NOAA/IEM/Open-Meteo.
 
 All displayed local timestamps are in America/Chicago and shown in 12-hour AM/PM format.
 
@@ -49,6 +50,14 @@ Defined in `convex/forecastCollector.js`.
       - `https://weather.googleapis.com/v1/currentConditions:lookup`
     - Google daily forecast:
       - `https://weather.googleapis.com/v1/forecast/days:lookup`
+    - Weather.com tenday page crawl (place-id source):
+      - `https://weather.com/weather/tenday/l/{placeId}`
+    - Weather.com location point:
+      - `https://api.weather.com/v3/location/point`
+    - Weather.com daily forecast:
+      - `https://api.weather.com/v3/wx/forecast/daily/10day`
+    - Weather.com current conditions:
+      - `https://api.weather.com/v3/wx/observations/current`
     - NOAA latest METAR:
       - `https://tgftp.nws.noaa.gov/data/observations/metar/stations/KORD.TXT`
     - IEM ASOS latest recent rows:
@@ -62,9 +71,9 @@ Defined in `convex/forecastCollector.js`.
     - Optional env override supports fixed keys (`ACCUWEATHER_LOCATION_KEY` or station-specific `ACCUWEATHER_LOCATION_KEY_KORD`).
   - Writes one snapshot row to `kordForecastSnapshots`.
   - Computes row status:
-    - `ok`: Microsoft + AccuWeather + Google forecasts succeeded and all current sources succeeded.
+    - `ok`: Microsoft + AccuWeather + Google + Weather.com forecasts succeeded and all current sources succeeded.
     - `partial`: any forecast provider failed or any current source failed.
-    - `error`: all three forecast providers failed and all current sources failed.
+    - `error`: all four forecast providers failed and all current sources failed.
 
 - Query: `forecastCollector:getRecentSnapshots`
   - Returns latest-first rows for a station.
@@ -102,14 +111,17 @@ Table: `kordForecastSnapshots` (`convex/schema.js`)
   - `accuweatherError` (optional)
   - `googleStatus` (optional `ok` | `error`)
   - `googleError` (optional)
+  - `weathercomStatus` (optional `ok` | `error`)
+  - `weathercomError` (optional)
 - Forecast payload:
   - `microsoftForecastDays[]` (date, min/max temps, phrases)
   - `accuweatherForecastDays[]` (same normalized shape, optional for backward compatibility)
   - `accuweatherLocationKey` (optional)
   - `googleForecastDays[]` (same normalized shape, optional for backward compatibility)
+  - `weathercomForecastDays[]` (same normalized shape, optional for backward compatibility)
 - Current payload:
   - `actualReadings[]` (source, status, observed time, tempF/tempC, raw/error)
-  - Includes `microsoft_current`, `accuweather_current`, `google_weather_current`, `noaa_latest_metar`, `iem_asos_latest`, `open_meteo_current`.
+  - Includes `microsoft_current`, `accuweather_current`, `google_weather_current`, `weathercom_current`, `noaa_latest_metar`, `iem_asos_latest`, `open_meteo_current`.
 - Index:
   - `by_station_capturedAt` (`stationIcao`, `capturedAt`)
 
@@ -142,6 +154,11 @@ Required for AccuWeather calls:
 Required for Google calls:
 
 - `GOOGLE_WEATHER_API_KEY`
+
+Optional override for Weather.com internal API key used by the page-crawl bridge:
+
+- `WEATHERCOM_API_KEY`
+  - If unset, collector falls back to an embedded Weather.com public client key observed on the site.
 
 Optional for AccuWeather location-key pinning:
 

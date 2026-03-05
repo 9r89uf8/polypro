@@ -152,6 +152,21 @@ export default defineSchema({
         }),
       ),
     ),
+    weathercomStatus: v.optional(v.union(v.literal("ok"), v.literal("error"))),
+    weathercomError: v.optional(v.string()),
+    weathercomForecastDays: v.optional(
+      v.array(
+        v.object({
+          date: v.string(),
+          minTempC: v.optional(v.number()),
+          minTempF: v.optional(v.number()),
+          maxTempC: v.optional(v.number()),
+          maxTempF: v.optional(v.number()),
+          dayPhrase: v.optional(v.string()),
+          nightPhrase: v.optional(v.string()),
+        }),
+      ),
+    ),
     actualReadings: v.array(
       v.object({
         source: v.string(),
