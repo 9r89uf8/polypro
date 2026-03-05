@@ -9,10 +9,14 @@
 - KORD phone-call ingest and transcript parsing:
   - `docs/kord-phone-calls.md`
   - Summary: documents `/kord/today` phone UI, cron/manual enqueue flow, Twilio webhook processing, Whisper transcription temperature parsing, and `kordPhoneCalls` data model.
+- KORD forecast snapshots and current temperature sources:
+  - `docs/kord-forecast-snapshots.md`
+  - Summary: documents `/kord/forecast-snapshots` UI, hourly collector in `convex/forecastCollector.js`, Microsoft+source ingest details, NOAA official-max table wiring, and provider-extension plan.
 
 When editing `/kord/month` or `/kord/day/[date]`, update `docs/kord-pages.md` in the same change.
 When editing live METAR ingest functions in `convex/weather.js` (`pollLatestNoaaMetar`, `backfillTodayOfficialFromIem`, `upsertOfficialObservation`) or `/kord/day/[date]` live-mode polling behavior, update `docs/kord-live-today.md` in the same change.
 When editing `/kord/today`, `convex/kordPhone.js`, `convex/kordPhoneNode.js`, `convex/http.js`, `convex/crons.js`, or `kordPhoneCalls` schema fields/indexes, update `docs/kord-phone-calls.md` in the same change.
+When editing `/kord/forecast-snapshots`, `convex/forecastCollector.js`, or `kordForecastSnapshots` schema fields/indexes, update `docs/kord-forecast-snapshots.md` in the same change.
 
 
 # important

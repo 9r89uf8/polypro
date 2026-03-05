@@ -31,11 +31,11 @@ polypro2/
 │   ├── notes/
 │   │   └── page.js
 │   └── kord/
-│       ├── forecast/
-│       │   └── page.js
 │       ├── month/
 │       │   └── page.js
 │       ├── metar-today/
+│       │   └── page.js
+│       ├── forecast-snapshots/
 │       │   └── page.js
 │       ├── today/
 │       │   └── page.js
@@ -45,7 +45,7 @@ polypro2/
 ├── convex/
 │   ├── schema.js
 │   ├── weather.js
-│   ├── forecast.js
+│   ├── forecastCollector.js
 │   ├── notes.js
 │   ├── kordPhone.js
 │   ├── kordPhoneNode.js
@@ -59,10 +59,10 @@ polypro2/
 │       └── dataModel.d.ts
 ├── docs/
 │   ├── project-structure.md
-│   ├── kord-forecast.md
 │   ├── kord-pages.md
 │   ├── kord-live-today.md
-│   └── kord-phone-calls.md
+│   ├── kord-phone-calls.md
+│   └── kord-forecast-snapshots.md
 └── public/
     ├── file.svg
     ├── globe.svg
@@ -77,8 +77,6 @@ polypro2/
   - Home landing page with navigation links.
 - `/notes` -> `app/notes/page.js`
   - Notes + image uploads + date filtering.
-- `/kord/forecast` -> `app/kord/forecast/page.js`
-  - 3-day regional AccuWeather forecast map + O'Hare METAR verification card.
 - `/kord/month` -> `app/kord/month/page.js`
   - Monthly manual-vs-METAR comparison workflow.
 - `/kord/day/[date]` -> `app/kord/day/[date]/page.js`
@@ -87,13 +85,15 @@ polypro2/
   - Server redirect to `/kord/day/{chicagoToday}`.
 - `/kord/today` -> `app/kord/today/page.js`
   - Phone-call temperature workflow for Chicago today.
+- `/kord/forecast-snapshots` -> `app/kord/forecast-snapshots/page.js`
+  - Hourly KORD forecast snapshot dashboard (Microsoft 5-day + current sources + NOAA official max).
 
 ## Convex Backend Map
 
 - `convex/weather.js`
   - METAR ingestion, month compute, day/month queries, manual value upsert.
-- `convex/forecast.js`
-  - AccuWeather 5-location refresh, snapshot cache/history, derived 3-day summaries, O'Hare forecast-vs-METAR fields.
+- `convex/forecastCollector.js`
+  - Hourly KORD snapshot collector for Microsoft forecast/current and supplemental current sources.
 - `convex/notes.js`
   - Notes CRUD-style operations (create/list) + upload URL generation.
 - `convex/kordPhone.js`
@@ -113,20 +113,12 @@ polypro2/
   - Per station/month compute status for official and all modes.
 - `dailyComparisons`
   - Daily manual max + official max + all max + deltas.
-- `forecastSnapshots`
-  - Raw AccuWeather endpoint snapshot history and freshness metadata.
-- `forecastDailySummaries`
-  - Per-location/per-day derived forecast rows used by `/kord/forecast`.
-- `forecastCurrentConditions`
-  - Latest per-location current condition snapshot (now temp/realfeel/text/timestamps).
-- `forecastObservedDailyHighs`
-  - Per-location daily max temperature from AccuWeather current-conditions snapshots.
-- `forecastRuns`
-  - Forecast refresh run status and counters.
 - `metarObservations`
   - Per observation rows for chart/raw table (`official` and `all` modes).
 - `kordPhoneCalls`
   - Call lifecycle, transcript, parsed temperature, and Twilio metadata.
+- `kordForecastSnapshots`
+  - Hourly snapshot rows for forecast/current source collection.
 
 ## User Flow (ASCII)
 

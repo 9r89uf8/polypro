@@ -63,62 +63,110 @@ export default defineSchema({
     metarAllMaxSource: v.optional(v.string()),
     deltaAllC: v.optional(v.number()),
     deltaAllF: v.optional(v.number()),
-    accuHighF_latest: v.optional(v.number()),
-    accuLowF_latest: v.optional(v.number()),
-    accuPeakStartUtc_latest: v.optional(v.number()),
-    accuPeakEndUtc_latest: v.optional(v.number()),
-    accuPeakStartLocal_latest: v.optional(v.string()),
-    accuPeakEndLocal_latest: v.optional(v.string()),
-    accuPeakDurationMinutes_latest: v.optional(v.number()),
-    accuSnapshotAtUtc_latest: v.optional(v.number()),
-    errRawF: v.optional(v.number()),
-    errRoundedF: v.optional(v.number()),
-    accuObservedMaxC: v.optional(v.number()),
-    accuObservedMaxF: v.optional(v.number()),
-    accuObservedMaxAtUtc: v.optional(v.number()),
-    accuObservedMaxAtLocal: v.optional(v.string()),
-    accuObservedObsCount: v.optional(v.number()),
-    errObservedRawF: v.optional(v.number()),
-    errObservedRoundedF: v.optional(v.number()),
-    peakHit: v.optional(v.boolean()),
-    peakTimingDeltaMinutes: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_station_date", ["stationIcao", "date"]),
 
+  kordPhoneCalls: defineTable({
+    stationIcao: v.string(),
+    date: v.string(), // YYYY-MM-DD (Chicago)
+    slotLocal: v.string(), // YYYY-MM-DD HH:MM (Chicago) scheduled slot or manual trigger time
+    tsUtc: v.optional(v.number()), // recording start (ms epoch)
+    tsLocal: v.optional(v.string()), // YYYY-MM-DD HH:MM (Chicago), derived from tsUtc
+    callSid: v.optional(v.string()),
+    recordingSid: v.optional(v.string()),
+    recordingUrl: v.optional(v.string()),
+    recordingDuration: v.optional(v.number()),
+    transcript: v.optional(v.string()),
+    tempC: v.optional(v.number()),
+    tempF: v.optional(v.number()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("calling"),
+      v.literal("recorded"),
+      v.literal("transcribed"),
+      v.literal("parsed"),
+      v.literal("error"),
+    ),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_station_date", ["stationIcao", "date"])
+    .index("by_station_slot", ["stationIcao", "slotLocal"])
+    .index("by_callSid", ["callSid"]),
 
-    kordPhoneCalls: defineTable({
-        stationIcao: v.string(),
-        date: v.string(), // YYYY-MM-DD (Chicago)
-        slotLocal: v.string(), // YYYY-MM-DD HH:MM (Chicago) scheduled slot or manual trigger time
-        tsUtc: v.optional(v.number()), // recording start (ms epoch)
-        tsLocal: v.optional(v.string()), // YYYY-MM-DD HH:MM (Chicago), derived from tsUtc
-
-        callSid: v.optional(v.string()),
-        recordingSid: v.optional(v.string()),
-        recordingUrl: v.optional(v.string()),
-        recordingDuration: v.optional(v.number()),
-
-        transcript: v.optional(v.string()),
-
+  kordForecastSnapshots: defineTable({
+    stationIcao: v.string(),
+    stationName: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    durationDays: v.number(),
+    unit: v.union(v.literal("imperial"), v.literal("metric")),
+    language: v.string(),
+    status: v.union(
+      v.literal("ok"),
+      v.literal("partial"),
+      v.literal("error"),
+    ),
+    microsoftStatus: v.union(v.literal("ok"), v.literal("error")),
+    microsoftError: v.optional(v.string()),
+    microsoftForecastDays: v.array(
+      v.object({
+        date: v.string(),
+        minTempC: v.optional(v.number()),
+        minTempF: v.optional(v.number()),
+        maxTempC: v.optional(v.number()),
+        maxTempF: v.optional(v.number()),
+        dayPhrase: v.optional(v.string()),
+        nightPhrase: v.optional(v.string()),
+      }),
+    ),
+    accuweatherStatus: v.optional(v.union(v.literal("ok"), v.literal("error"))),
+    accuweatherError: v.optional(v.string()),
+    accuweatherLocationKey: v.optional(v.string()),
+    accuweatherForecastDays: v.optional(
+      v.array(
+        v.object({
+          date: v.string(),
+          minTempC: v.optional(v.number()),
+          minTempF: v.optional(v.number()),
+          maxTempC: v.optional(v.number()),
+          maxTempF: v.optional(v.number()),
+          dayPhrase: v.optional(v.string()),
+          nightPhrase: v.optional(v.string()),
+        }),
+      ),
+    ),
+    googleStatus: v.optional(v.union(v.literal("ok"), v.literal("error"))),
+    googleError: v.optional(v.string()),
+    googleForecastDays: v.optional(
+      v.array(
+        v.object({
+          date: v.string(),
+          minTempC: v.optional(v.number()),
+          minTempF: v.optional(v.number()),
+          maxTempC: v.optional(v.number()),
+          maxTempF: v.optional(v.number()),
+          dayPhrase: v.optional(v.string()),
+          nightPhrase: v.optional(v.string()),
+        }),
+      ),
+    ),
+    actualReadings: v.array(
+      v.object({
+        source: v.string(),
+        status: v.union(v.literal("ok"), v.literal("error")),
+        observedAtUtc: v.optional(v.number()),
+        observedAtLocal: v.optional(v.string()),
         tempC: v.optional(v.number()),
         tempF: v.optional(v.number()),
-
-        status: v.union(
-            v.literal("queued"),
-            v.literal("calling"),
-            v.literal("recorded"),
-            v.literal("transcribed"),
-            v.literal("parsed"),
-            v.literal("error"),
-        ),
+        raw: v.optional(v.string()),
         error: v.optional(v.string()),
-
-        createdAt: v.number(),
-        updatedAt: v.number(),
-    })
-        .index("by_station_date", ["stationIcao", "date"])
-        .index("by_station_slot", ["stationIcao", "slotLocal"])
-        .index("by_callSid", ["callSid"]),
+      }),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_station_capturedAt", ["stationIcao", "capturedAt"]),
 
   metarObservations: defineTable({
     stationIcao: v.string(),
@@ -133,191 +181,4 @@ export default defineSchema({
     noaaFirstSeenAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_station_mode_date_ts", ["stationIcao", "mode", "date", "tsUtc"]),
-
-  forecastSnapshots: defineTable({
-    locationKey: v.string(),
-    endpointType: v.union(
-      v.literal("location"),
-      v.literal("currentconditions"),
-      v.literal("daily5day"),
-      v.literal("hourly1hour"),
-      v.literal("hourly72hour"),
-      v.literal("hourly120hour"),
-    ),
-    fetchedAtMs: v.number(),
-    headerDateMs: v.optional(v.number()),
-    expiresAtMs: v.optional(v.number()),
-    payloadHash: v.string(),
-    payloadJson: v.string(),
-    updatedAt: v.number(),
-  })
-    .index("by_location_endpoint_fetched", [
-      "locationKey",
-      "endpointType",
-      "fetchedAtMs",
-    ])
-    .index("by_fetchedAt", ["fetchedAtMs"]),
-
-  forecastDailySummaries: defineTable({
-    locationId: v.id("locations"),
-    locationKey: v.string(),
-    locationName: v.string(),
-    timeZone: v.string(),
-    localDateISO: v.string(),
-    dayIndex: v.number(),
-    forecastHighF: v.number(),
-    forecastLowF: v.optional(v.number()),
-    peakMethod: v.string(),
-    nearPeakThresholdF: v.optional(v.number()),
-    peakStartEpochMs: v.optional(v.number()),
-    peakEndEpochMs: v.optional(v.number()),
-    peakDurationMinutes: v.optional(v.number()),
-    peakStartLocal: v.optional(v.string()),
-    peakEndLocal: v.optional(v.string()),
-    snapshotFetchedAtMs: v.number(),
-    hourlyPoints: v.array(
-      v.object({
-        epochMs: v.number(),
-        tempF: v.number(),
-      }),
-    ),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_location", ["locationKey"])
-    .index("by_location_date", ["locationKey", "localDateISO"])
-    .index("by_date", ["localDateISO"]),
-
-  forecastRuns: defineTable({
-    runKey: v.string(),
-    lastStatus: v.union(
-      v.literal("idle"),
-      v.literal("running"),
-      v.literal("ok"),
-      v.literal("error"),
-    ),
-    lastStartedAt: v.optional(v.number()),
-    lastFinishedAt: v.optional(v.number()),
-    lastSuccessAt: v.optional(v.number()),
-    lastError: v.optional(v.string()),
-    locationsProcessed: v.optional(v.number()),
-    endpointsFetched: v.optional(v.number()),
-    endpointsSkipped: v.optional(v.number()),
-    updatedAt: v.number(),
-  }).index("by_runKey", ["runKey"]),
-
-  forecastCurrentConditions: defineTable({
-    locationId: v.id("locations"),
-    locationKey: v.string(),
-    observedAtEpochMs: v.optional(v.number()),
-    observedAtLocal: v.optional(v.string()),
-    tempF: v.optional(v.number()),
-    tempC: v.optional(v.number()),
-    realFeelF: v.optional(v.number()),
-    realFeelC: v.optional(v.number()),
-    weatherText: v.optional(v.string()),
-    weatherIcon: v.optional(v.number()),
-    isDayTime: v.optional(v.boolean()),
-    hasPrecipitation: v.optional(v.boolean()),
-    precipitationType: v.optional(v.string()),
-    mobileLink: v.optional(v.string()),
-    link: v.optional(v.string()),
-    sourceFetchedAtMs: v.number(),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  }).index("by_location", ["locationKey"]),
-
-  forecastObservedDailyHighs: defineTable({
-    locationId: v.id("locations"),
-    locationKey: v.string(),
-    localDateISO: v.string(),
-    maxTempF: v.number(),
-    maxTempC: v.optional(v.number()),
-    maxObservedAtEpochMs: v.number(),
-    maxObservedAtLocal: v.string(),
-    sampleCount: v.number(),
-    lastObservedAtEpochMs: v.number(),
-    lastObservedAtLocal: v.string(),
-    sourceFetchedAtMs: v.number(),
-    createdAt: v.number(),
-    updatedAt: v.number(),
-  })
-    .index("by_location", ["locationKey"])
-    .index("by_location_date", ["locationKey", "localDateISO"]),
-
-
-    locations: defineTable({
-        name: v.string(),                 // "Chicago O'Hare Intl Airport"
-        timeZone: v.string(),             // "America/Chicago"
-        lat: v.number(),
-        lon: v.number(),
-        stationIcao: v.optional(v.string()),
-        accuweatherLocationKey: v.string(),
-        accuweatherType: v.optional(v.string()),
-        accuweatherEnglishName: v.optional(v.string()),
-        active: v.boolean(),
-    })
-        .index("by_accuweatherKey", ["accuweatherLocationKey"])
-        .index("by_active", ["active"]),
-
-    observations: defineTable({
-        locationId: v.id("locations"),
-        epochMs: v.number(),
-        epochHourBucketMs: v.number(),    // used for idempotency (one obs per hour)
-        localDateISO: v.string(),         // YYYY-MM-DD in location tz
-        localHour: v.number(),            // 0-23 in location tz
-        tempF: v.number(),
-    })
-        .index("by_location_date", ["locationId", "localDateISO"])
-        .index("by_location_epochHour", ["locationId", "epochHourBucketMs"]),
-
-    highPredictions: defineTable({
-        locationId: v.id("locations"),
-        hoursCoveredForTarget: v.number(),
-
-        leadHoursToTargetStart: v.optional(v.number()),
-        fetchedAtMs: v.number(),
-        fetchedHourBucketMs: v.number(),  // idempotency: one snapshot per hour
-        fetchedLocalDateISO: v.string(),
-        fetchedLocalHour: v.number(),
-
-        targetDateISO: v.string(),        // day we are predicting
-        leadDays: v.number(),             // typically 0..3 from 72h forecast coverage
-
-        predictedHighF: v.number(),
-        predictedHighTimeEpochMs: v.number(),
-        predictedHighCountHours: v.optional(v.number()),
-        predictedHighStreakHours: v.optional(v.number()),
-        predictedHighStreakStartEpochMs: v.optional(v.number()),
-        predictedHighStreakEndEpochMs: v.optional(v.number()),
-
-        // Filled in at local midnight AFTER the target day ends
-        actualHighF: v.optional(v.number()),
-        actualHighTimeEpochMs: v.optional(v.number()),
-        absErrorF: v.optional(v.number()),
-        leadHoursToActualHigh: v.optional(v.number()),
-
-        // Always present, 0 until finalized; helps range queries
-        finalizedAtMs: v.number(),
-    })
-        .index("by_location_target", ["locationId", "targetDateISO"])
-        .index("by_location_target_lead_bucket", [
-            "locationId",
-            "targetDateISO",
-            "leadDays",
-            "fetchedHourBucketMs",
-        ])
-        .index("by_location_finalizedAt", ["locationId", "finalizedAtMs"])
-    .index("by_location_lead_target_bucket", [
-        "locationId",
-        "leadDays",
-        "targetDateISO",
-        "fetchedHourBucketMs",
-    ])
-        .index("by_location_target_bucket", [
-            "locationId",
-            "targetDateISO",
-            "fetchedHourBucketMs",
-        ]),
-
 });

@@ -34,13 +34,9 @@ Defined in `convex/crons.js` and `convex/kordPhone.js`.
 - Cron trigger:
   - Cron expression: `49,52 * * * *` (UTC)
   - Calls `internal.kordPhone.enqueueScheduledCall` with `stationIcao: "KORD"`
-  - Internal mutation checks Chicago local time and enqueues only on `:49`/`:52` for selected local peak hour(s).
-  - Peak hour source:
-    - Reads `dailyComparisons` for `(stationIcao, date)`.
-    - Uses `accuPeakStartUtc_latest` and `accuPeakEndUtc_latest` (fed by AccuWeather summary logic used on `/kord/forecast`).
-    - Converts those UTC timestamps to Chicago local hours, and enqueues only in those hour(s).
-  - Fallback behavior:
-    - If no peak timestamps are available, uses legacy midday window hours `12..16` local.
+  - Internal mutation checks Chicago local time and enqueues only on `:49`/`:52` within fixed local hours `12..16`.
+  - No dependency on forecast-derived fields in `dailyComparisons`.
+  - Note: `convex/crons.js` also includes non-phone jobs (for METAR ingest and hourly Microsoft forecast snapshots). Those do not affect phone enqueue rules.
 - Manual trigger:
   - Public mutation `kordPhone:enqueueManualCall`
   - Uses current Chicago local timestamp as `slotLocal`.

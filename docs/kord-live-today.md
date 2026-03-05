@@ -85,6 +85,7 @@ Defined in `convex/weather.js`:
     - `metarObsCount`
     - official max fields (`metarMaxC/F`, max time/raw/source)
     - official deltas (`deltaC`, `deltaF`) when manual values exist.
+    - Does not update any forecast/AccuWeather comparison fields.
 
 - `weather:upsertAllObservation` (internal mutation)
   - Dedupe key: `(stationIcao, mode=all, date, tsUtc)`.

@@ -9,7 +9,7 @@
  */
 
 import type * as crons from "../crons.js";
-import type * as forecast from "../forecast.js";
+import type * as forecastCollector from "../forecastCollector.js";
 import type * as http from "../http.js";
 import type * as kordPhone from "../kordPhone.js";
 import type * as kordPhoneNode from "../kordPhoneNode.js";
@@ -25,7 +25,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
-  forecast: typeof forecast;
+  forecastCollector: typeof forecastCollector;
   http: typeof http;
   kordPhone: typeof kordPhone;
   kordPhoneNode: typeof kordPhoneNode;

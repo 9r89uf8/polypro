@@ -15,16 +15,10 @@ export default function Home() {
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-black/70">
           Compare monthly manual vs METAR highs, open today&apos;s live METAR day
-          chart, run KORD phone-call temperature captures, view 3-day regional
-          forecasts with O&apos;Hare verification, and keep notes in one place.
+          chart, track hourly 5-day forecast snapshots, run KORD phone-call
+          temperature captures, and keep notes in one place.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
-          <Link
-            href="/kord/forecast"
-            className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-900 transition hover:-translate-y-0.5 hover:border-amber-500"
-          >
-            Open KORD Forecast Map
-          </Link>
           <Link
             href="/kord/month"
             className="inline-flex items-center rounded-full border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-black"
@@ -42,6 +36,12 @@ export default function Home() {
             className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-5 py-2.5 text-sm font-semibold text-emerald-800 transition hover:-translate-y-0.5 hover:border-emerald-400"
           >
             Open KORD Phone Calls Today
+          </Link>
+          <Link
+            href="/kord/forecast-snapshots"
+            className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-5 py-2.5 text-sm font-semibold text-amber-900 transition hover:-translate-y-0.5 hover:border-amber-400"
+          >
+            Open Forecast Snapshots
           </Link>
           <Link
             href="/polymarket/chicago-weather"

@@ -27,17 +27,19 @@ crons.cron(
     { stationIem: "ORD", stationIcao: "KORD" },
 );
 
-// Runs every 20 minutes for 5-location AccuWeather snapshots and 3-day summaries.
+// Runs every hour and stores a new KORD snapshot:
+// - Microsoft + AccuWeather + Google 5-day forecasts
+// - Current temperature from Microsoft, AccuWeather, Google, NOAA, IEM, and Open-Meteo
 crons.cron(
-    "kord_accuweather_forecast_every_20_min",
-    "*/20 * * * *",
-    api.forecast.refreshForecastNow,
-    { withJitter: true },
+    "kord_microsoft_5day_hourly",
+    "0 * * * *",
+    api.forecastCollector.collectKordHourlySnapshot,
+    { stationIcao: "KORD", durationDays: 5, unit: "imperial", language: "en-US" },
 );
 
 // Runs every hour at minutes 49 and 52 UTC.
-// The function itself checks America/Chicago time and enqueues only for peak-derived local hour(s),
-// with a 12..16 local fallback when forecast peak fields are unavailable.
+// The function itself checks America/Chicago time and enqueues only during the
+// midday scheduled hour window.
 crons.cron(
     "kord_phone_calls_hourly_49_52",
     "49,52 * * * *",

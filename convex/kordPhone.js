@@ -57,52 +57,8 @@ function toFahrenheit(celsius) {
     return roundToTenth((celsius * 9) / 5 + 32);
 }
 
-function getChicagoHour(epochMs) {
-    if (!Number.isFinite(epochMs)) {
-        return null;
-    }
-    const parts = getDateParts(chicagoDateTimeFormatter, new Date(epochMs));
-    const hour = Number(parts.hour);
-    return Number.isFinite(hour) ? hour : null;
-}
-
 function toSortedHourArray(hours) {
     return [...hours].sort((a, b) => a - b);
-}
-
-async function getScheduledHoursForDate(ctx, { stationIcao, dateKey }) {
-    const comparison = await ctx.db
-        .query("dailyComparisons")
-        .withIndex("by_station_date", (q) =>
-            q.eq("stationIcao", stationIcao).eq("date", dateKey),
-        )
-        .first();
-
-    const peakHours = new Set();
-    const peakStartHour = getChicagoHour(comparison?.accuPeakStartUtc_latest);
-    const peakEndHour = getChicagoHour(comparison?.accuPeakEndUtc_latest);
-    if (peakStartHour !== null) {
-        peakHours.add(peakStartHour);
-    }
-    if (peakEndHour !== null) {
-        peakHours.add(peakEndHour);
-    }
-
-    if (peakHours.size > 0) {
-        return {
-            source: "forecast_peak_hours",
-            hours: peakHours,
-            peakStartUtc: comparison?.accuPeakStartUtc_latest ?? null,
-            peakEndUtc: comparison?.accuPeakEndUtc_latest ?? null,
-        };
-    }
-
-    return {
-        source: "default_midday_window",
-        hours: new Set(DEFAULT_SCHEDULED_LOCAL_HOURS),
-        peakStartUtc: comparison?.accuPeakStartUtc_latest ?? null,
-        peakEndUtc: comparison?.accuPeakEndUtc_latest ?? null,
-    };
 }
 
 async function enqueueCallForSlot(ctx, { stationIcao, dateKey, slotLocal }) {
@@ -158,9 +114,7 @@ export const getDayPhoneReadings = query({
 
 /**
  * Internal mutation invoked by cron at :49 and :52 UTC.
- * It checks Chicago local time and enqueues only at selected local peak hour(s).
- * Peak hours come from today's dailyComparisons AccuWeather peak window fields,
- * with a 12-16 fallback when peak fields are unavailable.
+ * It checks Chicago local time and enqueues only during the fixed 12-16 local window.
  */
 export const enqueueScheduledCall = internalMutation({
     args: {
@@ -172,11 +126,7 @@ export const enqueueScheduledCall = internalMutation({
         const hour = Number(parts.hour);
         const minute = Number(parts.minute);
         const dateKey = `${parts.year}-${parts.month}-${parts.day}`;
-        const schedule = await getScheduledHoursForDate(ctx, {
-            stationIcao: args.stationIcao,
-            dateKey,
-        });
-        const scheduledHours = schedule.hours;
+        const scheduledHours = new Set(DEFAULT_SCHEDULED_LOCAL_HOURS);
 
         if (!SCHEDULED_LOCAL_MINUTES.has(minute) || !scheduledHours.has(hour)) {
             return {
@@ -185,10 +135,8 @@ export const enqueueScheduledCall = internalMutation({
                 dateKey,
                 hour,
                 minute,
-                scheduleSource: schedule.source,
+                scheduleSource: "default_midday_window",
                 scheduledHours: toSortedHourArray(scheduledHours),
-                peakStartUtc: schedule.peakStartUtc,
-                peakEndUtc: schedule.peakEndUtc,
             };
         }
 
@@ -200,10 +148,8 @@ export const enqueueScheduledCall = internalMutation({
         });
         return {
             ...result,
-            scheduleSource: schedule.source,
+            scheduleSource: "default_midday_window",
             scheduledHours: toSortedHourArray(scheduledHours),
-            peakStartUtc: schedule.peakStartUtc,
-            peakEndUtc: schedule.peakEndUtc,
         };
     },
 });
