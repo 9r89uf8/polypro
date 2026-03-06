@@ -21,14 +21,14 @@ This document covers how O'Hare forecast and current-temperature data flows work
   - `weather:getDayObservations` (today's date, Chicago timezone) for NOAA official max table.
 - Sections:
   - `Latest Snapshot`: capture time, overall status, Microsoft status, AccuWeather status, Google status, Weather.com status, source health counts.
-  - `Forecast Progression`: provider selector, target-date picker, quick date chips from the latest forecast, summary cards, a stepped line chart of predicted high temperature over capture time, and a per-capture delta table.
+  - `Forecast Progression`: provider selector, target-date picker, quick date chips from the latest forecast, summary cards, a stepped line chart of predicted high temperature over capture time, and a per-capture delta table that is collapsed by default behind a toggle button.
   - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google + Weather.com current readings.
   - `Latest NOAA METAR Max (Official Max Today)`: `metarMaxF` and related official fields from `dailyComparisons`.
   - `Microsoft 5-Day Forecast`: latest `microsoftForecastDays` (displayed columns: date, max F, day phrase, night phrase).
   - `AccuWeather 5-Day Forecast`: latest `accuweatherForecastDays` (displayed columns: date, max F, day phrase, night phrase).
   - `Google 5-Day Forecast`: latest `googleForecastDays` (displayed columns: date, max F, day phrase, night phrase).
   - `Weather.com 5-Day Forecast`: latest `weathercomForecastDays` (displayed columns: date, max F, day phrase, night phrase).
-  - `Recent Hourly History`: per-snapshot status + provider statuses + current readings for Microsoft/AccuWeather/Google/Weather.com/NOAA/IEM/Open-Meteo.
+  - `Recent Hourly History`: per-snapshot status + provider statuses + current readings for Microsoft/AccuWeather/Google/Weather.com/NOAA/IEM/Open-Meteo, collapsed by default behind a toggle button.
 
 All displayed local timestamps are in America/Chicago and shown in 12-hour AM/PM format.
 

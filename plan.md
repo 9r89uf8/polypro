@@ -1,32 +1,23 @@
-Yes—**Google now has a first-party Weather API** that’s very similar to Azure Maps Weather (current conditions + daily forecasts).
+O'Hare International Airport, Chicago, Illinois
 
-## Google equivalent: Google Maps Platform Weather API
+Below is the **same-day ORD table** I’d use starting from about **6 AM**. The lock-in times are **rule-of-thumb**, not an official NOAA table. They’re based on the usual afternoon lag of the daily max, plus ORD-specific lake-breeze/onshore-flow/fog behavior and the way fronts and thunderstorms can abruptly change the temperature curve. 
 
-It provides:
+| Setup at ORD                                    | 6 AM confidence                                | Usually lock by                             | Why this is the ORD rule                                                                                                                                                                         |
+| ----------------------------------------------- | ---------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Sunny, dry, W/SW wind**                       | High                                           | **9–11 AM**                                 | With no onshore lake air winning, warming is usually smooth; on a normal day the max still comes a few hours after noon.                                       
+| **Mostly sunny, light wind**                    | Medium                                         | **10 AM–noon**                              | Light winds make a lake breeze easier to form several hours after sunrise, and lake breezes cool temperatures and shift the wind.                               
+| **E/NE wind already in the morning**            | Low–Medium                                     | **1–3 PM**                                  | Onshore flow from the colder marine air over southern Lake Michigan can keep far northeastern Illinois cooler much of the day.                                   
+| **Morning fog or low stratus, then clearing**   | Low                                            | **After clearing starts, often 11 AM–2 PM** | NWS Chicago discussions regularly flag ORD fog/low clouds lingering past sunrise; early March sun helps, but the burn-off timing is the forecast.                
+| **Cloudy all day, dry**                         | Medium                                         | **9–11 AM**                                 | Low clouds block sunlight, so there is less daytime solar heating; the main bust is unexpected afternoon breaks.                                                   
+| **Rain ending early morning**                   | Low–Medium                                     | **Late morning to noon**                    | Rain and clouds limit heating at first, and evaporative cooling can cool the low levels and surface until the air saturates and/or clearing arrives.             
+| **Rain starting around midday**                 | Low                                            | **10 AM–1 PM**                              | Once precip starts, clouds plus evaporative cooling can cap the temperature, so the high often ends up near the rain-onset window.                              
+| **Steady drizzle/rain with E/NE wind**          | Medium if the shield is obvious; Low otherwise | **10 AM–noon**                              | This is classic ORD “stuck cool” weather: marine air from the lake plus clouds and evaporative cooling.                                                         
+| **Warm front lifting north through Chicago**    | Low                                            | **11 AM–3 PM**                              | NWS Chicago notes the warm-front surge can be slowed by the colder marine air over southern Lake Michigan; if the front wins, ORD can jump late.
+| **Cold front crossing during the day**          | Low before passage; Medium after               | **Once passage is obvious**                 | Fronts separate warmer air from colder air and can bring abrupt temperature falls; lake-enhanced cold fronts in northeast Illinois can produce very sharp drops. 
+| **Afternoon thunderstorms possible**            | Low                                            | **1–4 PM**                                  | Thunderstorm outflow boundaries are thunderstorm-cooled air, similar to a cold front, and usually come with a wind shift and temperature drop. 
+| **Snow on ground, or wet snow / rain-snow mix** | Low–Medium                                     | **Noon or later**                           | Snow reflects a lot of sunlight and keeps the surface cooler; at ORD, measurable snow is still climatologically normal into early April. 
 
-* **Current conditions** and **daily forecasts** (up to **10 days**) by latitude/longitude. ([Google for Developers][1])
+So for **O’Hare specifically**, the quickest lock-in is usually a **sunny west/southwest-wind day**. The latest lock-ins are usually **east/northeast-wind lake days, fog/stratus mornings, warm-front days, and thunderstorm days**.
 
-**Current conditions (REST)**
-
-```txt
-GET https://weather.googleapis.com/v1/currentConditions:lookup?key=YOUR_API_KEY
-    &location.latitude=LAT
-    &location.longitude=LON
-```
-
-([Google for Developers][2])
-
-**Daily forecast (REST)**
-
-```txt
-GET https://weather.googleapis.com/v1/forecast/days:lookup?key=YOUR_API_KEY
-    &location.latitude=LAT
-    &location.longitude=LON
-    &days=5
-```
-
-This endpoint returns up to 10 days; `days=5` gives you a 5-day forecast. ([Google for Developers][3])
-
-**Setup**
-You enable the Weather API in your Google Cloud project and use an API key or OAuth. ([Google for Developers][4])
+The simplest ORD shortcut is: if by **9–10 AM** it is sunny and still **W/SW**, you are often close; if winds trend **E/NE** or the low clouds hang on, do **not** lock it before early afternoon. 
 

@@ -257,6 +257,8 @@ function MissingConvexSetup() {
 function ForecastSnapshotWorkspace() {
   const [isCollectingNow, setIsCollectingNow] = useState(false);
   const [isBackfillingPredictions, setIsBackfillingPredictions] = useState(false);
+  const [isTrendTableOpen, setIsTrendTableOpen] = useState(false);
+  const [isRecentHistoryOpen, setIsRecentHistoryOpen] = useState(false);
   const [collectMessage, setCollectMessage] = useState("");
   const [backfillMessage, setBackfillMessage] = useState("");
   const [selectedProvider, setSelectedProvider] = useState("weathercom");
@@ -855,44 +857,59 @@ function ForecastSnapshotWorkspace() {
                 </div>
               </div>
 
-              <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
-                    <tr>
-                      <th className="px-3 py-2">Captured (Chicago)</th>
-                      <th className="px-3 py-2">Lead Days</th>
-                      <th className="px-3 py-2">Predicted High F</th>
-                      <th className="px-3 py-2">Delta</th>
-                      <th className="px-3 py-2">Day Phrase</th>
-                      <th className="px-3 py-2">Night Phrase</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trendRows.map((row) => (
-                      <tr key={row._id} className="border-t border-black/10">
-                        <td className="px-3 py-2 font-semibold text-black">
-                          {formatStoredLocalDateTime(row.capturedAtLocal)}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {Number.isFinite(row.leadDays) ? row.leadDays : "—"}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(row.maxTempF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatDelta(row.deltaMaxF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {row.dayPhrase || "—"}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {row.nightPhrase || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => setIsTrendTableOpen((current) => !current)}
+                  className="inline-flex items-center rounded-full border border-black/15 bg-white px-4 py-2 text-sm font-semibold text-black transition hover:border-black"
+                >
+                  {isTrendTableOpen ? "Hide" : "Show"} capture detail table
+                  <span className="ml-2 text-xs font-medium text-black/60">
+                    {trendRows.length} rows
+                  </span>
+                </button>
               </div>
+
+              {isTrendTableOpen ? (
+                <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                      <tr>
+                        <th className="px-3 py-2">Captured (Chicago)</th>
+                        <th className="px-3 py-2">Lead Days</th>
+                        <th className="px-3 py-2">Predicted High F</th>
+                        <th className="px-3 py-2">Delta</th>
+                        <th className="px-3 py-2">Day Phrase</th>
+                        <th className="px-3 py-2">Night Phrase</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trendRows.map((row) => (
+                        <tr key={row._id} className="border-t border-black/10">
+                          <td className="px-3 py-2 font-semibold text-black">
+                            {formatStoredLocalDateTime(row.capturedAtLocal)}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {Number.isFinite(row.leadDays) ? row.leadDays : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(row.maxTempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatDelta(row.deltaMaxF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {row.dayPhrase || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {row.nightPhrase || "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
             </>
           )}
         </section>
@@ -1155,137 +1172,151 @@ function ForecastSnapshotWorkspace() {
 
         <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
           <h2 className="text-lg font-semibold text-foreground">Recent Hourly History</h2>
-          <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
-            <table className="min-w-full text-sm">
-              <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
-                <tr>
-                  <th className="px-3 py-2">Captured (Chicago)</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Microsoft</th>
-                  <th className="px-3 py-2">AccuWeather</th>
-                  <th className="px-3 py-2">Google</th>
-                  <th className="px-3 py-2">Weather.com</th>
-                  <th className="px-3 py-2">MS Current F</th>
-                  <th className="px-3 py-2">Accu Current F</th>
-                  <th className="px-3 py-2">Google Current F</th>
-                  <th className="px-3 py-2">Weather.com Current F</th>
-                  <th className="px-3 py-2">NOAA F</th>
-                  <th className="px-3 py-2">IEM F</th>
-                  <th className="px-3 py-2">Open-Meteo F</th>
-                </tr>
-              </thead>
-              <tbody>
-                {!snapshots.length ? (
-                  <tr>
-                    <td className="px-3 py-3 text-black/60" colSpan={13}>
-                      No snapshot history yet.
-                    </td>
-                  </tr>
-                ) : (
-                  snapshots.map((snapshot) => {
-                    const microsoftCurrent = getReadingBySource(
-                      snapshot,
-                      "microsoft_current",
-                    );
-                    const accuweatherCurrent = getReadingBySource(
-                      snapshot,
-                      "accuweather_current",
-                    );
-                    const googleCurrent = getReadingBySource(
-                      snapshot,
-                      "google_weather_current",
-                    );
-                    const weatherComCurrent = getReadingBySource(
-                      snapshot,
-                      "weathercom_current",
-                    );
-                    const noaa = getReadingBySource(snapshot, "noaa_latest_metar");
-                    const iem = getReadingBySource(snapshot, "iem_asos_latest");
-                    const openMeteo = getReadingBySource(snapshot, "open_meteo_current");
-                    return (
-                      <tr key={snapshot._id} className="border-t border-black/10">
-                        <td className="px-3 py-2 text-black">{formatSnapshotTime(snapshot)}</td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(snapshot.status)}`}
-                          >
-                            {snapshot.status}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(snapshot.microsoftStatus === "ok" ? "ok" : "error")}`}
-                          >
-                            {snapshot.microsoftStatus}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
-                              snapshot.accuweatherStatus === "ok"
-                                ? "ok"
-                                : snapshot.accuweatherStatus === "error"
-                                  ? "error"
-                                  : "",
-                            )}`}
-                          >
-                            {snapshot.accuweatherStatus ?? "missing"}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
-                              snapshot.googleStatus === "ok"
-                                ? "ok"
-                                : snapshot.googleStatus === "error"
-                                  ? "error"
-                                  : "",
-                            )}`}
-                          >
-                            {snapshot.googleStatus ?? "missing"}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          <span
-                            className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
-                              snapshot.weathercomStatus === "ok"
-                                ? "ok"
-                                : snapshot.weathercomStatus === "error"
-                                  ? "error"
-                                  : "",
-                            )}`}
-                          >
-                            {snapshot.weathercomStatus ?? "missing"}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(microsoftCurrent?.tempF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(accuweatherCurrent?.tempF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(googleCurrent?.tempF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(weatherComCurrent?.tempF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(noaa?.tempF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(iem?.tempF, "F")}
-                        </td>
-                        <td className="px-3 py-2 text-black/75">
-                          {formatTemp(openMeteo?.tempF, "F")}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => setIsRecentHistoryOpen((current) => !current)}
+              className="inline-flex items-center rounded-full border border-black/15 bg-white px-4 py-2 text-sm font-semibold text-black transition hover:border-black"
+            >
+              {isRecentHistoryOpen ? "Hide" : "Show"} recent hourly history
+              <span className="ml-2 text-xs font-medium text-black/60">
+                {snapshots.length} rows
+              </span>
+            </button>
           </div>
+          {isRecentHistoryOpen ? (
+            <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+              <table className="min-w-full text-sm">
+                <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                  <tr>
+                    <th className="px-3 py-2">Captured (Chicago)</th>
+                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2">Microsoft</th>
+                    <th className="px-3 py-2">AccuWeather</th>
+                    <th className="px-3 py-2">Google</th>
+                    <th className="px-3 py-2">Weather.com</th>
+                    <th className="px-3 py-2">MS Current F</th>
+                    <th className="px-3 py-2">Accu Current F</th>
+                    <th className="px-3 py-2">Google Current F</th>
+                    <th className="px-3 py-2">Weather.com Current F</th>
+                    <th className="px-3 py-2">NOAA F</th>
+                    <th className="px-3 py-2">IEM F</th>
+                    <th className="px-3 py-2">Open-Meteo F</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!snapshots.length ? (
+                    <tr>
+                      <td className="px-3 py-3 text-black/60" colSpan={13}>
+                        No snapshot history yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    snapshots.map((snapshot) => {
+                      const microsoftCurrent = getReadingBySource(
+                        snapshot,
+                        "microsoft_current",
+                      );
+                      const accuweatherCurrent = getReadingBySource(
+                        snapshot,
+                        "accuweather_current",
+                      );
+                      const googleCurrent = getReadingBySource(
+                        snapshot,
+                        "google_weather_current",
+                      );
+                      const weatherComCurrent = getReadingBySource(
+                        snapshot,
+                        "weathercom_current",
+                      );
+                      const noaa = getReadingBySource(snapshot, "noaa_latest_metar");
+                      const iem = getReadingBySource(snapshot, "iem_asos_latest");
+                      const openMeteo = getReadingBySource(snapshot, "open_meteo_current");
+                      return (
+                        <tr key={snapshot._id} className="border-t border-black/10">
+                          <td className="px-3 py-2 text-black">{formatSnapshotTime(snapshot)}</td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(snapshot.status)}`}
+                            >
+                              {snapshot.status}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(snapshot.microsoftStatus === "ok" ? "ok" : "error")}`}
+                            >
+                              {snapshot.microsoftStatus}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                                snapshot.accuweatherStatus === "ok"
+                                  ? "ok"
+                                  : snapshot.accuweatherStatus === "error"
+                                    ? "error"
+                                    : "",
+                              )}`}
+                            >
+                              {snapshot.accuweatherStatus ?? "missing"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                                snapshot.googleStatus === "ok"
+                                  ? "ok"
+                                  : snapshot.googleStatus === "error"
+                                    ? "error"
+                                    : "",
+                              )}`}
+                            >
+                              {snapshot.googleStatus ?? "missing"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                                snapshot.weathercomStatus === "ok"
+                                  ? "ok"
+                                  : snapshot.weathercomStatus === "error"
+                                    ? "error"
+                                    : "",
+                              )}`}
+                            >
+                              {snapshot.weathercomStatus ?? "missing"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(microsoftCurrent?.tempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(accuweatherCurrent?.tempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(googleCurrent?.tempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(weatherComCurrent?.tempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(noaa?.tempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(iem?.tempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(openMeteo?.tempF, "F")}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </section>
       </div>
     </main>
