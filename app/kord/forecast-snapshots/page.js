@@ -1,14 +1,53 @@
 "use client";
 
+import {
+  Chart as ChartJS,
+  Legend,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Tooltip,
+} from "chart.js";
 import Link from "next/link";
+import { Line } from "react-chartjs-2";
 import { useAction, useQuery } from "convex/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend);
 
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
 const CHICAGO_TIMEZONE = "America/Chicago";
 const STATION_ICAO = "KORD";
 const FORECAST_UNIT = "imperial";
 const FORECAST_LANGUAGE = "en-US";
+const FORECAST_TREND_BACKFILL_LIMIT = 720;
+
+const TREND_PROVIDER_OPTIONS = [
+  {
+    value: "weathercom",
+    label: "Weather.com",
+    forecastField: "weathercomForecastDays",
+    color: "#1d4ed8",
+  },
+  {
+    value: "microsoft",
+    label: "Microsoft",
+    forecastField: "microsoftForecastDays",
+    color: "#0f766e",
+  },
+  {
+    value: "accuweather",
+    label: "AccuWeather",
+    forecastField: "accuweatherForecastDays",
+    color: "#c2410c",
+  },
+  {
+    value: "google",
+    label: "Google",
+    forecastField: "googleForecastDays",
+    color: "#4338ca",
+  },
+];
 
 const SOURCE_ORDER = [
   "microsoft_current",
@@ -26,6 +65,17 @@ const SOURCE_LABELS = {
   iem_asos_latest: "IEM ASOS",
   open_meteo_current: "Open-Meteo",
 };
+
+function isValidDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value ?? "");
+}
+
+function getTrendProviderConfig(provider) {
+  return (
+    TREND_PROVIDER_OPTIONS.find((option) => option.value === provider) ??
+    TREND_PROVIDER_OPTIONS[0]
+  );
+}
 
 function getDateParts(formatter, date) {
   const parts = formatter.formatToParts(date);
@@ -54,6 +104,22 @@ function formatChicagoDateTime(epochMs) {
   const parts = getDateParts(formatter, new Date(epochMs));
   const period = parts.dayPeriod ? parts.dayPeriod.toUpperCase() : "";
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${period}`.trim();
+}
+
+function formatChicagoAxisDateTime(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return "";
+  }
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TIMEZONE,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    hour12: true,
+  });
+  const parts = getDateParts(formatter, new Date(epochMs));
+  const period = parts.dayPeriod ? parts.dayPeriod.toUpperCase() : "";
+  return `${parts.month}/${parts.day} ${parts.hour} ${period}`.trim();
 }
 
 function formatStoredLocalDateTime(localDateTime) {
@@ -118,6 +184,14 @@ function formatTemp(value, unit) {
   return `${value.toFixed(1)}°${unit}`;
 }
 
+function formatDelta(value, unit) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(1)}°${unit}`;
+}
+
 function getStatusClass(status) {
   if (status === "ok") {
     return "bg-emerald-100 text-emerald-800";
@@ -137,6 +211,24 @@ function getReadingBySource(snapshot, source) {
 
 function getSourceLabel(source) {
   return SOURCE_LABELS[source] ?? source;
+}
+
+function getForecastDaysForProvider(snapshot, provider) {
+  const config = getTrendProviderConfig(provider);
+  return snapshot?.[config.forecastField] ?? [];
+}
+
+function getTrendPointColor(changeDirection, providerColor) {
+  if (changeDirection === "up") {
+    return "#15803d";
+  }
+  if (changeDirection === "down") {
+    return "#dc2626";
+  }
+  if (changeDirection === "same") {
+    return "#6b7280";
+  }
+  return providerColor;
 }
 
 function MissingConvexSetup() {
@@ -164,7 +256,11 @@ function MissingConvexSetup() {
 
 function ForecastSnapshotWorkspace() {
   const [isCollectingNow, setIsCollectingNow] = useState(false);
+  const [isBackfillingPredictions, setIsBackfillingPredictions] = useState(false);
   const [collectMessage, setCollectMessage] = useState("");
+  const [backfillMessage, setBackfillMessage] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState("weathercom");
+  const [selectedTargetDate, setSelectedTargetDate] = useState("");
   const snapshotsResult = useQuery("forecastCollector:getRecentSnapshots", {
     stationIcao: STATION_ICAO,
     limit: 72,
@@ -175,10 +271,183 @@ function ForecastSnapshotWorkspace() {
     date: chicagoTodayDate,
   });
   const collectNow = useAction("forecastCollector:collectKordHourlySnapshot");
+  const backfillPredictions = useAction(
+    "forecastCollector:backfillKordForecastPredictions",
+  );
 
   const snapshots = snapshotsResult?.rows ?? [];
   const latestSnapshot = snapshots[0] ?? null;
   const todayComparison = todayDayData?.comparison ?? null;
+  const selectedProviderConfig = useMemo(
+    () => getTrendProviderConfig(selectedProvider),
+    [selectedProvider],
+  );
+  const latestTargetDateOptions = useMemo(() => {
+    const rows = getForecastDaysForProvider(latestSnapshot, selectedProvider);
+    return Array.from(
+      new Set(rows.map((row) => row?.date).filter((row) => isValidDate(row))),
+    );
+  }, [latestSnapshot, selectedProvider]);
+
+  useEffect(() => {
+    if (!selectedTargetDate && latestTargetDateOptions.length) {
+      setSelectedTargetDate(
+        latestTargetDateOptions[latestTargetDateOptions.length - 1],
+      );
+    }
+  }, [selectedTargetDate, latestTargetDateOptions]);
+
+  const trendResult = useQuery(
+    "forecastCollector:getForecastTrend",
+    isValidDate(selectedTargetDate)
+      ? {
+          stationIcao: STATION_ICAO,
+          provider: selectedProvider,
+          targetDate: selectedTargetDate,
+        }
+      : "skip",
+  );
+  const selectedDayData = useQuery(
+    "weather:getDayObservations",
+    isValidDate(selectedTargetDate)
+      ? {
+          stationIcao: STATION_ICAO,
+          date: selectedTargetDate,
+        }
+      : "skip",
+  );
+  const trendRows = trendResult?.rows ?? [];
+  const selectedComparison = selectedDayData?.comparison ?? null;
+  const trendChartPoints = useMemo(
+    () =>
+      trendRows
+        .filter((row) => Number.isFinite(row.maxTempF) && Number.isFinite(row.capturedAt))
+        .map((row) => ({
+          x: row.capturedAt,
+          y: row.maxTempF,
+          deltaMaxF: row.deltaMaxF,
+          changeDirection: row.changeDirection,
+          capturedAtLocal: row.capturedAtLocal,
+        })),
+    [trendRows],
+  );
+  const trendSummary = useMemo(() => {
+    if (!trendChartPoints.length) {
+      return null;
+    }
+
+    let minPoint = trendChartPoints[0];
+    let maxPoint = trendChartPoints[0];
+    for (const point of trendChartPoints) {
+      if (point.y < minPoint.y) {
+        minPoint = point;
+      }
+      if (point.y > maxPoint.y) {
+        maxPoint = point;
+      }
+    }
+
+    const firstPoint = trendChartPoints[0];
+    const latestPoint = trendChartPoints[trendChartPoints.length - 1];
+    const netDelta = latestPoint.y - firstPoint.y;
+
+    return {
+      firstPoint,
+      latestPoint,
+      minPoint,
+      maxPoint,
+      pointCount: trendChartPoints.length,
+      changeCount: trendResult?.changeCount ?? 0,
+      netDelta,
+    };
+  }, [trendChartPoints, trendResult]);
+  const trendChartData = useMemo(
+    () => ({
+      datasets: [
+        {
+          label: `${selectedProviderConfig.label} predicted high`,
+          data: trendChartPoints,
+          parsing: false,
+          stepped: true,
+          borderWidth: 2,
+          borderColor: selectedProviderConfig.color,
+          backgroundColor: `${selectedProviderConfig.color}22`,
+          pointRadius: trendChartPoints.map((point) =>
+            point.changeDirection === "same" ? 3 : 4,
+          ),
+          pointHoverRadius: 5,
+          pointBackgroundColor: trendChartPoints.map((point) =>
+            getTrendPointColor(point.changeDirection, selectedProviderConfig.color),
+          ),
+          pointBorderColor: trendChartPoints.map((point) =>
+            getTrendPointColor(point.changeDirection, selectedProviderConfig.color),
+          ),
+        },
+      ],
+    }),
+    [selectedProviderConfig, trendChartPoints],
+  );
+  const trendChartOptions = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      interaction: {
+        mode: "nearest",
+        axis: "x",
+        intersect: false,
+      },
+      plugins: {
+        legend: {
+          display: false,
+        },
+        tooltip: {
+          callbacks: {
+            title(items) {
+              if (!items.length) {
+                return "";
+              }
+              return formatChicagoDateTime(items[0].parsed.x);
+            },
+            label(item) {
+              const deltaValue = item.raw?.deltaMaxF;
+              const deltaText = Number.isFinite(deltaValue)
+                ? ` (${formatDelta(deltaValue, "F")})`
+                : "";
+              return `${selectedProviderConfig.label}: ${item.parsed.y.toFixed(1)}°F${deltaText}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: "linear",
+          title: {
+            display: true,
+            text: "Snapshot Capture Time (America/Chicago)",
+          },
+          ticks: {
+            maxTicksLimit: 8,
+            callback(value) {
+              return formatChicagoAxisDateTime(Number(value));
+            },
+          },
+        },
+        y: {
+          title: {
+            display: true,
+            text: "Predicted Daily High (°F)",
+          },
+          ticks: {
+            callback(value) {
+              return `${Number(value).toFixed(0)}°F`;
+            },
+          },
+        },
+      },
+    }),
+    [selectedProviderConfig],
+  );
 
   const latestSourceStats = useMemo(() => {
     const readings = latestSnapshot?.actualReadings ?? [];
@@ -214,6 +483,28 @@ function ForecastSnapshotWorkspace() {
       setCollectMessage(`Collect now failed: ${message}`);
     } finally {
       setIsCollectingNow(false);
+    }
+  }
+
+  async function handleBackfillPredictions() {
+    if (isBackfillingPredictions) {
+      return;
+    }
+    setIsBackfillingPredictions(true);
+    setBackfillMessage("");
+    try {
+      const result = await backfillPredictions({
+        stationIcao: STATION_ICAO,
+        limit: FORECAST_TREND_BACKFILL_LIMIT,
+      });
+      setBackfillMessage(
+        `Indexed ${result?.insertedPredictionCount ?? 0} prediction rows from ${result?.insertedSnapshotCount ?? 0} snapshots; skipped ${result?.skippedSnapshotCount ?? 0}.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setBackfillMessage(`Backfill failed: ${message}`);
+    } finally {
+      setIsBackfillingPredictions(false);
     }
   }
 
@@ -253,9 +544,21 @@ function ForecastSnapshotWorkspace() {
             >
               {isCollectingNow ? "Collecting..." : "Collect Now"}
             </button>
+            <button
+              type="button"
+              onClick={handleBackfillPredictions}
+              disabled={isBackfillingPredictions}
+              className="rounded-full border border-black/15 bg-white px-4 py-2 text-sm font-semibold text-black transition hover:border-black disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isBackfillingPredictions ? "Backfilling..." : "Backfill Trends"}
+            </button>
           </div>
           <p className="mt-3 text-xs text-black/65">
             {collectMessage || "Cron runs hourly at minute 00; use Collect Now for manual snapshot capture."}
+          </p>
+          <p className="mt-1 text-xs text-black/65">
+            {backfillMessage ||
+              `Trend backfill indexes the latest ${FORECAST_TREND_BACKFILL_LIMIT} snapshots so existing history appears in the progression chart.`}
           </p>
         </header>
 
@@ -389,6 +692,209 @@ function ForecastSnapshotWorkspace() {
               Weather.com error: {latestSnapshot.weathercomError}
             </p>
           ) : null}
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">
+                Forecast Progression
+              </h2>
+              <p className="mt-2 text-sm text-black/65">
+                Track how each provider moved its predicted daily high for a single
+                Chicago date over time.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="text-sm font-medium text-black">
+                Provider
+                <select
+                  value={selectedProvider}
+                  onChange={(event) => setSelectedProvider(event.target.value)}
+                  className="mt-1 w-full rounded-2xl border border-black/15 bg-white px-3 py-2 text-sm text-black"
+                >
+                  {TREND_PROVIDER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-medium text-black">
+                Target Date
+                <input
+                  type="date"
+                  value={selectedTargetDate}
+                  onChange={(event) => setSelectedTargetDate(event.target.value)}
+                  className="mt-1 w-full rounded-2xl border border-black/15 bg-white px-3 py-2 text-sm text-black"
+                />
+              </label>
+            </div>
+          </div>
+
+          {latestTargetDateOptions.length ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {latestTargetDateOptions.map((dateKey) => (
+                <button
+                  key={dateKey}
+                  type="button"
+                  onClick={() => setSelectedTargetDate(dateKey)}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                    selectedTargetDate === dateKey
+                      ? "border-black bg-black text-white"
+                      : "border-black/15 bg-white text-black hover:border-black"
+                  }`}
+                >
+                  {dateKey}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {!isValidDate(selectedTargetDate) ? (
+            <p className="mt-4 text-sm text-black/65">
+              Choose a valid target date to load the progression chart.
+            </p>
+          ) : trendResult === undefined ? (
+            <p className="mt-4 text-sm text-black/65">
+              Loading progression for {selectedProviderConfig.label} on{" "}
+              {selectedTargetDate}...
+            </p>
+          ) : !trendRows.length ? (
+            <div className="mt-4 rounded-2xl border border-dashed border-black/15 bg-white/60 p-4 text-sm text-black/65">
+              No indexed forecast history for {selectedProviderConfig.label} on{" "}
+              {selectedTargetDate}.
+              {snapshots.length
+                ? " If this is your first run after adding forecast trends, use Backfill Trends to index existing snapshots."
+                : ""}
+            </div>
+          ) : (
+            <>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    First Prediction
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {formatTemp(trendSummary?.firstPoint?.y, "F")}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {formatStoredLocalDateTime(
+                      trendSummary?.firstPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Latest Prediction
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {formatTemp(trendSummary?.latestPoint?.y, "F")}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {formatStoredLocalDateTime(
+                      trendSummary?.latestPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Net Change
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {formatDelta(trendSummary?.netDelta, "F")}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {trendSummary?.changeCount ?? 0} changes
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Lowest Seen
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {formatTemp(trendSummary?.minPoint?.y, "F")}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {formatStoredLocalDateTime(
+                      trendSummary?.minPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Highest Seen
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {formatTemp(trendSummary?.maxPoint?.y, "F")}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {formatStoredLocalDateTime(
+                      trendSummary?.maxPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Official Max
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {formatTemp(selectedComparison?.metarMaxF, "F")}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {selectedComparison?.metarMaxAtLocal
+                      ? formatStoredLocalDateTime(selectedComparison.metarMaxAtLocal)
+                      : "Available after METAR ingest"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-black/10 bg-white/75 p-4">
+                <div className="h-[320px]">
+                  <Line data={trendChartData} options={trendChartOptions} />
+                </div>
+              </div>
+
+              <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                    <tr>
+                      <th className="px-3 py-2">Captured (Chicago)</th>
+                      <th className="px-3 py-2">Lead Days</th>
+                      <th className="px-3 py-2">Predicted High F</th>
+                      <th className="px-3 py-2">Delta</th>
+                      <th className="px-3 py-2">Day Phrase</th>
+                      <th className="px-3 py-2">Night Phrase</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trendRows.map((row) => (
+                      <tr key={row._id} className="border-t border-black/10">
+                        <td className="px-3 py-2 font-semibold text-black">
+                          {formatStoredLocalDateTime(row.capturedAtLocal)}
+                        </td>
+                        <td className="px-3 py-2 text-black/75">
+                          {Number.isFinite(row.leadDays) ? row.leadDays : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-black/75">
+                          {formatTemp(row.maxTempF, "F")}
+                        </td>
+                        <td className="px-3 py-2 text-black/75">
+                          {formatDelta(row.deltaMaxF, "F")}
+                        </td>
+                        <td className="px-3 py-2 text-black/75">
+                          {row.dayPhrase || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-black/75">
+                          {row.nightPhrase || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">

@@ -40,6 +40,8 @@ const DEFAULT_GOOGLE_LANGUAGE = "en";
 const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
 const ALLOWED_FORECAST_DURATIONS = new Set([1, 5, 10, 15, 25, 45]);
 const MAX_QUERY_LIMIT = 240;
+const DEFAULT_PREDICTION_BACKFILL_LIMIT = 720;
+const MAX_PREDICTION_BACKFILL_LIMIT = 2160;
 const RETRY_DELAYS_MS = [1000, 3000];
 const ACCUWEATHER_LOCATION_KEY_TTL_MS = 1000 * 60 * 60 * 24;
 
@@ -72,6 +74,13 @@ const WEATHERCOM_STATUS = {
 const SOURCE_STATUS = {
   OK: "ok",
   ERROR: "error",
+};
+
+const FORECAST_PROVIDER = {
+  MICROSOFT: "microsoft",
+  ACCUWEATHER: "accuweather",
+  GOOGLE: "google",
+  WEATHERCOM: "weathercom",
 };
 
 const STATIONS = {
@@ -127,6 +136,13 @@ const microsoftForecastDayValidator = v.object({
   nightPhrase: v.optional(v.string()),
 });
 
+const forecastProviderValidator = v.union(
+  v.literal(FORECAST_PROVIDER.MICROSOFT),
+  v.literal(FORECAST_PROVIDER.ACCUWEATHER),
+  v.literal(FORECAST_PROVIDER.GOOGLE),
+  v.literal(FORECAST_PROVIDER.WEATHERCOM),
+);
+
 function getDateParts(formatter, date) {
   const parts = formatter.formatToParts(date);
   const values = {};
@@ -163,6 +179,35 @@ function addUtcDays(dateIso, days) {
   const month = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function parseDateKeyParts(dateKey) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey ?? "");
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
+function dateKeyToUtcEpoch(dateKey) {
+  const parts = parseDateKeyParts(dateKey);
+  if (!parts) {
+    return null;
+  }
+  return Date.UTC(parts.year, parts.month - 1, parts.day);
+}
+
+function diffDateKeysInDays(targetDate, captureDate) {
+  const targetEpoch = dateKeyToUtcEpoch(targetDate);
+  const captureEpoch = dateKeyToUtcEpoch(captureDate);
+  if (targetEpoch === null || captureEpoch === null) {
+    return 0;
+  }
+  return Math.round((targetEpoch - captureEpoch) / (24 * 60 * 60 * 1000));
 }
 
 function roundToTenth(value) {
@@ -868,6 +913,79 @@ function normalizeWeatherComCurrentTemp(payload, requestedUnit) {
     };
   }
   return null;
+}
+
+function buildForecastPredictionRowsFromSnapshot({
+  snapshotId,
+  stationIcao,
+  capturedAt,
+  capturedAtLocal,
+  microsoftForecastDays,
+  accuweatherForecastDays,
+  googleForecastDays,
+  weathercomForecastDays,
+}) {
+  const captureDate = formatChicagoDate(capturedAt);
+  const rows = [];
+  const providerForecasts = [
+    {
+      provider: FORECAST_PROVIDER.MICROSOFT,
+      forecastDays: microsoftForecastDays,
+    },
+    {
+      provider: FORECAST_PROVIDER.ACCUWEATHER,
+      forecastDays: accuweatherForecastDays,
+    },
+    {
+      provider: FORECAST_PROVIDER.GOOGLE,
+      forecastDays: googleForecastDays,
+    },
+    {
+      provider: FORECAST_PROVIDER.WEATHERCOM,
+      forecastDays: weathercomForecastDays,
+    },
+  ];
+
+  for (const providerForecast of providerForecasts) {
+    const forecastDays = Array.isArray(providerForecast.forecastDays)
+      ? providerForecast.forecastDays
+      : [];
+
+    for (let i = 0; i < forecastDays.length; i += 1) {
+      const forecastDay = forecastDays[i];
+      const targetDate =
+        extractIsoDate(forecastDay?.date) ?? addUtcDays(captureDate, i);
+
+      rows.push({
+        stationIcao,
+        provider: providerForecast.provider,
+        targetDate,
+        capturedAt,
+        capturedAtLocal,
+        captureDate,
+        leadDays: diffDateKeysInDays(targetDate, captureDate),
+        ...(forecastDay?.minTempC !== undefined
+          ? { minTempC: forecastDay.minTempC }
+          : {}),
+        ...(forecastDay?.minTempF !== undefined
+          ? { minTempF: forecastDay.minTempF }
+          : {}),
+        ...(forecastDay?.maxTempC !== undefined
+          ? { maxTempC: forecastDay.maxTempC }
+          : {}),
+        ...(forecastDay?.maxTempF !== undefined
+          ? { maxTempF: forecastDay.maxTempF }
+          : {}),
+        ...(forecastDay?.dayPhrase ? { dayPhrase: forecastDay.dayPhrase } : {}),
+        ...(forecastDay?.nightPhrase
+          ? { nightPhrase: forecastDay.nightPhrase }
+          : {}),
+        snapshotId,
+      });
+    }
+  }
+
+  return rows;
 }
 
 async function fetchWeatherComTendayPage(station) {
@@ -1768,10 +1886,127 @@ export const insertSnapshot = internalMutationGeneric({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    return await ctx.db.insert("kordForecastSnapshots", {
+    const snapshotId = await ctx.db.insert("kordForecastSnapshots", {
       ...args,
       createdAt: now,
       updatedAt: now,
+    });
+
+    const predictionRows = buildForecastPredictionRowsFromSnapshot({
+      snapshotId,
+      stationIcao: args.stationIcao,
+      capturedAt: args.capturedAt,
+      capturedAtLocal: args.capturedAtLocal,
+      microsoftForecastDays: args.microsoftForecastDays,
+      accuweatherForecastDays: args.accuweatherForecastDays,
+      googleForecastDays: args.googleForecastDays,
+      weathercomForecastDays: args.weathercomForecastDays,
+    });
+
+    for (const predictionRow of predictionRows) {
+      await ctx.db.insert("kordForecastPredictions", {
+        ...predictionRow,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    return snapshotId;
+  },
+});
+
+export const backfillSnapshotPredictions = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const requestedLimit = Number.isInteger(args.limit)
+      ? Number(args.limit)
+      : DEFAULT_PREDICTION_BACKFILL_LIMIT;
+    const limit = Math.max(
+      1,
+      Math.min(MAX_PREDICTION_BACKFILL_LIMIT, requestedLimit),
+    );
+    const snapshots = await ctx.db
+      .query("kordForecastSnapshots")
+      .withIndex("by_station_capturedAt", (query) =>
+        query.eq("stationIcao", args.stationIcao),
+      )
+      .order("desc")
+      .take(limit);
+
+    let insertedSnapshotCount = 0;
+    let skippedSnapshotCount = 0;
+    let insertedPredictionCount = 0;
+    const now = Date.now();
+
+    for (const snapshot of snapshots) {
+      const existingPrediction = await ctx.db
+        .query("kordForecastPredictions")
+        .withIndex("by_snapshotId", (query) =>
+          query.eq("snapshotId", snapshot._id),
+        )
+        .take(1);
+
+      if (existingPrediction.length > 0) {
+        skippedSnapshotCount += 1;
+        continue;
+      }
+
+      const predictionRows = buildForecastPredictionRowsFromSnapshot({
+        snapshotId: snapshot._id,
+        stationIcao: snapshot.stationIcao,
+        capturedAt: snapshot.capturedAt,
+        capturedAtLocal: snapshot.capturedAtLocal,
+        microsoftForecastDays: snapshot.microsoftForecastDays,
+        accuweatherForecastDays: snapshot.accuweatherForecastDays,
+        googleForecastDays: snapshot.googleForecastDays,
+        weathercomForecastDays: snapshot.weathercomForecastDays,
+      });
+
+      if (!predictionRows.length) {
+        skippedSnapshotCount += 1;
+        continue;
+      }
+
+      for (const predictionRow of predictionRows) {
+        await ctx.db.insert("kordForecastPredictions", {
+          ...predictionRow,
+          createdAt: now,
+          updatedAt: now,
+        });
+        insertedPredictionCount += 1;
+      }
+
+      insertedSnapshotCount += 1;
+    }
+
+    return {
+      stationIcao: args.stationIcao,
+      scannedSnapshotCount: snapshots.length,
+      insertedSnapshotCount,
+      skippedSnapshotCount,
+      insertedPredictionCount,
+      limit,
+    };
+  },
+});
+
+export const backfillKordForecastPredictions = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = (args.stationIcao ?? "KORD").trim().toUpperCase();
+    if (!STATIONS[stationIcao]) {
+      throw new Error(`Unsupported stationIcao '${stationIcao}'.`);
+    }
+
+    return await ctx.runMutation("forecastCollector:backfillSnapshotPredictions", {
+      stationIcao,
+      ...(Number.isInteger(args.limit) ? { limit: Number(args.limit) } : {}),
     });
   },
 });
@@ -1965,6 +2200,64 @@ export const getRecentSnapshots = queryGeneric({
       stationIcao,
       count: rows.length,
       rows,
+    };
+  },
+});
+
+export const getForecastTrend = queryGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    provider: forecastProviderValidator,
+    targetDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = (args.stationIcao ?? "KORD").trim().toUpperCase();
+    const rows = await ctx.db
+      .query("kordForecastPredictions")
+      .withIndex("by_station_provider_target_capturedAt", (query) =>
+        query
+          .eq("stationIcao", stationIcao)
+          .eq("provider", args.provider)
+          .eq("targetDate", args.targetDate),
+      )
+      .order("asc")
+      .collect();
+
+    let previousMaxF = null;
+    let changeCount = 0;
+    const trendRows = rows.map((row) => {
+      const deltaMaxF =
+        Number.isFinite(row.maxTempF) && previousMaxF !== null
+          ? roundToTenth(row.maxTempF - previousMaxF)
+          : null;
+      if (Number.isFinite(row.maxTempF)) {
+        previousMaxF = row.maxTempF;
+      }
+      if (deltaMaxF !== null && deltaMaxF !== 0) {
+        changeCount += 1;
+      }
+
+      return {
+        ...row,
+        deltaMaxF,
+        changeDirection:
+          deltaMaxF === null
+            ? "initial"
+            : deltaMaxF > 0
+              ? "up"
+              : deltaMaxF < 0
+                ? "down"
+                : "same",
+      };
+    });
+
+    return {
+      stationIcao,
+      provider: args.provider,
+      targetDate: args.targetDate,
+      count: trendRows.length,
+      changeCount,
+      rows: trendRows,
     };
   },
 });

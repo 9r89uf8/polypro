@@ -183,6 +183,37 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_station_capturedAt", ["stationIcao", "capturedAt"]),
 
+  kordForecastPredictions: defineTable({
+    stationIcao: v.string(),
+    provider: v.union(
+      v.literal("microsoft"),
+      v.literal("accuweather"),
+      v.literal("google"),
+      v.literal("weathercom"),
+    ),
+    targetDate: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    captureDate: v.string(),
+    leadDays: v.number(),
+    minTempC: v.optional(v.number()),
+    minTempF: v.optional(v.number()),
+    maxTempC: v.optional(v.number()),
+    maxTempF: v.optional(v.number()),
+    dayPhrase: v.optional(v.string()),
+    nightPhrase: v.optional(v.string()),
+    snapshotId: v.id("kordForecastSnapshots"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_station_provider_target_capturedAt", [
+      "stationIcao",
+      "provider",
+      "targetDate",
+      "capturedAt",
+    ])
+    .index("by_snapshotId", ["snapshotId"]),
+
   metarObservations: defineTable({
     stationIcao: v.string(),
     mode: v.union(v.literal("official"), v.literal("all")),
