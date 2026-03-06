@@ -213,6 +213,30 @@ function getSourceLabel(source) {
   return SOURCE_LABELS[source] ?? source;
 }
 
+function getLatestSnapshotMajorSourceStats(snapshot) {
+  const statuses = [
+    snapshot?.microsoftStatus,
+    snapshot?.accuweatherStatus,
+    snapshot?.googleStatus,
+    snapshot?.weathercomStatus,
+    getReadingBySource(snapshot, "noaa_latest_metar")?.status,
+  ];
+  const total = statuses.length;
+  const okCount = statuses.filter((status) => status === "ok").length;
+  let status = "error";
+  if (okCount === total && total > 0) {
+    status = "ok";
+  } else if (okCount > 0) {
+    status = "partial";
+  }
+  return {
+    total,
+    okCount,
+    status,
+    isAllOk: okCount === total && total > 0,
+  };
+}
+
 function getForecastDaysForProvider(snapshot, provider) {
   const config = getTrendProviderConfig(provider);
   return snapshot?.[config.forecastField] ?? [];
@@ -460,6 +484,10 @@ function ForecastSnapshotWorkspace() {
       errorCount: readings.length - okCount,
     };
   }, [latestSnapshot]);
+  const latestMajorSourceStats = useMemo(
+    () => getLatestSnapshotMajorSourceStats(latestSnapshot),
+    [latestSnapshot],
+  );
 
   async function handleCollectNow() {
     if (isCollectingNow) {
@@ -574,105 +602,150 @@ function ForecastSnapshotWorkspace() {
               the top-of-hour cron run.
             </p>
           ) : (
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-black/60">Captured</p>
-                <p className="mt-1 text-sm font-semibold text-black">
-                  {formatSnapshotTime(latestSnapshot)}
-                </p>
+            <>
+              <div className="mt-4 md:hidden">
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-black/60">
+                        Captured
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-black">
+                        {formatSnapshotTime(latestSnapshot)}
+                      </p>
+                    </div>
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(latestSnapshot.status)}`}
+                    >
+                      {latestSnapshot.status}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span
+                      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${getStatusClass(latestMajorSourceStats.status)}`}
+                    >
+                      <span
+                        className={`mr-2 h-2 w-2 rounded-full ${
+                          latestMajorSourceStats.isAllOk
+                            ? "bg-emerald-600"
+                            : latestMajorSourceStats.okCount > 0
+                              ? "bg-amber-600"
+                              : "bg-red-600"
+                        }`}
+                      />
+                      {latestMajorSourceStats.okCount}/{latestMajorSourceStats.total} major sources ok
+                    </span>
+                    <span className="inline-flex rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-black/70">
+                      {latestSourceStats.okCount}/{latestSourceStats.total} actual ok
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-black/60">
+                    Major sources: Microsoft, AccuWeather, Google, Weather.com,
+                    and NOAA.
+                  </p>
+                </div>
               </div>
-              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-black/60">Status</p>
-                <p className="mt-1">
-                  <span
-                    className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(latestSnapshot.status)}`}
-                  >
-                    {latestSnapshot.status}
-                  </span>
-                </p>
+
+              <div className="mt-4 hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-7">
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">Captured</p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {formatSnapshotTime(latestSnapshot)}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">Status</p>
+                  <p className="mt-1">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(latestSnapshot.status)}`}
+                    >
+                      {latestSnapshot.status}
+                    </span>
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">Microsoft</p>
+                  <p className="mt-1">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(latestSnapshot.microsoftStatus === "ok" ? "ok" : "error")}`}
+                    >
+                      {latestSnapshot.microsoftStatus}
+                    </span>
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {latestSnapshot.microsoftForecastDays?.length ?? 0} forecast day rows
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    AccuWeather
+                  </p>
+                  <p className="mt-1">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                        latestSnapshot.accuweatherStatus === "ok"
+                          ? "ok"
+                          : latestSnapshot.accuweatherStatus === "error"
+                            ? "error"
+                            : "",
+                      )}`}
+                    >
+                      {latestSnapshot.accuweatherStatus ?? "missing"}
+                    </span>
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {latestSnapshot.accuweatherForecastDays?.length ?? 0} forecast day rows
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">Google</p>
+                  <p className="mt-1">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                        latestSnapshot.googleStatus === "ok"
+                          ? "ok"
+                          : latestSnapshot.googleStatus === "error"
+                            ? "error"
+                            : "",
+                      )}`}
+                    >
+                      {latestSnapshot.googleStatus ?? "missing"}
+                    </span>
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {latestSnapshot.googleForecastDays?.length ?? 0} forecast day rows
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">Weather.com</p>
+                  <p className="mt-1">
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
+                        latestSnapshot.weathercomStatus === "ok"
+                          ? "ok"
+                          : latestSnapshot.weathercomStatus === "error"
+                            ? "error"
+                            : "",
+                      )}`}
+                    >
+                      {latestSnapshot.weathercomStatus ?? "missing"}
+                    </span>
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {latestSnapshot.weathercomForecastDays?.length ?? 0} forecast day rows
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">Actual Sources</p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {latestSourceStats.okCount}/{latestSourceStats.total} ok
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {latestSourceStats.errorCount} errors
+                  </p>
+                </div>
               </div>
-              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-black/60">Microsoft</p>
-                <p className="mt-1">
-                  <span
-                    className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(latestSnapshot.microsoftStatus === "ok" ? "ok" : "error")}`}
-                  >
-                    {latestSnapshot.microsoftStatus}
-                  </span>
-                </p>
-                <p className="mt-1 text-xs text-black/60">
-                  {latestSnapshot.microsoftForecastDays?.length ?? 0} forecast day rows
-                </p>
-              </div>
-              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-black/60">
-                  AccuWeather
-                </p>
-                <p className="mt-1">
-                  <span
-                    className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
-                      latestSnapshot.accuweatherStatus === "ok"
-                        ? "ok"
-                        : latestSnapshot.accuweatherStatus === "error"
-                          ? "error"
-                          : "",
-                    )}`}
-                  >
-                    {latestSnapshot.accuweatherStatus ?? "missing"}
-                  </span>
-                </p>
-                <p className="mt-1 text-xs text-black/60">
-                  {latestSnapshot.accuweatherForecastDays?.length ?? 0} forecast day rows
-                </p>
-              </div>
-              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-black/60">Google</p>
-                <p className="mt-1">
-                  <span
-                    className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
-                      latestSnapshot.googleStatus === "ok"
-                        ? "ok"
-                        : latestSnapshot.googleStatus === "error"
-                          ? "error"
-                          : "",
-                    )}`}
-                  >
-                    {latestSnapshot.googleStatus ?? "missing"}
-                  </span>
-                </p>
-                <p className="mt-1 text-xs text-black/60">
-                  {latestSnapshot.googleForecastDays?.length ?? 0} forecast day rows
-                </p>
-              </div>
-              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-black/60">Weather.com</p>
-                <p className="mt-1">
-                  <span
-                    className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(
-                      latestSnapshot.weathercomStatus === "ok"
-                        ? "ok"
-                        : latestSnapshot.weathercomStatus === "error"
-                          ? "error"
-                          : "",
-                    )}`}
-                  >
-                    {latestSnapshot.weathercomStatus ?? "missing"}
-                  </span>
-                </p>
-                <p className="mt-1 text-xs text-black/60">
-                  {latestSnapshot.weathercomForecastDays?.length ?? 0} forecast day rows
-                </p>
-              </div>
-              <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
-                <p className="text-xs uppercase tracking-wide text-black/60">Actual Sources</p>
-                <p className="mt-1 text-sm font-semibold text-black">
-                  {latestSourceStats.okCount}/{latestSourceStats.total} ok
-                </p>
-                <p className="mt-1 text-xs text-black/60">
-                  {latestSourceStats.errorCount} errors
-                </p>
-              </div>
-            </div>
+            </>
           )}
           {latestSnapshot?.microsoftError ? (
             <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
@@ -851,9 +924,11 @@ function ForecastSnapshotWorkspace() {
                 </div>
               </div>
 
-              <div className="mt-4 rounded-2xl border border-black/10 bg-white/75 p-4">
-                <div className="h-[320px]">
-                  <Line data={trendChartData} options={trendChartOptions} />
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-black/10 bg-white/75">
+                <div className="min-w-[760px] p-4 md:min-w-0">
+                  <div className="h-[340px] md:h-[320px]">
+                    <Line data={trendChartData} options={trendChartOptions} />
+                  </div>
                 </div>
               </div>
 

@@ -20,8 +20,8 @@ This document covers how O'Hare forecast and current-temperature data flows work
   - `forecastCollector:getForecastTrend` for provider/date progression charts.
   - `weather:getDayObservations` (today's date, Chicago timezone) for NOAA official max table.
 - Sections:
-  - `Latest Snapshot`: capture time, overall status, Microsoft status, AccuWeather status, Google status, Weather.com status, source health counts.
-  - `Forecast Progression`: provider selector, target-date picker, quick date chips from the latest forecast, summary cards, a stepped line chart of predicted high temperature over capture time, and a per-capture delta table that is collapsed by default behind a toggle button.
+  - `Latest Snapshot`: on desktop, shows capture time, overall status, Microsoft status, AccuWeather status, Google status, Weather.com status, and source health counts. On mobile, this collapses to a compact summary card with capture time, overall status, a single major-sources badge (`Microsoft`, `AccuWeather`, `Google`, `Weather.com`, `NOAA`), and the actual-source ok count.
+  - `Forecast Progression`: provider selector, target-date picker, quick date chips from the latest forecast, summary cards, a stepped line chart of predicted high temperature over capture time, and a per-capture delta table that is collapsed by default behind a toggle button. On mobile, the chart uses a wider horizontal-scroll container so dense hourly history stays readable.
   - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google + Weather.com current readings.
   - `Latest NOAA METAR Max (Official Max Today)`: `metarMaxF` and related official fields from `dailyComparisons`.
   - `Microsoft 5-Day Forecast`: latest `microsoftForecastDays` (displayed columns: date, max F, day phrase, night phrase).
