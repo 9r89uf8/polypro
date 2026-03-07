@@ -183,6 +183,34 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_station_capturedAt", ["stationIcao", "capturedAt"]),
 
+  kordCurrentSnapshots: defineTable({
+    stationIcao: v.string(),
+    stationName: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    unit: v.union(v.literal("imperial"), v.literal("metric")),
+    language: v.string(),
+    status: v.union(
+      v.literal("ok"),
+      v.literal("partial"),
+      v.literal("error"),
+    ),
+    actualReadings: v.array(
+      v.object({
+        source: v.string(),
+        status: v.union(v.literal("ok"), v.literal("error")),
+        observedAtUtc: v.optional(v.number()),
+        observedAtLocal: v.optional(v.string()),
+        tempC: v.optional(v.number()),
+        tempF: v.optional(v.number()),
+        raw: v.optional(v.string()),
+        error: v.optional(v.string()),
+      }),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_station_capturedAt", ["stationIcao", "capturedAt"]),
+
   kordForecastPredictions: defineTable({
     stationIcao: v.string(),
     provider: v.union(

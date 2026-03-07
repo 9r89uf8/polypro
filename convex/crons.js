@@ -37,6 +37,15 @@ crons.cron(
     { stationIcao: "KORD", durationDays: 5, unit: "imperial", language: "en-US" },
 );
 
+// Runs at minute 30 so current-temperature-only sampling lands halfway between
+// the hourly forecast snapshots without doubling forecast API traffic.
+crons.cron(
+    "kord_current_temps_minute_30",
+    "30 * * * *",
+    api.forecastCollector.collectKordCurrentSnapshot,
+    { stationIcao: "KORD", unit: "imperial", language: "en-US" },
+);
+
 // Runs every hour at minutes 49 and 52 UTC.
 // The function itself checks America/Chicago time and enqueues only during the
 // midday scheduled hour window.

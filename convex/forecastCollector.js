@@ -42,6 +42,9 @@ const ALLOWED_FORECAST_DURATIONS = new Set([1, 5, 10, 15, 25, 45]);
 const MAX_QUERY_LIMIT = 240;
 const DEFAULT_PREDICTION_BACKFILL_LIMIT = 720;
 const MAX_PREDICTION_BACKFILL_LIMIT = 2160;
+const DEFAULT_CURRENT_TEMP_ACCURACY_DAYS = 30;
+const MAX_CURRENT_TEMP_ACCURACY_DAYS = 120;
+const DEFAULT_CURRENT_TEMP_MATCH_MAX_GAP_MINUTES = 40;
 const RETRY_DELAYS_MS = [1000, 3000];
 const ACCUWEATHER_LOCATION_KEY_TTL_MS = 1000 * 60 * 60 * 24;
 
@@ -82,6 +85,38 @@ const FORECAST_PROVIDER = {
   GOOGLE: "google",
   WEATHERCOM: "weathercom",
 };
+
+const CURRENT_TEMP_PROVIDER_SOURCES = [
+  {
+    provider: "microsoft",
+    source: "microsoft_current",
+    label: "Microsoft",
+  },
+  {
+    provider: "accuweather",
+    source: "accuweather_current",
+    label: "AccuWeather",
+  },
+  {
+    provider: "google",
+    source: "google_weather_current",
+    label: "Google",
+  },
+  {
+    provider: "weathercom",
+    source: "weathercom_current",
+    label: "Weather.com",
+  },
+  {
+    provider: "openmeteo",
+    source: "open_meteo_current",
+    label: "Open-Meteo",
+  },
+];
+
+const CURRENT_TEMP_PROVIDER_SOURCE_BY_ID = Object.fromEntries(
+  CURRENT_TEMP_PROVIDER_SOURCES.map((entry) => [entry.source, entry]),
+);
 
 const STATIONS = {
   KORD: {
@@ -231,6 +266,71 @@ function toNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : null;
+}
+
+function normalizeReportedTempF(tempF) {
+  const numeric = toFiniteNumber(tempF);
+  if (numeric === null) {
+    return null;
+  }
+
+  const roundedToTenth = roundToTenth(numeric);
+  const absValue = Math.abs(roundedToTenth);
+  const wholeDegrees = Math.trunc(absValue);
+  const tenthDigit = Math.round((absValue - wholeDegrees) * 10);
+  const normalizedAbsValue = tenthDigit === 9 ? wholeDegrees + 1 : wholeDegrees;
+  return roundedToTenth < 0 ? -normalizedAbsValue : normalizedAbsValue;
+}
+
+function findNearestObservationByTimestamp(rows, targetTsUtc, maxGapMs) {
+  if (!rows.length || !Number.isFinite(targetTsUtc)) {
+    return null;
+  }
+
+  let low = 0;
+  let high = rows.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (rows[mid].tsUtc < targetTsUtc) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+
+  let bestRow = null;
+  let bestDiffMs = Number.POSITIVE_INFINITY;
+  for (const candidateIndex of [low - 1, low]) {
+    if (candidateIndex < 0 || candidateIndex >= rows.length) {
+      continue;
+    }
+
+    const candidateRow = rows[candidateIndex];
+    const diffMs = Math.abs(candidateRow.tsUtc - targetTsUtc);
+    if (diffMs > maxGapMs) {
+      continue;
+    }
+
+    if (
+      diffMs < bestDiffMs ||
+      (diffMs === bestDiffMs &&
+        bestRow !== null &&
+        candidateRow.tsUtc < bestRow.tsUtc) ||
+      bestRow === null
+    ) {
+      bestRow = candidateRow;
+      bestDiffMs = diffMs;
+    }
+  }
+
+  if (!bestRow) {
+    return null;
+  }
+
+  return {
+    row: bestRow,
+    diffMs: bestDiffMs,
+  };
 }
 
 function parseValidUtcEpoch(value) {
@@ -1247,6 +1347,42 @@ async function fetchWeatherComForecastAndCurrent({
   };
 }
 
+async function fetchWeatherComCurrentForStation({ station, unit, language }) {
+  const apiKey = getWeatherComApiKey();
+  if (!apiKey) {
+    return makeSourceErrorReading(
+      "weathercom_current",
+      "Missing WEATHERCOM_API_KEY.",
+    );
+  }
+
+  const weatherComLanguage = normalizeWeatherComLanguage(language);
+  let geocode = `${station.lat},${station.lon}`;
+  const placeId = toNonEmptyString(station.weatherComPlaceId);
+  if (placeId) {
+    try {
+      const point = await fetchWeatherComLocationPoint({
+        placeId,
+        language: weatherComLanguage,
+        apiKey,
+      });
+      geocode = `${point.lat},${point.lon}`;
+    } catch (error) {
+      // Keep the station geocode fallback so the lightweight current-only poll
+      // does not need the heavier Weather.com page crawl.
+    }
+  }
+
+  return await resolveSourceReading("weathercom_current", () =>
+    fetchWeatherComCurrentReading({
+      geocode,
+      unit,
+      language: weatherComLanguage,
+      apiKey,
+    }),
+  );
+}
+
 function formatErrorMessage(error) {
   const message =
     error instanceof Error
@@ -1575,6 +1711,37 @@ async function fetchAccuWeatherForecastAndCurrent({
   };
 }
 
+async function fetchAccuWeatherCurrentForStation({ station, unit, language }) {
+  const apiKey = toNonEmptyString(process.env.ACCUWEATHER_API_KEY);
+  if (!apiKey) {
+    return makeSourceErrorReading(
+      "accuweather_current",
+      "Missing ACCUWEATHER_API_KEY.",
+    );
+  }
+
+  const accuLanguage = normalizeAccuWeatherLanguage(language);
+  let locationKey;
+  try {
+    locationKey = await resolveAccuWeatherLocationKey({
+      station,
+      language: accuLanguage,
+      apiKey,
+    });
+  } catch (error) {
+    return makeSourceErrorReading("accuweather_current", error);
+  }
+
+  return await resolveSourceReading("accuweather_current", () =>
+    fetchAccuWeatherCurrentReading({
+      locationKey,
+      unit,
+      language: accuLanguage,
+      apiKey,
+    }),
+  );
+}
+
 async function fetchGoogleDailyForecast({
   station,
   durationDays,
@@ -1712,6 +1879,25 @@ async function fetchGoogleForecastAndCurrent({
   };
 }
 
+async function fetchGoogleCurrentForStation({ station, unit, language }) {
+  const apiKey = toNonEmptyString(process.env.GOOGLE_WEATHER_API_KEY);
+  if (!apiKey) {
+    return makeSourceErrorReading(
+      "google_weather_current",
+      "Missing GOOGLE_WEATHER_API_KEY.",
+    );
+  }
+
+  return await resolveSourceReading("google_weather_current", () =>
+    fetchGoogleCurrentReading({
+      station,
+      unit,
+      language: normalizeGoogleLanguage(language),
+      apiKey,
+    }),
+  );
+}
+
 async function fetchNoaaCurrentReading(stationIcao) {
   const url = `${NOAA_LATEST_METAR_BASE_URL}/${stationIcao}.TXT`;
   const response = await fetch(url, {
@@ -1843,6 +2029,22 @@ async function resolveSourceReading(source, fetcher) {
   }
 }
 
+function getCurrentOnlySnapshotStatus(actualReadings) {
+  const successfulActualCount = actualReadings.filter(
+    (reading) => reading.status === SOURCE_STATUS.OK,
+  ).length;
+  if (
+    successfulActualCount === actualReadings.length &&
+    actualReadings.length > 0
+  ) {
+    return SNAPSHOT_STATUS.OK;
+  }
+  if (successfulActualCount > 0) {
+    return SNAPSHOT_STATUS.PARTIAL;
+  }
+  return SNAPSHOT_STATUS.ERROR;
+}
+
 export const insertSnapshot = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
@@ -1912,6 +2114,31 @@ export const insertSnapshot = internalMutationGeneric({
     }
 
     return snapshotId;
+  },
+});
+
+export const insertCurrentSnapshot = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    stationName: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    unit: v.union(v.literal("imperial"), v.literal("metric")),
+    language: v.string(),
+    status: v.union(
+      v.literal(SNAPSHOT_STATUS.OK),
+      v.literal(SNAPSHOT_STATUS.PARTIAL),
+      v.literal(SNAPSHOT_STATUS.ERROR),
+    ),
+    actualReadings: v.array(sourceReadingValidator),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    return await ctx.db.insert("kordCurrentSnapshots", {
+      ...args,
+      createdAt: now,
+      updatedAt: now,
+    });
   },
 });
 
@@ -2178,6 +2405,102 @@ export const collectKordHourlySnapshot = actionGeneric({
   },
 });
 
+export const collectKordCurrentSnapshot = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    unit: v.optional(v.union(v.literal("imperial"), v.literal("metric"))),
+    language: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = (args.stationIcao ?? "KORD").trim().toUpperCase();
+    const station = STATIONS[stationIcao];
+    if (!station) {
+      throw new Error(`Unsupported stationIcao '${stationIcao}'.`);
+    }
+
+    const unit = args.unit === "metric" ? "metric" : DEFAULT_MICROSOFT_UNIT;
+    const language =
+      toNonEmptyString(args.language) ?? DEFAULT_MICROSOFT_LANGUAGE;
+    const capturedAt = Date.now();
+    const capturedAtLocal = formatChicagoDateTime(capturedAt);
+
+    const [
+      microsoftCurrentResult,
+      accuweatherCurrentResult,
+      googleCurrentResult,
+      weathercomCurrentResult,
+      noaaResult,
+      iemResult,
+      openMeteoResult,
+    ] = await Promise.all([
+      resolveSourceReading("microsoft_current", () =>
+        fetchMicrosoftCurrentReading({ station, unit, language }),
+      ),
+      fetchAccuWeatherCurrentForStation({
+        station,
+        unit,
+        language,
+      }),
+      fetchGoogleCurrentForStation({
+        station,
+        unit,
+        language,
+      }),
+      fetchWeatherComCurrentForStation({
+        station,
+        unit,
+        language,
+      }),
+      resolveSourceReading("noaa_latest_metar", () =>
+        fetchNoaaCurrentReading(station.stationIcao),
+      ),
+      resolveSourceReading("iem_asos_latest", () =>
+        fetchIemCurrentReading(station.stationIem),
+      ),
+      resolveSourceReading("open_meteo_current", () =>
+        fetchOpenMeteoCurrentReading(station),
+      ),
+    ]);
+
+    const actualReadings = [
+      microsoftCurrentResult,
+      accuweatherCurrentResult,
+      googleCurrentResult,
+      weathercomCurrentResult,
+      noaaResult,
+      iemResult,
+      openMeteoResult,
+    ];
+    const status = getCurrentOnlySnapshotStatus(actualReadings);
+    const snapshotId = await ctx.runMutation(
+      "forecastCollector:insertCurrentSnapshot",
+      {
+        stationIcao,
+        stationName: station.stationName,
+        capturedAt,
+        capturedAtLocal,
+        unit,
+        language,
+        status,
+        actualReadings,
+      },
+    );
+
+    return {
+      ok: status !== SNAPSHOT_STATUS.ERROR,
+      status,
+      snapshotId,
+      stationIcao,
+      stationName: station.stationName,
+      capturedAt,
+      capturedAtLocal,
+      unit,
+      language,
+      actualReadings,
+    };
+  },
+});
+
 export const getRecentSnapshots = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
@@ -2200,6 +2523,268 @@ export const getRecentSnapshots = queryGeneric({
       stationIcao,
       count: rows.length,
       rows,
+    };
+  },
+});
+
+export const getRecentCurrentSnapshots = queryGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = (args.stationIcao ?? "KORD").trim().toUpperCase();
+    const parsedLimit = Number.isInteger(args.limit) ? Number(args.limit) : 48;
+    const limit = Math.max(1, Math.min(MAX_QUERY_LIMIT, parsedLimit));
+
+    const rows = await ctx.db
+      .query("kordCurrentSnapshots")
+      .withIndex("by_station_capturedAt", (query) =>
+        query.eq("stationIcao", stationIcao),
+      )
+      .order("desc")
+      .take(limit);
+
+    return {
+      stationIcao,
+      count: rows.length,
+      rows,
+    };
+  },
+});
+
+export const getCurrentTempAccuracy = queryGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    days: v.optional(v.number()),
+    maxGapMinutes: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = (args.stationIcao ?? "KORD").trim().toUpperCase();
+    if (!STATIONS[stationIcao]) {
+      throw new Error(`Unsupported stationIcao '${stationIcao}'.`);
+    }
+
+    const requestedDays = Number.isInteger(args.days)
+      ? Number(args.days)
+      : DEFAULT_CURRENT_TEMP_ACCURACY_DAYS;
+    const days = Math.max(
+      1,
+      Math.min(MAX_CURRENT_TEMP_ACCURACY_DAYS, requestedDays),
+    );
+    const requestedGapMinutes = Number.isFinite(args.maxGapMinutes)
+      ? Number(args.maxGapMinutes)
+      : DEFAULT_CURRENT_TEMP_MATCH_MAX_GAP_MINUTES;
+    const maxGapMinutes = Math.max(
+      1,
+      Math.min(120, Math.round(requestedGapMinutes)),
+    );
+    const endDate = formatChicagoDate(Date.now());
+    const startDate = addUtcDays(endDate, -(days - 1));
+    const endDateExclusive = addUtcDays(endDate, 1);
+    const approximateSnapshotStartEpoch =
+      Date.now() - (days + 2) * 24 * 60 * 60 * 1000;
+    const maxGapMs = maxGapMinutes * 60 * 1000;
+
+    const [forecastSnapshotRows, currentSnapshotRows, officialRowsRaw] =
+      await Promise.all([
+        ctx.db
+        .query("kordForecastSnapshots")
+        .withIndex("by_station_capturedAt", (query) =>
+          query
+            .eq("stationIcao", stationIcao)
+            .gte("capturedAt", approximateSnapshotStartEpoch),
+        )
+        .collect(),
+        ctx.db
+          .query("kordCurrentSnapshots")
+          .withIndex("by_station_capturedAt", (query) =>
+            query
+              .eq("stationIcao", stationIcao)
+              .gte("capturedAt", approximateSnapshotStartEpoch),
+          )
+          .collect(),
+        ctx.db
+          .query("metarObservations")
+          .withIndex("by_station_mode_date_ts", (query) =>
+            query
+              .eq("stationIcao", stationIcao)
+              .eq("mode", "official")
+              .gte("date", startDate)
+              .lt("date", endDateExclusive),
+          )
+          .collect(),
+      ]);
+
+    const snapshots = [...forecastSnapshotRows, ...currentSnapshotRows].filter(
+      (snapshot) => {
+        const snapshotDate = formatChicagoDate(snapshot.capturedAt);
+        return snapshotDate >= startDate && snapshotDate <= endDate;
+      },
+    );
+    const officialRows = [...officialRowsRaw].sort((a, b) => a.tsUtc - b.tsUtc);
+    const statsBySource = new Map(
+      CURRENT_TEMP_PROVIDER_SOURCES.map((entry) => [
+        entry.source,
+        {
+          provider: entry.provider,
+          source: entry.source,
+          label: entry.label,
+          candidateCount: 0,
+          matchedCount: 0,
+          unmatchedCount: 0,
+          exactMatchCount: 0,
+          withinOneCount: 0,
+          totalAbsoluteErrorF: 0,
+          totalBiasF: 0,
+          totalGapMs: 0,
+          latestMatchedAtUtc: null,
+        },
+      ]),
+    );
+    const seenProviderObservationKeys = new Set();
+
+    for (const snapshot of snapshots) {
+      for (const reading of snapshot.actualReadings ?? []) {
+        const providerEntry = CURRENT_TEMP_PROVIDER_SOURCE_BY_ID[reading.source];
+        if (!providerEntry || reading.status !== SOURCE_STATUS.OK) {
+          continue;
+        }
+
+        const observedAtUtc = toFiniteNumber(reading.observedAtUtc);
+        const normalizedProviderTempF = normalizeReportedTempF(reading.tempF);
+        if (observedAtUtc === null || normalizedProviderTempF === null) {
+          continue;
+        }
+
+        const dedupeKey = `${reading.source}:${observedAtUtc}`;
+        if (seenProviderObservationKeys.has(dedupeKey)) {
+          continue;
+        }
+        seenProviderObservationKeys.add(dedupeKey);
+
+        const stats = statsBySource.get(reading.source);
+        stats.candidateCount += 1;
+
+        const officialMatch = findNearestObservationByTimestamp(
+          officialRows,
+          observedAtUtc,
+          maxGapMs,
+        );
+        if (!officialMatch) {
+          stats.unmatchedCount += 1;
+          continue;
+        }
+
+        const normalizedOfficialTempF = normalizeReportedTempF(
+          officialMatch.row.tempF,
+        );
+        if (normalizedOfficialTempF === null) {
+          stats.unmatchedCount += 1;
+          continue;
+        }
+
+        const biasF = normalizedProviderTempF - normalizedOfficialTempF;
+        const absoluteErrorF = Math.abs(biasF);
+        stats.matchedCount += 1;
+        stats.totalBiasF += biasF;
+        stats.totalAbsoluteErrorF += absoluteErrorF;
+        stats.totalGapMs += officialMatch.diffMs;
+        if (absoluteErrorF === 0) {
+          stats.exactMatchCount += 1;
+        }
+        if (absoluteErrorF <= 1) {
+          stats.withinOneCount += 1;
+        }
+        if (
+          stats.latestMatchedAtUtc === null ||
+          observedAtUtc > stats.latestMatchedAtUtc
+        ) {
+          stats.latestMatchedAtUtc = observedAtUtc;
+        }
+      }
+    }
+
+    const ranking = Array.from(statsBySource.values())
+      .map((stats) => {
+        const exactMatchPct =
+          stats.matchedCount > 0
+            ? roundToTenth((stats.exactMatchCount / stats.matchedCount) * 100)
+            : null;
+        const withinOnePct =
+          stats.matchedCount > 0
+            ? roundToTenth((stats.withinOneCount / stats.matchedCount) * 100)
+            : null;
+        const coveragePct =
+          stats.candidateCount > 0
+            ? roundToTenth((stats.matchedCount / stats.candidateCount) * 100)
+            : null;
+        const meanAbsoluteErrorF =
+          stats.matchedCount > 0
+            ? roundToTenth(stats.totalAbsoluteErrorF / stats.matchedCount)
+            : null;
+        const meanBiasF =
+          stats.matchedCount > 0
+            ? roundToTenth(stats.totalBiasF / stats.matchedCount)
+            : null;
+        const averageGapMinutes =
+          stats.matchedCount > 0
+            ? roundToTenth(stats.totalGapMs / stats.matchedCount / 60000)
+            : null;
+
+        return {
+          provider: stats.provider,
+          source: stats.source,
+          label: stats.label,
+          candidateCount: stats.candidateCount,
+          matchedCount: stats.matchedCount,
+          unmatchedCount: stats.unmatchedCount,
+          coveragePct,
+          exactMatchCount: stats.exactMatchCount,
+          exactMatchPct,
+          withinOneCount: stats.withinOneCount,
+          withinOnePct,
+          meanAbsoluteErrorF,
+          meanBiasF,
+          averageGapMinutes,
+          latestMatchedAtUtc: stats.latestMatchedAtUtc,
+          latestMatchedAtLocal:
+            stats.latestMatchedAtUtc !== null
+              ? formatChicagoDateTime(stats.latestMatchedAtUtc)
+              : null,
+        };
+      })
+      .sort((a, b) => {
+        if (a.matchedCount === 0 || b.matchedCount === 0) {
+          if (a.matchedCount === b.matchedCount) {
+            return a.label.localeCompare(b.label);
+          }
+          return b.matchedCount - a.matchedCount;
+        }
+        if (b.exactMatchPct !== a.exactMatchPct) {
+          return b.exactMatchPct - a.exactMatchPct;
+        }
+        if (a.meanAbsoluteErrorF !== b.meanAbsoluteErrorF) {
+          return a.meanAbsoluteErrorF - b.meanAbsoluteErrorF;
+        }
+        if (b.withinOnePct !== a.withinOnePct) {
+          return b.withinOnePct - a.withinOnePct;
+        }
+        if (b.matchedCount !== a.matchedCount) {
+          return b.matchedCount - a.matchedCount;
+        }
+        return a.label.localeCompare(b.label);
+      });
+
+    return {
+      stationIcao,
+      startDate,
+      endDate,
+      days,
+      maxGapMinutes,
+      snapshotCount: snapshots.length,
+      officialObservationCount: officialRows.length,
+      ranking,
     };
   },
 });

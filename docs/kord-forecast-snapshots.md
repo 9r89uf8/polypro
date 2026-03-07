@@ -8,6 +8,7 @@ This document covers how O'Hare forecast and current-temperature data flows work
 - Store query-friendly per-provider, per-target-date forecast points for trend charts.
 - Show the latest Microsoft, AccuWeather, Google, and Weather.com 5-day forecasts on one page.
 - Show current temperatures from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo.
+- Rank Microsoft, AccuWeather, Google, Weather.com, and Open-Meteo current temperatures by how often they match official NOAA hourly KORD observations.
 - Show NOAA official max temperature for Chicago today using the same official-max path used on `/kord/day/[date]`.
 
 ## Route and UI
@@ -15,6 +16,7 @@ This document covers how O'Hare forecast and current-temperature data flows work
 - Route: `/kord/forecast-snapshots` (`app/kord/forecast-snapshots/page.js`)
 - Uses:
   - `forecastCollector:getRecentSnapshots` for snapshot history and latest snapshot.
+  - `forecastCollector:getRecentCurrentSnapshots` for the latest dedicated current-temperature captures.
   - `forecastCollector:collectKordHourlySnapshot` for manual "Collect Now".
   - `forecastCollector:backfillKordForecastPredictions` for one-time indexing of existing snapshots into trend rows.
   - `forecastCollector:getForecastTrend` for provider/date progression charts.
@@ -22,7 +24,14 @@ This document covers how O'Hare forecast and current-temperature data flows work
 - Sections:
   - `Latest Snapshot`: on desktop, shows capture time, overall status, Microsoft status, AccuWeather status, Google status, Weather.com status, and source health counts. On mobile, this collapses to a compact summary card with capture time, overall status, a single major-sources badge (`Microsoft`, `AccuWeather`, `Google`, `Weather.com`, `NOAA`), and the actual-source ok count.
   - `Forecast Progression`: provider selector, target-date picker, quick date chips from the latest forecast, summary cards, a stepped line chart of predicted high temperature over capture time, and a per-capture delta table that is collapsed by default behind a toggle button. On mobile, the chart uses a wider horizontal-scroll container so dense hourly history stays readable.
-  - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google + Weather.com current readings.
+  - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google + Weather.com current readings from whichever capture is newer:
+    - the hourly full forecast snapshot
+    - or the half-hour current-only snapshot
+  - `Provider vs NOAA Hourly Match`: trailing-window selector (`7`, `30`, `90` days), summary cards, and a ranking table comparing Microsoft/AccuWeather/Google/Weather.com/Open-Meteo current readings against the nearest official NOAA observation for the same provider timestamp.
+    - Pairing rule: for each saved provider reading, use that reading's `observedAtUtc` and pair it with the nearest official `metarObservations` row within a 40-minute default window.
+    - Dedupe rule: repeated provider rows with the same `(source, observedAtUtc)` are counted once so manual re-collects do not overweight a single hour.
+    - Integer-normalization rule used for scoring: temperatures are truncated to whole degrees, except values ending in `.9`, which round up by `1` before exact-match / within-1F scoring.
+    - Ranking order: highest exact-match percentage first, then lowest mean absolute error, then highest within-1F percentage, then larger matched sample count.
   - `Latest NOAA METAR Max (Official Max Today)`: `metarMaxF` and related official fields from `dailyComparisons`.
   - `Microsoft 5-Day Forecast`: latest `microsoftForecastDays` (displayed columns: date, max F, day phrase, night phrase).
   - `AccuWeather 5-Day Forecast`: latest `accuweatherForecastDays` (displayed columns: date, max F, day phrase, night phrase).
@@ -82,13 +91,57 @@ Defined in `convex/forecastCollector.js`.
     - `partial`: any forecast provider failed or any current source failed.
     - `error`: all four forecast providers failed and all current sources failed.
 
+- Action: `forecastCollector:collectKordCurrentSnapshot`
+  - Default station: `KORD`.
+  - Fetches current temperatures only:
+    - Microsoft current conditions
+    - AccuWeather current conditions
+    - Google current conditions
+    - Weather.com current conditions
+    - NOAA latest METAR
+    - IEM ASOS latest
+    - Open-Meteo current
+  - Does not fetch daily forecasts or write `kordForecastPredictions`.
+  - Writes one row to `kordCurrentSnapshots`.
+  - Status is based only on current-reading success:
+    - `ok`: all current sources succeeded
+    - `partial`: at least one current source succeeded and at least one failed
+    - `error`: all current sources failed
+
 - Query: `forecastCollector:getRecentSnapshots`
   - Returns latest-first rows for a station.
+
+- Query: `forecastCollector:getRecentCurrentSnapshots`
+  - Returns latest-first rows from `kordCurrentSnapshots` for a station.
 
 - Query: `forecastCollector:getForecastTrend`
   - Inputs: `stationIcao`, `provider`, `targetDate`.
   - Reads normalized rows from `kordForecastPredictions`.
   - Returns ascending capture-time rows with derived `deltaMaxF` and `changeDirection` (`initial` | `up` | `down` | `same`) so the page can render a stepped progression chart and change table.
+
+- Query: `forecastCollector:getCurrentTempAccuracy`
+  - Inputs: `stationIcao`, trailing `days`, optional `maxGapMinutes`.
+  - Reads:
+    - `kordForecastSnapshots` in the requested trailing window.
+    - `kordCurrentSnapshots` in the requested trailing window.
+    - official `metarObservations` rows in the same Chicago-date range.
+  - Uses the saved provider `actualReadings[].observedAtUtc` timestamps, not snapshot capture time, when pairing providers to NOAA.
+  - Includes the five non-NOAA provider sources:
+    - `microsoft_current`
+    - `accuweather_current`
+    - `google_weather_current`
+    - `weathercom_current`
+    - `open_meteo_current`
+  - Dedupes repeated provider rows by `(source, observedAtUtc)` before scoring.
+  - Returns per-provider metrics used by the page table:
+    - `candidateCount`
+    - `matchedCount`
+    - `coveragePct`
+    - `exactMatchCount`, `exactMatchPct`
+    - `withinOneCount`, `withinOnePct`
+    - `meanAbsoluteErrorF`
+    - `meanBiasF`
+    - `averageGapMinutes`
 
 - Internal mutation: `forecastCollector:insertSnapshot`
   - Inserts normalized snapshot payload into storage.
@@ -110,6 +163,16 @@ Defined in `convex/crons.js`.
     - `durationDays: 5`
     - `unit: "imperial"`
     - `language: "en-US"`
+
+- Cron: `kord_current_temps_minute_30`
+  - Expression: `30 * * * *` (minute 30 every hour, UTC-based cron schedule).
+  - Calls `api.forecastCollector.collectKordCurrentSnapshot` with:
+    - `stationIcao: "KORD"`
+    - `unit: "imperial"`
+    - `language: "en-US"`
+  - Purpose:
+    - land a lightweight current-only sample halfway between hourly forecast snapshots
+    - improve NOAA/provider current-temperature comparison coverage without doubling forecast endpoint traffic
 
 Manual refresh can also be triggered at any time from the page button (`Collect Now`).
 
@@ -140,6 +203,17 @@ Table: `kordForecastSnapshots` (`convex/schema.js`)
 - Current payload:
   - `actualReadings[]` (source, status, observed time, tempF/tempC, raw/error)
   - Includes `microsoft_current`, `accuweather_current`, `google_weather_current`, `weathercom_current`, `noaa_latest_metar`, `iem_asos_latest`, `open_meteo_current`.
+- Index:
+  - `by_station_capturedAt` (`stationIcao`, `capturedAt`)
+
+Table: `kordCurrentSnapshots` (`convex/schema.js`)
+
+- Fields:
+  - `stationIcao`, `stationName`
+  - `capturedAt`, `capturedAtLocal`
+  - `unit`, `language`
+  - `status` (`ok` | `partial` | `error`)
+  - `actualReadings[]` with the same reading shape used by `kordForecastSnapshots`
 - Index:
   - `by_station_capturedAt` (`stationIcao`, `capturedAt`)
 

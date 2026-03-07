@@ -21,6 +21,7 @@ const STATION_ICAO = "KORD";
 const FORECAST_UNIT = "imperial";
 const FORECAST_LANGUAGE = "en-US";
 const FORECAST_TREND_BACKFILL_LIMIT = 720;
+const ACCURACY_WINDOW_OPTIONS = [7, 30, 90];
 
 const TREND_PROVIDER_OPTIONS = [
   {
@@ -192,6 +193,20 @@ function formatDelta(value, unit) {
   return `${prefix}${value.toFixed(1)}°${unit}`;
 }
 
+function formatPercent(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${value.toFixed(1)}%`;
+}
+
+function formatMinutes(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${value.toFixed(1)} min`;
+}
+
 function getStatusClass(status) {
   if (status === "ok") {
     return "bg-emerald-100 text-emerald-800";
@@ -287,10 +302,25 @@ function ForecastSnapshotWorkspace() {
   const [backfillMessage, setBackfillMessage] = useState("");
   const [selectedProvider, setSelectedProvider] = useState("weathercom");
   const [selectedTargetDate, setSelectedTargetDate] = useState("");
+  const [selectedAccuracyDays, setSelectedAccuracyDays] = useState(30);
   const snapshotsResult = useQuery("forecastCollector:getRecentSnapshots", {
     stationIcao: STATION_ICAO,
     limit: 72,
   });
+  const currentSnapshotsResult = useQuery(
+    "forecastCollector:getRecentCurrentSnapshots",
+    {
+      stationIcao: STATION_ICAO,
+      limit: 48,
+    },
+  );
+  const currentTempAccuracy = useQuery(
+    "forecastCollector:getCurrentTempAccuracy",
+    {
+      stationIcao: STATION_ICAO,
+      days: selectedAccuracyDays,
+    },
+  );
   const chicagoTodayDate = useMemo(() => chicagoTodayKey(), []);
   const todayDayData = useQuery("weather:getDayObservations", {
     stationIcao: STATION_ICAO,
@@ -302,8 +332,22 @@ function ForecastSnapshotWorkspace() {
   );
 
   const snapshots = snapshotsResult?.rows ?? [];
+  const currentSnapshots = currentSnapshotsResult?.rows ?? [];
   const latestSnapshot = snapshots[0] ?? null;
+  const latestCurrentOnlySnapshot = currentSnapshots[0] ?? null;
+  const latestCurrentReadingsSnapshot =
+    latestCurrentOnlySnapshot &&
+    (!latestSnapshot ||
+      latestCurrentOnlySnapshot.capturedAt > latestSnapshot.capturedAt)
+      ? latestCurrentOnlySnapshot
+      : latestSnapshot;
   const todayComparison = todayDayData?.comparison ?? null;
+  const accuracyRows = currentTempAccuracy?.ranking ?? [];
+  const bestAccuracyRow =
+    accuracyRows.find((row) => row.matchedCount > 0) ?? null;
+  const hasAccuracyCandidates = accuracyRows.some(
+    (row) => row.candidateCount > 0,
+  );
   const selectedProviderConfig = useMemo(
     () => getTrendProviderConfig(selectedProvider),
     [selectedProvider],
@@ -991,6 +1035,10 @@ function ForecastSnapshotWorkspace() {
 
         <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
           <h2 className="text-lg font-semibold text-foreground">Current Temperature Sources</h2>
+          <p className="mt-2 text-xs text-black/60">
+            Uses the newest current-temperature capture available from either
+            the hourly forecast snapshot or the half-hour current-only poll.
+          </p>
           <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
             <table className="min-w-full text-sm">
               <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
@@ -1003,7 +1051,7 @@ function ForecastSnapshotWorkspace() {
                 </tr>
               </thead>
               <tbody>
-                {!latestSnapshot ? (
+                {!latestCurrentReadingsSnapshot ? (
                   <tr>
                     <td className="px-3 py-3 text-black/60" colSpan={5}>
                       No snapshot loaded.
@@ -1011,7 +1059,10 @@ function ForecastSnapshotWorkspace() {
                   </tr>
                 ) : (
                   SOURCE_ORDER.map((source) => {
-                    const reading = getReadingBySource(latestSnapshot, source);
+                    const reading = getReadingBySource(
+                      latestCurrentReadingsSnapshot,
+                      source,
+                    );
                     const status = reading?.status ?? "missing";
                     return (
                       <tr key={source} className="border-t border-black/10">
@@ -1044,6 +1095,165 @@ function ForecastSnapshotWorkspace() {
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">
+                Provider vs NOAA Hourly Match
+              </h2>
+              <p className="mt-2 text-sm text-black/65">
+                Compare saved KORD current readings from Microsoft,
+                AccuWeather, Google, Weather.com, and Open-Meteo against the
+                nearest official NOAA hourly observation.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {ACCURACY_WINDOW_OPTIONS.map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setSelectedAccuracyDays(days)}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                    selectedAccuracyDays === days
+                      ? "border-black bg-black text-white"
+                      : "border-black/15 bg-white text-black hover:border-black"
+                  }`}
+                >
+                  Last {days} days
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-black/60">
+            Comparison rule: temperatures are truncated to whole degrees before
+            scoring, except values ending in <code>.9</code>, which round up by
+            1 degree. Each provider report is paired to the nearest official
+            NOAA observation within{" "}
+            {currentTempAccuracy?.maxGapMinutes ?? 40} minutes, and repeated
+            provider timestamps are counted once.
+          </p>
+
+          {currentTempAccuracy === undefined ? (
+            <p className="mt-4 text-sm text-black/65">
+              Loading provider vs NOAA accuracy...
+            </p>
+          ) : (
+            <>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Best Exact Match
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {bestAccuracyRow?.label ?? "—"}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {bestAccuracyRow
+                      ? `${formatPercent(bestAccuracyRow.exactMatchPct)} exact (${bestAccuracyRow.exactMatchCount}/${bestAccuracyRow.matchedCount})`
+                      : "No paired provider rows yet."}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Date Range
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {currentTempAccuracy.startDate} to {currentTempAccuracy.endDate}
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    Last {currentTempAccuracy.days} Chicago date
+                    {currentTempAccuracy.days === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                  <p className="text-xs uppercase tracking-wide text-black/60">
+                    Inputs
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-black">
+                    {currentTempAccuracy.snapshotCount} snapshots
+                  </p>
+                  <p className="mt-1 text-xs text-black/60">
+                    {currentTempAccuracy.officialObservationCount} official NOAA
+                    rows
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                <table className="min-w-[900px] text-sm">
+                  <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                    <tr>
+                      <th className="px-3 py-2">Rank</th>
+                      <th className="px-3 py-2">Provider</th>
+                      <th className="px-3 py-2">Paired / Candidate</th>
+                      <th className="px-3 py-2">Exact Match</th>
+                      <th className="px-3 py-2">Within 1F</th>
+                      <th className="px-3 py-2">Mean Abs Error</th>
+                      <th className="px-3 py-2">Mean Bias</th>
+                      <th className="px-3 py-2">Avg Gap</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!hasAccuracyCandidates ? (
+                      <tr>
+                        <td className="px-3 py-3 text-black/60" colSpan={8}>
+                          No provider rows are available for this comparison
+                          window yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      accuracyRows.map((row, index) => (
+                        <tr
+                          key={row.source}
+                          className={`border-t border-black/10 ${
+                            index === 0 && row.matchedCount > 0
+                              ? "bg-emerald-50/70"
+                              : ""
+                          }`}
+                        >
+                          <td className="px-3 py-2 font-semibold text-black">
+                            {row.matchedCount > 0 ? index + 1 : "—"}
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-black">
+                            {row.label}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {row.matchedCount}/{row.candidateCount}
+                            <span className="ml-2 text-xs text-black/55">
+                              ({formatPercent(row.coveragePct)})
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {row.exactMatchCount}/{row.matchedCount}
+                            <span className="ml-2 text-xs text-black/55">
+                              ({formatPercent(row.exactMatchPct)})
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {row.withinOneCount}/{row.matchedCount}
+                            <span className="ml-2 text-xs text-black/55">
+                              ({formatPercent(row.withinOnePct)})
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(row.meanAbsoluteErrorF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatDelta(row.meanBiasF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatMinutes(row.averageGapMinutes)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
