@@ -33,13 +33,14 @@ const CHICAGO_TIMEZONE = "America/Chicago";
 const MOBILE_MEDIA_QUERY = "(max-width: 768px)";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ENABLE_DAY_PAGE_NOAA_POLL = false;
+const PWS_SERIES_COLORS = ["#65a30d", "#7c2d12", "#7e22ce", "#0f766e"];
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function parseMinute(tsLocal) {
-  const match = /(\d{2}):(\d{2})$/.exec(tsLocal || "");
+  const match = /(\d{2}):(\d{2})(?::\d{2})?$/.exec(tsLocal || "");
   if (!match) {
     return null;
   }
@@ -76,6 +77,13 @@ function formatLagMinutes(noaaFirstSeenAt, tsUtc) {
   }
   const lagMinutes = Math.max(0, (noaaFirstSeenAt - tsUtc) / 60000);
   return `${lagMinutes.toFixed(1)} min`;
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${value.toFixed(0)}%`;
 }
 
 function parseDateKeyParts(dateKey) {
@@ -122,7 +130,8 @@ function buildPreviousDateKeys(dateKey, count) {
 }
 
 function formatStoredLocalDateTime(tsLocal) {
-  const match = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})$/.exec(tsLocal || "");
+  const match =
+    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(tsLocal || "");
   if (!match) {
     return tsLocal || "—";
   }
@@ -133,7 +142,9 @@ function formatStoredLocalDateTime(tsLocal) {
   }
   const period = hour24 >= 12 ? "PM" : "AM";
   const hour12 = hour24 % 12 || 12;
-  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+  const seconds = match[4];
+  const secondSuffix = seconds ? `:${seconds}` : "";
+  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")}${secondSuffix} ${period}`;
 }
 
 function getDateParts(formatter, date) {
@@ -312,6 +323,33 @@ function mergeObservationRows(officialRows, allRows, displayUnit) {
   return merged;
 }
 
+function buildPwsSeries(pwsRows, pwsSummaries) {
+  const summaryByStationId = new Map(
+    pwsSummaries.map((summary) => [summary.pwsStationId, summary]),
+  );
+  const rowsByStationId = new Map();
+
+  for (const row of pwsRows) {
+    const stationId = row.pwsStationId;
+    if (!rowsByStationId.has(stationId)) {
+      rowsByStationId.set(stationId, []);
+    }
+    rowsByStationId.get(stationId).push({
+      tsLocal: row.obsTimeLocal,
+      tempC: row.tempC,
+      tempF: row.tempF,
+    });
+  }
+
+  return Array.from(rowsByStationId.entries())
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId))
+    .map(([pwsStationId, rows]) => ({
+      pwsStationId,
+      rows,
+      summary: summaryByStationId.get(pwsStationId) ?? null,
+    }));
+}
+
 export default function KordDayPage() {
   const router = useRouter();
   const params = useParams();
@@ -321,8 +359,12 @@ export default function KordDayPage() {
   const [showRawObservations, setShowRawObservations] = useState(false);
   const [showOfficialSeries, setShowOfficialSeries] = useState(true);
   const [showUnofficialSeries, setShowUnofficialSeries] = useState(true);
+  const [showMadisSeries, setShowMadisSeries] = useState(true);
+  const [showPwsSeries, setShowPwsSeries] = useState(true);
   const [showPhoneSeries, setShowPhoneSeries] = useState(true);
   const [showUnofficialRawRows, setShowUnofficialRawRows] = useState(false);
+  const [showMadisRawRows, setShowMadisRawRows] = useState(false);
+  const [showPwsRawRows, setShowPwsRawRows] = useState(false);
   const [manualEntryValue, setManualEntryValue] = useState("");
   const [manualEntryUnit, setManualEntryUnit] = useState("F");
   const [manualSaveMessage, setManualSaveMessage] = useState("");
@@ -360,17 +402,54 @@ export default function KordDayPage() {
         }
       : "skip",
   );
+  const madisDayData = useQuery(
+    "madis:getDayPublicAsosHfm",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
+  const pwsDayData = useQuery(
+    "pws:getDayWeatherComPws",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
 
   const comparison = dayData?.comparison ?? null;
   const officialRows = dayData?.officialRows ?? [];
   const allRows = dayData?.allRows ?? [];
   const phoneRows = phoneDayData?.rows ?? [];
+  const madisRows = madisDayData?.rows ?? [];
+  const madisSummary = madisDayData?.summary ?? null;
+  const pwsRows = pwsDayData?.rows ?? [];
+  const pwsSummaries = pwsDayData?.summaries ?? [];
   const manualMax =
     displayUnit === "C" ? comparison?.manualMaxC : comparison?.manualMaxF;
   const officialMax =
     displayUnit === "C" ? comparison?.metarMaxC : comparison?.metarMaxF;
   const allMax =
     displayUnit === "C" ? comparison?.metarAllMaxC : comparison?.metarAllMaxF;
+  const madisMax =
+    displayUnit === "C" ? madisSummary?.maxTempC : madisSummary?.maxTempF;
+  const madisChartRows = useMemo(
+    () =>
+      madisRows.map((row) => ({
+        tsLocal: row.obsTimeLocal,
+        tempC: row.tempC,
+        tempF: row.tempF,
+      })),
+    [madisRows],
+  );
+  const pwsSeries = useMemo(
+    () => buildPwsSeries(pwsRows, pwsSummaries),
+    [pwsRows, pwsSummaries],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) {
@@ -588,6 +667,32 @@ export default function KordDayPage() {
       );
     }
 
+    if (showMadisSeries) {
+      datasets.push(
+        buildLineDataset(
+          madisChartRows,
+          displayUnit,
+          "MADIS HFM",
+          "#d97706",
+          basePointConfig,
+        ),
+      );
+    }
+
+    if (showPwsSeries) {
+      for (const [index, pwsStation] of pwsSeries.entries()) {
+        datasets.push(
+          buildLineDataset(
+            pwsStation.rows,
+            displayUnit,
+            `PWS ${pwsStation.pwsStationId}`,
+            PWS_SERIES_COLORS[index % PWS_SERIES_COLORS.length],
+            basePointConfig,
+          ),
+        );
+      }
+    }
+
     const phonePointConfig = isMobileViewport
       ? {
           pointRadius: 4.5,
@@ -619,11 +724,15 @@ export default function KordDayPage() {
   }, [
     officialRows,
     allRows,
+    madisChartRows,
+    pwsSeries,
     phoneRows,
     displayUnit,
     isMobileViewport,
     showOfficialSeries,
     showUnofficialSeries,
+    showMadisSeries,
+    showPwsSeries,
     showPhoneSeries,
   ]);
 
@@ -828,7 +937,7 @@ export default function KordDayPage() {
           {isToday ? (
             <p className="mt-3 text-xs text-black/65">
               {liveMessage ||
-                "Live mode backfills official + all once from this page. NOAA latest polling is disabled on this page; ongoing official ingest runs via Convex cron."}
+                "Live mode backfills official + all once from this page. MADIS HFM and nearby PWS are collected separately by Convex cron. NOAA latest polling is disabled on this page; ongoing official ingest runs via Convex cron."}
             </p>
           ) : null}
         </header>
@@ -839,7 +948,7 @@ export default function KordDayPage() {
           </section>
         ) : (
           <>
-            <section className="grid gap-4 md:grid-cols-3">
+            <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
                   Manual / WU Max
@@ -910,6 +1019,58 @@ export default function KordDayPage() {
                   Obs: {comparison?.metarAllObsCount ?? "—"}
                 </p>
               </article>
+              <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                  MADIS HFM Max
+                </p>
+                <p className="mt-2 text-xl font-semibold text-black">
+                  {formatTemp(madisMax, displayUnit)}
+                </p>
+                <p className="mt-1 text-xs text-black/60">
+                  Obs: {madisSummary?.obsCount ?? "—"}
+                </p>
+                <p className="mt-1 text-xs text-black/60">
+                  Latest:{" "}
+                  {madisSummary?.latestObsTimeLocal
+                    ? formatStoredLocalDateTime(madisSummary.latestObsTimeLocal)
+                    : "—"}
+                </p>
+              </article>
+              {pwsSummaries.map((summary) => {
+                const pwsMax =
+                  displayUnit === "C" ? summary.maxTempC : summary.maxTempF;
+                const latestTemp =
+                  displayUnit === "C" ? summary.latestTempC : summary.latestTempF;
+                return (
+                  <article
+                    key={summary.pwsStationId}
+                    className="rounded-2xl border border-black/10 bg-white/70 p-4"
+                  >
+                    <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                      PWS {summary.pwsStationId}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      {summary.latestNeighborhood ?? "Weather.com/WU nearby station"}
+                    </p>
+                    <p className="mt-2 text-xl font-semibold text-black">
+                      {formatTemp(pwsMax, displayUnit)}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      Obs: {summary.obsCount ?? "—"}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      Latest:{" "}
+                      {summary.latestObsTimeLocal
+                        ? formatStoredLocalDateTime(summary.latestObsTimeLocal)
+                        : "—"}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      Current: {formatTemp(latestTemp, displayUnit)} | QC{" "}
+                      {summary.latestQcStatus ?? "—"}
+                    </p>
+                  </article>
+                );
+              })}
             </section>
 
             <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
@@ -936,6 +1097,20 @@ export default function KordDayPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setShowMadisSeries((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showMadisSeries ? "Hide MADIS HFM" : "Show MADIS HFM"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPwsSeries((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showPwsSeries ? "Hide Nearby PWS" : "Show Nearby PWS"}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setShowPhoneSeries((current) => !current)}
                     className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
                   >
@@ -944,7 +1119,7 @@ export default function KordDayPage() {
                 </div>
               </div>
               <p className="mt-2 text-sm text-black/65">
-                Official and All observation temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max.
+                Official, All, MADIS HFM, and collected nearby PWS temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max.
               </p>
               <p className="mt-2 text-xs text-black/55 md:hidden">
                 Tip: swipe horizontally to inspect points across the full day.
@@ -976,6 +1151,20 @@ export default function KordDayPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setShowMadisRawRows((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showMadisRawRows ? "Hide MADIS HFM" : "Show MADIS HFM"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPwsRawRows((current) => !current)}
+                    className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
+                  >
+                    {showPwsRawRows ? "Hide Nearby PWS" : "Show Nearby PWS"}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setShowRawObservations((current) => !current)}
                     className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
                   >
@@ -986,71 +1175,227 @@ export default function KordDayPage() {
                 </div>
               </div>
               {showRawObservations ? (
-                <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
-                      <tr>
-                        <th className="px-3 py-2">Local Time</th>
-                        <th className="px-3 py-2">Mode</th>
-                        <th className="px-3 py-2">Temp</th>
-                        <th className="px-3 py-2">Source</th>
-                        <th className="px-3 py-2">NOAA First Seen</th>
-                        <th className="px-3 py-2">Lag vs Obs</th>
-                        <th className="px-3 py-2">Raw METAR</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredRawRows.map((row, index) => (
-                        <tr key={`${row.mode}-${row.tsUtc}-${index}`} className="border-t border-black/10">
-                          <td className="px-3 py-2 text-black/80">
-                            {formatStoredLocalDateTime(row.tsLocal)}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span
-                              className={`rounded-full px-2 py-1 text-xs font-semibold ${
-                                row.mode === "official"
-                                  ? "bg-emerald-100 text-emerald-800"
-                                  : "bg-black/10 text-black/75"
-                              }`}
-                            >
-                              {row.mode}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-black/80">
-                            {formatTemp(row.temp, displayUnit)}
-                          </td>
-                          <td className="px-3 py-2 text-black/65">{row.source}</td>
-                          <td className="px-3 py-2 text-black/65">
-                            {row.mode === "official"
-                              ? formatChicagoDateTimeSeconds(row.noaaFirstSeenAt)
-                              : "—"}
-                          </td>
-                          <td className="px-3 py-2 text-black/65">
-                            {row.mode === "official"
-                              ? formatLagMinutes(row.noaaFirstSeenAt, row.tsUtc)
-                              : "—"}
-                          </td>
-                          <td
-                            className="max-w-[700px] px-3 py-2 font-mono text-xs text-black/70"
-                            title={row.rawMetar}
-                          >
-                            {row.rawMetar}
-                          </td>
-                        </tr>
-                      ))}
-                      {filteredRawRows.length === 0 ? (
-                        <tr>
-                          <td className="px-3 py-4 text-sm text-black/60" colSpan={7}>
-                            {mergedRows.length > 0 && !showUnofficialRawRows
-                              ? "Only unofficial (All) observations are available right now. Use \"Show Unofficial (All)\" to include them."
-                              : isToday
-                                ? "No official/all observations saved for today yet. Leave this page open to continue live polling."
-                                : "No observations saved for this day yet. Run compute first."}
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
+                <div className="mt-4 space-y-5">
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/55">
+                      Official / All METAR Rows
+                    </p>
+                    <div className="overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                          <tr>
+                            <th className="px-3 py-2">Local Time</th>
+                            <th className="px-3 py-2">Mode</th>
+                            <th className="px-3 py-2">Temp</th>
+                            <th className="px-3 py-2">Source</th>
+                            <th className="px-3 py-2">NOAA First Seen</th>
+                            <th className="px-3 py-2">Lag vs Obs</th>
+                            <th className="px-3 py-2">Raw METAR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredRawRows.map((row, index) => (
+                            <tr key={`${row.mode}-${row.tsUtc}-${index}`} className="border-t border-black/10">
+                              <td className="px-3 py-2 text-black/80">
+                                {formatStoredLocalDateTime(row.tsLocal)}
+                              </td>
+                              <td className="px-3 py-2">
+                                <span
+                                  className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                                    row.mode === "official"
+                                      ? "bg-emerald-100 text-emerald-800"
+                                      : "bg-black/10 text-black/75"
+                                  }`}
+                                >
+                                  {row.mode}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-black/80">
+                                {formatTemp(row.temp, displayUnit)}
+                              </td>
+                              <td className="px-3 py-2 text-black/65">{row.source}</td>
+                              <td className="px-3 py-2 text-black/65">
+                                {row.mode === "official"
+                                  ? formatChicagoDateTimeSeconds(row.noaaFirstSeenAt)
+                                  : "—"}
+                              </td>
+                              <td className="px-3 py-2 text-black/65">
+                                {row.mode === "official"
+                                  ? formatLagMinutes(row.noaaFirstSeenAt, row.tsUtc)
+                                  : "—"}
+                              </td>
+                              <td
+                                className="max-w-[700px] px-3 py-2 font-mono text-xs text-black/70"
+                                title={row.rawMetar}
+                              >
+                                {row.rawMetar}
+                              </td>
+                            </tr>
+                          ))}
+                          {filteredRawRows.length === 0 ? (
+                            <tr>
+                              <td className="px-3 py-4 text-sm text-black/60" colSpan={7}>
+                                {mergedRows.length > 0 && !showUnofficialRawRows
+                                  ? "Only unofficial (All) observations are available right now. Use \"Show Unofficial (All)\" to include them."
+                                  : isToday
+                                    ? "No official/all observations saved for today yet. Leave this page open to continue live polling."
+                                    : "No observations saved for this day yet. Run compute first."}
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {showMadisRawRows ? (
+                    <div>
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/55">
+                        MADIS HFM Rows
+                      </p>
+                      <div className="overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                            <tr>
+                              <th className="px-3 py-2">Local Time</th>
+                              <th className="px-3 py-2">Temp</th>
+                              <th className="px-3 py-2">Dew Point</th>
+                              <th className="px-3 py-2">RH</th>
+                              <th className="px-3 py-2">First Seen</th>
+                              <th className="px-3 py-2">Lag vs Obs</th>
+                              <th className="px-3 py-2">Temp QC</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {madisRows.map((row) => (
+                              <tr key={row._id} className="border-t border-black/10">
+                                <td className="px-3 py-2 text-black/80">
+                                  {formatStoredLocalDateTime(row.obsTimeLocal)}
+                                </td>
+                                <td className="px-3 py-2 text-black/80">
+                                  {formatTemp(
+                                    displayUnit === "C" ? row.tempC : row.tempF,
+                                    displayUnit,
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-black/80">
+                                  {formatTemp(
+                                    displayUnit === "C"
+                                      ? row.dewpointC
+                                      : row.dewpointF,
+                                    displayUnit,
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {formatPercent(row.relativeHumidity)}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {formatChicagoDateTimeSeconds(row.firstSeenAt)}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {formatLagMinutes(row.firstSeenAt, row.obsTimeUtc)}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {row.tempQcd || "—"}
+                                </td>
+                              </tr>
+                            ))}
+                            {madisRows.length === 0 ? (
+                              <tr>
+                                <td className="px-3 py-4 text-sm text-black/60" colSpan={7}>
+                                  No public MADIS HFM rows saved for this day yet. This feed usually lags observation time by several minutes.
+                                </td>
+                              </tr>
+                            ) : null}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-black/60">
+                      MADIS HFM rows are hidden. Use "Show MADIS HFM" to expand the 5-minute feed table.
+                    </p>
+                  )}
+
+                  {showPwsRawRows ? (
+                    <div>
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/55">
+                        Nearby PWS Rows
+                      </p>
+                      <div className="overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                            <tr>
+                              <th className="px-3 py-2">Station</th>
+                              <th className="px-3 py-2">Local Time</th>
+                              <th className="px-3 py-2">Temp</th>
+                              <th className="px-3 py-2">Dew Point</th>
+                              <th className="px-3 py-2">RH</th>
+                              <th className="px-3 py-2">First Seen</th>
+                              <th className="px-3 py-2">Lag vs Obs</th>
+                              <th className="px-3 py-2">QC</th>
+                              <th className="px-3 py-2">Neighborhood</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pwsRows.map((row) => (
+                              <tr key={row._id} className="border-t border-black/10">
+                                <td className="px-3 py-2 text-black/80">
+                                  <div className="font-semibold">{row.pwsStationId}</div>
+                                  <div className="text-xs text-black/55">
+                                    {row.source}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-black/80">
+                                  {formatStoredLocalDateTime(row.obsTimeLocal)}
+                                </td>
+                                <td className="px-3 py-2 text-black/80">
+                                  {formatTemp(
+                                    displayUnit === "C" ? row.tempC : row.tempF,
+                                    displayUnit,
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-black/80">
+                                  {formatTemp(
+                                    displayUnit === "C"
+                                      ? row.dewpointC
+                                      : row.dewpointF,
+                                    displayUnit,
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {formatPercent(row.relativeHumidity)}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {formatChicagoDateTimeSeconds(row.firstSeenAt)}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {formatLagMinutes(row.firstSeenAt, row.obsTimeUtc)}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {row.qcStatus ?? "—"}
+                                </td>
+                                <td className="px-3 py-2 text-black/65">
+                                  {row.neighborhood || "—"}
+                                </td>
+                              </tr>
+                            ))}
+                            {pwsRows.length === 0 ? (
+                              <tr>
+                                <td className="px-3 py-4 text-sm text-black/60" colSpan={9}>
+                                  No nearby PWS rows saved for this day yet.
+                                </td>
+                              </tr>
+                            ) : null}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-black/60">
+                      Nearby PWS rows are hidden. Use "Show Nearby PWS" to expand the Weather.com/WU helper feed table.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-black/60">

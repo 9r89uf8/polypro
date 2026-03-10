@@ -27,6 +27,24 @@ crons.cron(
     { stationIem: "ORD", stationIcao: "KORD" },
 );
 
+// Runs every 5 minutes with a rolling lookback so delayed public MADIS
+// ASOS-HFM rows are backfilled and deduped by observation timestamp.
+crons.cron(
+    "kord_public_madis_hfm_every_5_min",
+    "*/5 * * * *",
+    api.madis.pollPublicAsosHfm,
+    { stationIcao: "KORD", lookbackMinutes: 30 },
+);
+
+// Runs every 5 minutes so the two Wunderground-backed Weather.com PWS
+// candidates are captured on the same cadence as MADIS HFM.
+crons.cron(
+    "kord_weathercom_pws_every_5_min",
+    "*/5 * * * *",
+    api.pws.pollWeatherComPwsBatch,
+    { stationIcao: "KORD" },
+);
+
 // Runs every hour and stores a new KORD snapshot:
 // - Microsoft + AccuWeather + Google + Weather.com 5-day forecasts
 // - Current temperature from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo

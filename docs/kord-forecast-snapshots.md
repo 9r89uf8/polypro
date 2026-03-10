@@ -8,6 +8,7 @@ This document covers how O'Hare forecast and current-temperature data flows work
 - Store query-friendly per-provider, per-target-date forecast points for trend charts.
 - Show the latest Microsoft, AccuWeather, Google, and Weather.com 5-day forecasts on one page.
 - Show current temperatures from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo.
+- Show today's nearby Weather.com/Wunderground-backed PWS helper feed and allow on-demand manual PWS polling.
 - Rank Microsoft, AccuWeather, Google, Weather.com, and Open-Meteo current temperatures by how often they match official NOAA hourly KORD observations.
 - Show NOAA official max temperature for Chicago today using the same official-max path used on `/kord/day/[date]`.
 
@@ -21,12 +22,15 @@ This document covers how O'Hare forecast and current-temperature data flows work
   - `forecastCollector:backfillKordForecastPredictions` for one-time indexing of existing snapshots into trend rows.
   - `forecastCollector:getForecastTrend` for provider/date progression charts.
   - `weather:getDayObservations` (today's date, Chicago timezone) for NOAA official max table.
+  - `pws:getDayWeatherComPws` (today's date, Chicago timezone) for the nearby PWS helper feed.
+  - `pws:pollWeatherComPwsBatch` for manual "Poll Nearby PWS Now".
 - Sections:
   - `Latest Snapshot`: on desktop, shows capture time, overall status, Microsoft status, AccuWeather status, Google status, Weather.com status, and source health counts. On mobile, this collapses to a compact summary card with capture time, overall status, a single major-sources badge (`Microsoft`, `AccuWeather`, `Google`, `Weather.com`, `NOAA`), and the actual-source ok count.
   - `Forecast Progression`: provider selector, target-date picker, quick date chips from the latest forecast, summary cards, a stepped line chart of predicted high temperature over capture time, and a per-capture delta table that is collapsed by default behind a toggle button. On mobile, the chart uses a wider horizontal-scroll container so dense hourly history stays readable.
   - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google + Weather.com current readings from whichever capture is newer:
     - the hourly full forecast snapshot
     - or the half-hour current-only snapshot
+  - `Nearby PWS Helper Feed`: today's saved rows for `KILCHICA999`, `KILROSEM2`, and `KILBENSE14`, including summary cards, a latest-row table, and a manual `Poll Nearby PWS Now` button. This section reads from the separate PWS collector tables; it is not written into `kordForecastSnapshots`.
   - `Provider vs NOAA Hourly Match`: trailing-window selector (`7`, `30`, `90` days), summary cards, and a ranking table comparing Microsoft/AccuWeather/Google/Weather.com/Open-Meteo current readings against the nearest official NOAA observation for the same provider timestamp.
     - Pairing rule: for each saved provider reading, use that reading's `observedAtUtc` and pair it with the nearest official `metarObservations` row within a 40-minute default window.
     - Dedupe rule: repeated provider rows with the same `(source, observedAtUtc)` are counted once so manual re-collects do not overweight a single hour.
@@ -176,6 +180,14 @@ Defined in `convex/crons.js`.
 
 Manual refresh can also be triggered at any time from the page button (`Collect Now`).
 
+Related nearby-PWS collector:
+
+- Cron: `kord_weathercom_pws_every_5_min`
+  - Expression: `*/5 * * * *`
+  - Calls `api.pws.pollWeatherComPwsBatch` with `stationIcao: "KORD"`
+  - Current default PWS station IDs: `KILCHICA999`, `KILROSEM2`, `KILBENSE14`
+- Manual refresh can also be triggered from the page button (`Poll Nearby PWS Now`), which calls the same PWS action directly without waiting for the next 5-minute cron.
+
 ## Data Model
 
 Table: `kordForecastSnapshots` (`convex/schema.js`)
@@ -232,6 +244,13 @@ Table: `kordForecastPredictions` (`convex/schema.js`)
 - Indexes:
   - `by_station_provider_target_capturedAt` (`stationIcao`, `provider`, `targetDate`, `capturedAt`)
   - `by_snapshotId` (`snapshotId`)
+
+Related nearby-PWS tables used by the page:
+
+- `weatherComPwsObservations`
+  - Stores per-observation nearby PWS rows for `stationIcao`, `pwsStationId`, `date`, and `obsTimeUtc`.
+- `weatherComPwsDailySummaries`
+  - Stores per-day per-station rollups used by the forecast-snapshots PWS summary cards.
 
 ## NOAA Official Max Path (Shared with Day Page)
 

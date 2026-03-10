@@ -22,6 +22,7 @@ const FORECAST_UNIT = "imperial";
 const FORECAST_LANGUAGE = "en-US";
 const FORECAST_TREND_BACKFILL_LIMIT = 720;
 const ACCURACY_WINDOW_OPTIONS = [7, 30, 90];
+const PWS_STATION_IDS = ["KILCHICA999", "KILROSEM2", "KILBENSE14"];
 
 const TREND_PROVIDER_OPTIONS = [
   {
@@ -124,7 +125,7 @@ function formatChicagoAxisDateTime(epochMs) {
 }
 
 function formatStoredLocalDateTime(localDateTime) {
-  const match = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})$/.exec(
+  const match = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
     localDateTime ?? "",
   );
   if (!match) {
@@ -138,7 +139,9 @@ function formatStoredLocalDateTime(localDateTime) {
   }
   const period = hour24 >= 12 ? "PM" : "AM";
   const hour12 = hour24 % 12 || 12;
-  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+  const seconds = match[4];
+  const secondSuffix = seconds ? `:${seconds}` : "";
+  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")}${secondSuffix} ${period}`;
 }
 
 function chicagoTodayKey() {
@@ -207,6 +210,13 @@ function formatMinutes(value) {
   return `${value.toFixed(1)} min`;
 }
 
+function formatLagMinutes(firstSeenAt, obsTimeUtc) {
+  if (!Number.isFinite(firstSeenAt) || !Number.isFinite(obsTimeUtc)) {
+    return "—";
+  }
+  return formatMinutes(Math.max(0, (firstSeenAt - obsTimeUtc) / 60000));
+}
+
 function getStatusClass(status) {
   if (status === "ok") {
     return "bg-emerald-100 text-emerald-800";
@@ -270,6 +280,19 @@ function getTrendPointColor(changeDirection, providerColor) {
   return providerColor;
 }
 
+function getLatestPwsRows(rows) {
+  const latestByStationId = new Map();
+  for (const row of rows) {
+    const existing = latestByStationId.get(row.pwsStationId);
+    if (!existing || row.obsTimeUtc > existing.obsTimeUtc) {
+      latestByStationId.set(row.pwsStationId, row);
+    }
+  }
+  return Array.from(latestByStationId.values()).sort((left, right) =>
+    left.pwsStationId.localeCompare(right.pwsStationId),
+  );
+}
+
 function MissingConvexSetup() {
   return (
     <main className="min-h-screen px-5 py-10 md:px-8">
@@ -296,10 +319,12 @@ function MissingConvexSetup() {
 function ForecastSnapshotWorkspace() {
   const [isCollectingNow, setIsCollectingNow] = useState(false);
   const [isBackfillingPredictions, setIsBackfillingPredictions] = useState(false);
+  const [isPollingPwsNow, setIsPollingPwsNow] = useState(false);
   const [isTrendTableOpen, setIsTrendTableOpen] = useState(false);
   const [isRecentHistoryOpen, setIsRecentHistoryOpen] = useState(false);
   const [collectMessage, setCollectMessage] = useState("");
   const [backfillMessage, setBackfillMessage] = useState("");
+  const [pwsPollMessage, setPwsPollMessage] = useState("");
   const [selectedProvider, setSelectedProvider] = useState("weathercom");
   const [selectedTargetDate, setSelectedTargetDate] = useState("");
   const [selectedAccuracyDays, setSelectedAccuracyDays] = useState(30);
@@ -326,7 +351,12 @@ function ForecastSnapshotWorkspace() {
     stationIcao: STATION_ICAO,
     date: chicagoTodayDate,
   });
+  const todayPwsData = useQuery("pws:getDayWeatherComPws", {
+    stationIcao: STATION_ICAO,
+    date: chicagoTodayDate,
+  });
   const collectNow = useAction("forecastCollector:collectKordHourlySnapshot");
+  const pollPwsNow = useAction("pws:pollWeatherComPwsBatch");
   const backfillPredictions = useAction(
     "forecastCollector:backfillKordForecastPredictions",
   );
@@ -342,6 +372,12 @@ function ForecastSnapshotWorkspace() {
       ? latestCurrentOnlySnapshot
       : latestSnapshot;
   const todayComparison = todayDayData?.comparison ?? null;
+  const todayPwsRows = todayPwsData?.rows ?? [];
+  const todayPwsSummaries = todayPwsData?.summaries ?? [];
+  const latestPwsRows = useMemo(
+    () => getLatestPwsRows(todayPwsRows),
+    [todayPwsRows],
+  );
   const accuracyRows = currentTempAccuracy?.ranking ?? [];
   const bestAccuracyRow =
     accuracyRows.find((row) => row.matchedCount > 0) ?? null;
@@ -579,6 +615,31 @@ function ForecastSnapshotWorkspace() {
       setBackfillMessage(`Backfill failed: ${message}`);
     } finally {
       setIsBackfillingPredictions(false);
+    }
+  }
+
+  async function handlePollPwsNow() {
+    if (isPollingPwsNow) {
+      return;
+    }
+    setIsPollingPwsNow(true);
+    setPwsPollMessage("");
+    try {
+      const result = await pollPwsNow({ stationIcao: STATION_ICAO });
+      const polledAt = formatChicagoDateTime(Date.now());
+      const failureText = result?.failures?.length
+        ? ` Failures: ${result.failures
+            .map((failure) => `${failure.pwsStationId} (${failure.error})`)
+            .join("; ")}.`
+        : "";
+      setPwsPollMessage(
+        `Polled nearby PWS at ${polledAt}. Saved ${result?.rowCount ?? 0} rows (${result?.insertedCount ?? 0} inserted, ${result?.patchedCount ?? 0} patched, ${result?.unchangedCount ?? 0} unchanged).${failureText}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setPwsPollMessage(`Nearby PWS poll failed: ${message}`);
+    } finally {
+      setIsPollingPwsNow(false);
     }
   }
 
@@ -1095,6 +1156,132 @@ function ForecastSnapshotWorkspace() {
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">
+                Nearby PWS Helper Feed
+              </h2>
+              <p className="mt-2 text-sm text-black/65">
+                Weather.com/Wunderground-backed nearby-station helper data for{" "}
+                {PWS_STATION_IDS.join(", ")}. Cron polls this feed every 5 minutes.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handlePollPwsNow}
+              disabled={isPollingPwsNow}
+              className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPollingPwsNow ? "Polling Nearby PWS..." : "Poll Nearby PWS Now"}
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-black/65">
+            {pwsPollMessage ||
+              "This helper feed is stored outside forecast snapshots and can be refreshed on demand here without waiting for the 5-minute cron."}
+          </p>
+
+          {todayPwsData === undefined ? (
+            <p className="mt-4 text-sm text-black/65">
+              Loading nearby PWS helper data...
+            </p>
+          ) : !todayPwsSummaries.length ? (
+            <p className="mt-4 text-sm text-black/65">
+              No nearby PWS rows stored for {chicagoTodayDate} yet. Use{" "}
+              <strong>Poll Nearby PWS Now</strong> or wait for the next 5-minute cron.
+            </p>
+          ) : (
+            <>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {todayPwsSummaries.map((summary) => (
+                  <div
+                    key={summary.pwsStationId}
+                    className="rounded-2xl border border-black/10 bg-white/70 p-4"
+                  >
+                    <p className="text-xs uppercase tracking-wide text-black/60">
+                      {summary.pwsStationId}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      {summary.latestNeighborhood ?? "Weather.com/WU nearby station"}
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-black">
+                      {formatTemp(summary.latestTempF, "F")}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      Latest {formatStoredLocalDateTime(summary.latestObsTimeLocal)}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      Daily max {formatTemp(summary.maxTempF, "F")}
+                    </p>
+                    <p className="mt-1 text-xs text-black/60">
+                      Obs {summary.obsCount ?? "—"} | QC {summary.latestQcStatus ?? "—"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 overflow-auto rounded-2xl border border-black/10 bg-white/75">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-black/5 text-left text-xs uppercase tracking-wide text-black/70">
+                    <tr>
+                      <th className="px-3 py-2">Station</th>
+                      <th className="px-3 py-2">Neighborhood</th>
+                      <th className="px-3 py-2">Observed (Chicago)</th>
+                      <th className="px-3 py-2">Temp F</th>
+                      <th className="px-3 py-2">Dew Point F</th>
+                      <th className="px-3 py-2">RH</th>
+                      <th className="px-3 py-2">QC</th>
+                      <th className="px-3 py-2">First Seen</th>
+                      <th className="px-3 py-2">Lag vs Obs</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!latestPwsRows.length ? (
+                      <tr>
+                        <td className="px-3 py-3 text-black/60" colSpan={9}>
+                          No latest nearby PWS rows available yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      latestPwsRows.map((row) => (
+                        <tr key={row._id} className="border-t border-black/10">
+                          <td className="px-3 py-2 font-semibold text-black">
+                            {row.pwsStationId}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {row.neighborhood || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatStoredLocalDateTime(row.obsTimeLocal)}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(row.tempF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatTemp(row.dewpointF, "F")}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatPercent(row.relativeHumidity)}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {row.qcStatus ?? "—"}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatChicagoDateTime(row.firstSeenAt)}
+                          </td>
+                          <td className="px-3 py-2 text-black/75">
+                            {formatLagMinutes(row.firstSeenAt, row.obsTimeUtc)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
