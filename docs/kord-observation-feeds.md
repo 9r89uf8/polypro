@@ -232,16 +232,14 @@ Important nuance:
 
 Current KORD defaults:
 
-- `KILCHICA999` (`Edison Park`)
-- `KILROSEM2` (`Rosemont`)
 - `KILBENSE14` (`Bensenville`)
+- `KILBENSE15` (`Bensenville`)
 
 These were chosen because:
 
-- they appear in Wunderground's nearby-KORD PWS list
-- all three returned live current-observation payloads
-- `KILROSEM2` and `KILBENSE14` are geographically closer to KORD than the earlier `KILWOODD9` default
-- `stationId=KORD` itself returned `204 No Content`, so the airport identifier is not a usable PWS station ID in this feed
+- they are the current KORD-side Weather.com helper stations we want to compare against MADIS HFM and official hourly reports
+- the two Bensenville stations sit on the west / southwest side of the airport, closer to the NOAA observing side of KORD than the earlier Edison Park and Rosemont picks
+- `stationId=KORD` was removed from the Weather.com PWS helper set after follow-up testing showed it did not return usable data consistently
 
 ### How we poll it
 
@@ -312,9 +310,8 @@ Daily rollups go into `weatherComPwsDailySummaries` with:
 The important initial findings from the live tests:
 
 - The Wunderground-embedded key returned live PWS current-observation JSON without cookies.
-- `KILCHICA999` returned `2026-03-09T21:21:00Z`, `73 F`, `qcStatus=1`.
-- `KILROSEM2` returned live data and measured about `3.57 km / 2.22 mi` from KORD in our distance check.
 - `KILBENSE14` returned live data and measured about `4.53 km / 2.82 mi` from KORD in our distance check.
+- `KILBENSE15` returned live data at `41.964465, -87.9461`, elevation `666 ft`, and sat in the same plausible west-of-airport temperature cluster as the other Bensenville-side helper stations in the March 10, 2026 checks.
 - At roughly the same time, the latest public MADIS `ASOS-HFM` row for KORD was `21:10Z` with temperature about `71.6 F`.
 
 Takeaway:

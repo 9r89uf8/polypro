@@ -45,7 +45,7 @@ Server-side ingest (independent of browser tabs):
    - Action: `pws:pollWeatherComPwsBatch`
    - Args: `{ stationIcao: "KORD" }`
    - Source: Weather.com PWS current-observation endpoint using the public key embedded in the Wunderground KORD page on March 9, 2026
-   - Current station set: `KILCHICA999`, `KILROSEM2`, `KILBENSE14`
+   - Current station set: `KILBENSE14`, `KILBENSE15`
    - Stores deduped rows by `(stationIcao, pwsStationId, date, obsTimeUtc)` and recomputes per-station day rollups.
 
 When `/kord/day/[date]` is opened for today's Chicago date:

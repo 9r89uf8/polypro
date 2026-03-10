@@ -30,7 +30,7 @@ This document covers how O'Hare forecast and current-temperature data flows work
   - `Current Temperature Sources`: latest Microsoft + AccuWeather + Google + Weather.com current readings from whichever capture is newer:
     - the hourly full forecast snapshot
     - or the half-hour current-only snapshot
-  - `Nearby PWS Helper Feed`: today's saved rows for `KILCHICA999`, `KILROSEM2`, and `KILBENSE14`, including summary cards, a latest-row table, and a manual `Poll Nearby PWS Now` button. This section reads from the separate PWS collector tables; it is not written into `kordForecastSnapshots`.
+  - `Nearby PWS Helper Feed`: today's saved rows for `KILBENSE14` and `KILBENSE15`, including summary cards, a latest-row table, and a manual `Poll Nearby PWS Now` button. This section reads from the separate PWS collector tables; it is not written into `kordForecastSnapshots`.
   - `Provider vs NOAA Hourly Match`: trailing-window selector (`7`, `30`, `90` days), summary cards, and a ranking table comparing Microsoft/AccuWeather/Google/Weather.com/Open-Meteo current readings against the nearest official NOAA observation for the same provider timestamp.
     - Pairing rule: for each saved provider reading, use that reading's `observedAtUtc` and pair it with the nearest official `metarObservations` row within a 40-minute default window.
     - Dedupe rule: repeated provider rows with the same `(source, observedAtUtc)` are counted once so manual re-collects do not overweight a single hour.
@@ -185,7 +185,7 @@ Related nearby-PWS collector:
 - Cron: `kord_weathercom_pws_every_5_min`
   - Expression: `*/5 * * * *`
   - Calls `api.pws.pollWeatherComPwsBatch` with `stationIcao: "KORD"`
-  - Current default PWS station IDs: `KILCHICA999`, `KILROSEM2`, `KILBENSE14`
+  - Current default PWS station IDs: `KILBENSE14`, `KILBENSE15`
 - Manual refresh can also be triggered from the page button (`Poll Nearby PWS Now`), which calls the same PWS action directly without waiting for the next 5-minute cron.
 
 ## Data Model

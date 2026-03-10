@@ -17,7 +17,7 @@ const WEATHERCOM_PWS_KEY_SOURCE = "wunderground_kord_page_2026_03_09";
 const WEATHERCOM_PWS_FETCH_TIMEOUT_MS = 25000;
 
 const DEFAULT_PWS_STATION_IDS_BY_ICAO = {
-  KORD: ["KILCHICA999", "KILROSEM2", "KILBENSE14"],
+  KORD: ["KILBENSE14", "KILBENSE15"],
 };
 
 const chicagoDateFormatter = new Intl.DateTimeFormat("en-US", {
