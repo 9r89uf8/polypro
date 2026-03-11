@@ -58,12 +58,12 @@ What this page displays:
   - `Manual / WU Max` (includes day-level manual entry controls: unit toggle, numeric input, and `Save`)
   - `Official Max` (+ obs count)
   - `All Max` (+ obs count)
-  - `MADIS HFM Max` (+ obs count and latest saved HFM observation time).
+  - `NOAA/Synoptic Max` (+ obs count and latest saved helper-row time).
   - One card per collected nearby PWS station (`PWS {stationId}`) showing daily max, obs count, latest saved time, latest saved temp, and latest QC status.
 - Line chart:
-  - Today route date: official + all METAR lines, MADIS HFM line, and one line per collected nearby PWS station.
-  - Non-today dates: official + all METAR lines, MADIS HFM line, and one line per collected nearby PWS station.
-  - Toggle controls to show/hide each series group: `Official`, unofficial `All`, `MADIS HFM`, nearby `PWS`, and `Phone Calls`.
+  - Today route date: official + all METAR lines, hidden NOAA/Synoptic helper line, and one line per collected nearby PWS station.
+  - Non-today dates: official + all METAR lines, hidden NOAA/Synoptic helper line, and one line per collected nearby PWS station.
+  - Toggle controls to show/hide each series group: `Official`, unofficial `All`, `NOAA/Synoptic`, nearby `PWS`, and `Phone Calls`.
   - Saved phone-call temperatures are overlaid as a separate `Phone calls` line when available for that date.
   - Horizontal annotation line for manual/WU max.
   - X-axis is local time (`America/Chicago`) shown in 12-hour format (`h:mm AM/PM`).
@@ -84,11 +84,11 @@ What this page displays:
   - `Local Time` and `NOAA First Seen` are displayed in 12-hour local time with AM/PM.
   - `NOAA First Seen` is populated for official rows once NOAA latest polling first observes that report.
   - `Lag vs Obs` shows `(NOAA First Seen - METAR observation tsUtc)` in minutes.
-  - Optional MADIS table is hidden until `Show MADIS HFM` is enabled.
-  - MADIS table columns: `Local Time`, `Temp`, `Dew Point`, `RH`, `First Seen`, `Lag vs Obs`, `Temp QC`.
+  - Optional NOAA/Synoptic table is hidden until `Show NOAA/Synoptic` is enabled.
+  - NOAA/Synoptic table columns: `Local Time`, `Temp`, `Dew Point`, `RH`, `First Seen`, `Lag vs Obs`, `Origin`, `Raw METAR`.
   - Optional nearby PWS table is hidden until `Show Nearby PWS` is enabled.
   - PWS table columns: `Station`, `Local Time`, `Temp`, `Dew Point`, `RH`, `First Seen`, `Lag vs Obs`, `QC`, `Neighborhood`.
-  - Today route date: official + all rows plus MADIS HFM rows and nearby PWS rows when collected.
+  - Today route date: official + all rows plus NOAA/Synoptic rows and nearby PWS rows when collected.
 
 Behavior details:
 
@@ -101,7 +101,7 @@ Behavior details:
   - Does not run a recurring client poll interval.
   - Ongoing official ingest runs via Convex crons (`kord_official_metar_every_2_min` plus `kord_official_metar_minute_51`).
   - Ongoing all-mode ingest runs via Convex cron (`kord_all_metar_every_5_min`).
-  - Ongoing MADIS HFM ingest runs via Convex cron (`kord_public_madis_hfm_every_5_min`).
+  - Ongoing NOAA/Synoptic helper ingest runs via Convex cron (`kord_hidden_synoptic_every_5_min`).
   - Ongoing nearby PWS ingest runs via Convex cron (`kord_weathercom_pws_every_5_min`).
   - Manual refresh triggers all-mode today backfill only (no day-page NOAA poll).
   - Inserts are deduped by `(stationIcao, mode, date, tsUtc)` via:
@@ -118,8 +118,8 @@ Behavior details:
 - `dailyComparisons` table for daily aggregates (manual, official, and all fields).
 - `monthRuns` table for compute statuses and timestamps.
 - `metarObservations` table for per-observation day charting and raw review.
-- `madisHfmObservations` table for per-observation public MADIS HFM day charting and raw review.
-- `madisHfmDailySummaries` table for per-day public MADIS HFM rollups on day/month pages.
+- `synopticObservations` table for per-observation hidden NOAA/Synoptic day charting and raw review.
+- `synopticDailySummaries` table for per-day hidden NOAA/Synoptic rollups on the day page.
 - `weatherComPwsObservations` table for per-observation nearby PWS day charting and raw review.
 - `weatherComPwsDailySummaries` table for per-day nearby PWS rollups on the day page.
 - `kordPhoneCalls` table (via `kordPhone:getDayPhoneReadings`) for optional day-chart phone-temperature overlay.
@@ -127,5 +127,5 @@ Behavior details:
   - NOAA latest TXT endpoint (`/data/observations/metar/stations/{ICAO}.TXT`) for incremental polling.
   - IEM ASOS request endpoint (`hours=24`, `report_type=3,4`) for official today backfill.
   - IEM ASOS request endpoint (`hours=24`, `report_type=1,3,4`) for all-mode today backfill.
-  - MADIS public guest CGI (`madisXmlPublicDir`) for cron-collected `ASOS-HFM` rows.
+  - Hidden NOAA/Synoptic KORD time-series feed (`weather.gov/wrh/LowTimeseries` -> `api.synopticdata.com/v2/stations/timeseries`) for cron-collected intrahour KORD rows.
   - Weather.com PWS current-observation endpoint for cron-collected nearby Wunderground-backed PWS rows.

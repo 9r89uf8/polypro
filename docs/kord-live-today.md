@@ -34,12 +34,13 @@ Server-side ingest (independent of browser tabs):
    - Cron: `kord_all_metar_every_5_min`
    - Action: `weather:backfillTodayAllFromIem`
    - Args: `{ stationIem: "ORD", stationIcao: "KORD" }`
-4. Convex cron runs every 5 minutes for public MADIS HFM:
-   - Cron: `kord_public_madis_hfm_every_5_min`
-   - Action: `madis:pollPublicAsosHfm`
-   - Args: `{ stationIcao: "KORD", lookbackMinutes: 30 }`
-   - Source: MADIS public guest CGI (`madisXmlPublicDir`) with a rolling 30-minute lookback
-   - Stores deduped `ASOS-HFM` rows by observation timestamp and recomputes same-day rollups.
+4. Convex cron runs every 5 minutes for the hidden NOAA/Synoptic helper feed:
+   - Cron: `kord_hidden_synoptic_every_5_min`
+   - Action: `synoptic:pollStationTimeseries`
+   - Args: `{ stationIcao: "KORD", recentMinutes: 30 }`
+   - Source: NOAA WRH KORD time-series page dependency backed by `api.synopticdata.com/v2/stations/timeseries`
+   - Uses the local-only `NOAA_WRH_SYNOPTIC_TOKEN` env var plus NOAA-style headers
+   - Stores deduped KORD helper rows by observation timestamp and recomputes same-day rollups.
 5. Convex cron runs every 5 minutes for nearby Weather.com PWS stations:
    - Cron: `kord_weathercom_pws_every_5_min`
    - Action: `pws:pollWeatherComPwsBatch`
@@ -124,9 +125,9 @@ Related scheduler in `convex/crons.js`:
 - `kord_all_metar_every_5_min`
   - Invokes `weather:backfillTodayAllFromIem` every 5 minutes with `stationIem: "ORD", stationIcao: "KORD"`.
   - Keeps all-mode ingest active even when no day page is open.
-- `kord_public_madis_hfm_every_5_min`
-  - Invokes `madis:pollPublicAsosHfm` every 5 minutes with `stationIcao: "KORD", lookbackMinutes: 30`.
-  - Polls the public MADIS guest endpoint, stores `ASOS-HFM` observations in a dedicated table, and backfills delayed rows via the rolling lookback window.
+- `kord_hidden_synoptic_every_5_min`
+  - Invokes `synoptic:pollStationTimeseries` every 5 minutes with `stationIcao: "KORD", recentMinutes: 30`.
+  - Polls the hidden NOAA/Synoptic KORD time-series feed, stores intrahour KORD observations in dedicated tables, and backfills overlap rows via the rolling recent window.
 - `kord_weathercom_pws_every_5_min`
   - Invokes `pws:pollWeatherComPwsBatch` every 5 minutes with `stationIcao: "KORD"`.
   - Polls the Wunderground-backed Weather.com PWS endpoint for the configured nearby stations and stores them in dedicated PWS tables.
@@ -143,32 +144,32 @@ Related scheduler in `convex/crons.js`:
     - `iem_backfill_all:<temp_source>` (excluding `remark_T`)
 - `dailyComparisons`
   - Official and all aggregate fields are updated incrementally as new rows arrive.
-- `madisHfmObservations`
-  - Stores public MADIS `ASOS-HFM` rows keyed by `(stationIcao, date, obsTimeUtc)`.
-  - Tracks `firstSeenAt` and `lastSeenAt` so public-feed lag can be measured separately from observation time.
-  - Stores parsed fields only (temperature, dew point, humidity, wind, altimeter, QC descriptors), not the raw HTML page payload.
-- `madisHfmDailySummaries`
-  - Stores per-day HFM rollups (`obsCount`, latest observation time, daily min/max temperature).
-  - Intended for month/day summary use so raw 5-minute rows do not need to be loaded into month-scale views.
+- `synopticObservations`
+  - Stores hidden NOAA/Synoptic rows keyed by `(stationIcao, date, obsTimeUtc)`.
+  - Tracks `firstSeenAt` and `lastSeenAt` so helper-feed lag can be measured separately from observation time.
+  - Stores parsed fields including temperature, dew point, humidity, wind, visibility, ceiling, metar origin, and raw METAR text.
+- `synopticDailySummaries`
+  - Stores per-day helper-feed rollups (`obsCount`, latest observation time, daily min/max temperature, latest origin/raw METAR).
+  - Intended for day-page summary use without re-scanning the raw intrahour rows.
 - `weatherComPwsObservations`
   - Stores nearby PWS rows keyed by `(stationIcao, pwsStationId, date, obsTimeUtc)`.
   - Tracks `firstSeenAt` and `lastSeenAt` for the current-observation polling path.
   - Stores parsed Weather.com/Wunderground PWS fields only, not the raw JSON payload.
 - `weatherComPwsDailySummaries`
   - Stores per-day per-station PWS rollups (`obsCount`, latest observation, daily min/max temperature).
-  - Intended for later bias/MAE comparison work against MADIS HFM and official hourly KORD reports.
+  - Intended for later bias/MAE comparison work against Synoptic helper rows and official hourly KORD reports.
 
 ## Day Page Behavior in Live Mode
 
 In `app/kord/day/[date]/page.js` when date is today:
 
 - Shows live status badge and refresh control.
-- Chart renders official + all series, MADIS HFM, nearby PWS series, and optional phone-call overlays.
+- Chart renders official + all series, hidden NOAA/Synoptic helper rows, nearby PWS series, and optional phone-call overlays.
 - Raw table renders official + all rows.
-- Optional raw subtables render MADIS HFM rows and nearby PWS rows when expanded.
+- Optional raw subtables render hidden NOAA/Synoptic rows and nearby PWS rows when expanded.
 - Nearby PWS summary cards render once `weatherComPwsDailySummaries` exists for the selected day.
 - "All Max" summary card is visible.
-- Live status message reflects backfill outcomes (with poll-disabled note for manual refresh) and notes that MADIS HFM plus nearby PWS are collected separately by cron.
+- Live status message reflects backfill outcomes (with poll-disabled note for manual refresh) and notes that the Synoptic helper feed plus nearby PWS are collected separately by cron.
 - No recurring client-side 2-minute poll is scheduled.
 
 When date is not today:
@@ -181,7 +182,7 @@ When date is not today:
 - Official cron jobs can overlap with each other; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
 - All-mode cron, page bootstrap, and manual refresh can fetch overlapping all-mode rows; storage remains deduped by `(stationIcao, mode, date, tsUtc)`.
 - `noaaFirstSeenAt` reflects first time this app observed the report from NOAA latest polling, not NOAA's upstream publish timestamp; precision is bounded by poll cadence and tab-visibility pauses.
-- Public MADIS HFM rows can appear several minutes after their observation timestamp and can first arrive partially populated before a later poll fills missing values; the rolling-lookback upsert path patches existing rows rather than inserting duplicates.
+- The hidden NOAA/Synoptic helper feed is not a stable documented public API. It depends on NOAA page behavior, a locally stored token, and NOAA-style request headers.
 
 ## Change Guidance
 

@@ -16,6 +16,7 @@ import type * as kordPhoneNode from "../kordPhoneNode.js";
 import type * as madis from "../madis.js";
 import type * as notes from "../notes.js";
 import type * as pws from "../pws.js";
+import type * as synoptic from "../synoptic.js";
 import type * as time from "../time.js";
 import type * as weather from "../weather.js";
 
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   madis: typeof madis;
   notes: typeof notes;
   pws: typeof pws;
+  synoptic: typeof synoptic;
   time: typeof time;
   weather: typeof weather;
 }>;

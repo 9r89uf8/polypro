@@ -359,11 +359,11 @@ export default function KordDayPage() {
   const [showRawObservations, setShowRawObservations] = useState(false);
   const [showOfficialSeries, setShowOfficialSeries] = useState(true);
   const [showUnofficialSeries, setShowUnofficialSeries] = useState(true);
-  const [showMadisSeries, setShowMadisSeries] = useState(true);
+  const [showSynopticSeries, setShowSynopticSeries] = useState(true);
   const [showPwsSeries, setShowPwsSeries] = useState(true);
   const [showPhoneSeries, setShowPhoneSeries] = useState(true);
   const [showUnofficialRawRows, setShowUnofficialRawRows] = useState(false);
-  const [showMadisRawRows, setShowMadisRawRows] = useState(false);
+  const [showSynopticRawRows, setShowSynopticRawRows] = useState(false);
   const [showPwsRawRows, setShowPwsRawRows] = useState(false);
   const [manualEntryValue, setManualEntryValue] = useState("");
   const [manualEntryUnit, setManualEntryUnit] = useState("F");
@@ -402,8 +402,8 @@ export default function KordDayPage() {
         }
       : "skip",
   );
-  const madisDayData = useQuery(
-    "madis:getDayPublicAsosHfm",
+  const synopticDayData = useQuery(
+    "synoptic:getDayStationRows",
     isDateValid
       ? {
           stationIcao: STATION_ICAO,
@@ -425,8 +425,8 @@ export default function KordDayPage() {
   const officialRows = dayData?.officialRows ?? [];
   const allRows = dayData?.allRows ?? [];
   const phoneRows = phoneDayData?.rows ?? [];
-  const madisRows = madisDayData?.rows ?? [];
-  const madisSummary = madisDayData?.summary ?? null;
+  const synopticRows = synopticDayData?.rows ?? [];
+  const synopticSummary = synopticDayData?.summary ?? null;
   const pwsRows = pwsDayData?.rows ?? [];
   const pwsSummaries = pwsDayData?.summaries ?? [];
   const manualMax =
@@ -435,16 +435,16 @@ export default function KordDayPage() {
     displayUnit === "C" ? comparison?.metarMaxC : comparison?.metarMaxF;
   const allMax =
     displayUnit === "C" ? comparison?.metarAllMaxC : comparison?.metarAllMaxF;
-  const madisMax =
-    displayUnit === "C" ? madisSummary?.maxTempC : madisSummary?.maxTempF;
-  const madisChartRows = useMemo(
+  const synopticMax =
+    displayUnit === "C" ? synopticSummary?.maxTempC : synopticSummary?.maxTempF;
+  const synopticChartRows = useMemo(
     () =>
-      madisRows.map((row) => ({
+      synopticRows.map((row) => ({
         tsLocal: row.obsTimeLocal,
         tempC: row.tempC,
         tempF: row.tempF,
       })),
-    [madisRows],
+    [synopticRows],
   );
   const pwsSeries = useMemo(
     () => buildPwsSeries(pwsRows, pwsSummaries),
@@ -667,12 +667,12 @@ export default function KordDayPage() {
       );
     }
 
-    if (showMadisSeries) {
+    if (showSynopticSeries) {
       datasets.push(
         buildLineDataset(
-          madisChartRows,
+          synopticChartRows,
           displayUnit,
-          "MADIS HFM",
+          "NOAA/Synoptic",
           "#d97706",
           basePointConfig,
         ),
@@ -724,14 +724,14 @@ export default function KordDayPage() {
   }, [
     officialRows,
     allRows,
-    madisChartRows,
+    synopticChartRows,
     pwsSeries,
     phoneRows,
     displayUnit,
     isMobileViewport,
     showOfficialSeries,
     showUnofficialSeries,
-    showMadisSeries,
+    showSynopticSeries,
     showPwsSeries,
     showPhoneSeries,
   ]);
@@ -937,7 +937,7 @@ export default function KordDayPage() {
           {isToday ? (
             <p className="mt-3 text-xs text-black/65">
               {liveMessage ||
-                "Live mode backfills official + all once from this page. MADIS HFM and nearby PWS are collected separately by Convex cron. NOAA latest polling is disabled on this page; ongoing official ingest runs via Convex cron."}
+                "Live mode backfills official + all once from this page. NOAA/Synoptic trend rows and nearby PWS are collected separately by Convex cron. NOAA latest polling is disabled on this page; ongoing official ingest runs via Convex cron."}
             </p>
           ) : null}
         </header>
@@ -1021,18 +1021,18 @@ export default function KordDayPage() {
               </article>
               <article className="rounded-2xl border border-black/10 bg-white/70 p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                  MADIS HFM Max
+                  NOAA/Synoptic Max
                 </p>
                 <p className="mt-2 text-xl font-semibold text-black">
-                  {formatTemp(madisMax, displayUnit)}
+                  {formatTemp(synopticMax, displayUnit)}
                 </p>
                 <p className="mt-1 text-xs text-black/60">
-                  Obs: {madisSummary?.obsCount ?? "—"}
+                  Obs: {synopticSummary?.obsCount ?? "—"}
                 </p>
                 <p className="mt-1 text-xs text-black/60">
                   Latest:{" "}
-                  {madisSummary?.latestObsTimeLocal
-                    ? formatStoredLocalDateTime(madisSummary.latestObsTimeLocal)
+                  {synopticSummary?.latestObsTimeLocal
+                    ? formatStoredLocalDateTime(synopticSummary.latestObsTimeLocal)
                     : "—"}
                 </p>
               </article>
@@ -1097,10 +1097,12 @@ export default function KordDayPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowMadisSeries((current) => !current)}
+                    onClick={() => setShowSynopticSeries((current) => !current)}
                     className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
                   >
-                    {showMadisSeries ? "Hide MADIS HFM" : "Show MADIS HFM"}
+                    {showSynopticSeries
+                      ? "Hide NOAA/Synoptic"
+                      : "Show NOAA/Synoptic"}
                   </button>
                   <button
                     type="button"
@@ -1119,7 +1121,7 @@ export default function KordDayPage() {
                 </div>
               </div>
               <p className="mt-2 text-sm text-black/65">
-                Official, All, MADIS HFM, and collected nearby PWS temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max.
+                Official, All, hidden NOAA/Synoptic rows, and collected nearby PWS temperatures through the day, with saved phone-call temperatures overlaid when available. Red dashed line is the manual/Wunderground max.
               </p>
               <p className="mt-2 text-xs text-black/55 md:hidden">
                 Tip: swipe horizontally to inspect points across the full day.
@@ -1151,10 +1153,12 @@ export default function KordDayPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowMadisRawRows((current) => !current)}
+                    onClick={() => setShowSynopticRawRows((current) => !current)}
                     className="rounded-full border border-black/20 bg-white/80 px-3 py-1.5 text-xs font-semibold text-black/80 transition hover:border-black"
                   >
-                    {showMadisRawRows ? "Hide MADIS HFM" : "Show MADIS HFM"}
+                    {showSynopticRawRows
+                      ? "Hide NOAA/Synoptic"
+                      : "Show NOAA/Synoptic"}
                   </button>
                   <button
                     type="button"
@@ -1248,10 +1252,10 @@ export default function KordDayPage() {
                     </div>
                   </div>
 
-                  {showMadisRawRows ? (
+                  {showSynopticRawRows ? (
                     <div>
                       <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/55">
-                        MADIS HFM Rows
+                        NOAA/Synoptic Rows
                       </p>
                       <div className="overflow-auto rounded-2xl border border-black/10 bg-white/75">
                         <table className="min-w-full text-sm">
@@ -1263,11 +1267,12 @@ export default function KordDayPage() {
                               <th className="px-3 py-2">RH</th>
                               <th className="px-3 py-2">First Seen</th>
                               <th className="px-3 py-2">Lag vs Obs</th>
-                              <th className="px-3 py-2">Temp QC</th>
+                              <th className="px-3 py-2">Origin</th>
+                              <th className="px-3 py-2">Raw METAR</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {madisRows.map((row) => (
+                            {synopticRows.map((row) => (
                               <tr key={row._id} className="border-t border-black/10">
                                 <td className="px-3 py-2 text-black/80">
                                   {formatStoredLocalDateTime(row.obsTimeLocal)}
@@ -1296,14 +1301,20 @@ export default function KordDayPage() {
                                   {formatLagMinutes(row.firstSeenAt, row.obsTimeUtc)}
                                 </td>
                                 <td className="px-3 py-2 text-black/65">
-                                  {row.tempQcd || "—"}
+                                  {row.metarOrigin || "—"}
+                                </td>
+                                <td
+                                  className="max-w-[520px] px-3 py-2 font-mono text-xs text-black/70"
+                                  title={row.rawMetar || ""}
+                                >
+                                  {row.rawMetar || "—"}
                                 </td>
                               </tr>
                             ))}
-                            {madisRows.length === 0 ? (
+                            {synopticRows.length === 0 ? (
                               <tr>
-                                <td className="px-3 py-4 text-sm text-black/60" colSpan={7}>
-                                  No public MADIS HFM rows saved for this day yet. This feed usually lags observation time by several minutes.
+                                <td className="px-3 py-4 text-sm text-black/60" colSpan={8}>
+                                  No hidden NOAA/Synoptic rows saved for this day yet. This helper feed is collected every 5 minutes and usually carries the 5-minute AUTO rows plus official and special KORD rows.
                                 </td>
                               </tr>
                             ) : null}
@@ -1313,7 +1324,7 @@ export default function KordDayPage() {
                     </div>
                   ) : (
                     <p className="text-sm text-black/60">
-                      MADIS HFM rows are hidden. Use "Show MADIS HFM" to expand the 5-minute feed table.
+                      NOAA/Synoptic rows are hidden. Use "Show NOAA/Synoptic" to expand the intrahour feed table.
                     </p>
                   )}
 

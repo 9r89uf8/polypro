@@ -27,17 +27,17 @@ crons.cron(
     { stationIem: "ORD", stationIcao: "KORD" },
 );
 
-// Runs every 5 minutes with a rolling lookback so delayed public MADIS
-// ASOS-HFM rows are backfilled and deduped by observation timestamp.
+// Runs every 5 minutes with a rolling lookback so the hidden NOAA/Synoptic
+// KORD time-series rows are deduped by observation timestamp.
 crons.cron(
-    "kord_public_madis_hfm_every_5_min",
+    "kord_hidden_synoptic_every_5_min",
     "*/5 * * * *",
-    api.madis.pollPublicAsosHfm,
-    { stationIcao: "KORD", lookbackMinutes: 30 },
+    api.synoptic.pollStationTimeseries,
+    { stationIcao: "KORD", recentMinutes: 30 },
 );
 
 // Runs every 5 minutes so the two Wunderground-backed Weather.com PWS
-// candidates are captured on the same cadence as MADIS HFM.
+// candidates are captured on the same cadence as the Synoptic helper feed.
 crons.cron(
     "kord_weathercom_pws_every_5_min",
     "*/5 * * * *",

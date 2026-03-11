@@ -3,18 +3,18 @@
 This note summarizes the KORD observation feeds we currently collect:
 
 1. Official hourly METAR/SPECI reports.
-2. Public MADIS `ASOS-HFM` high-frequency observations.
+2. Hidden NOAA/Synoptic intrahour KORD observations.
 3. Weather.com PWS observations fetched with the Wunderground-embedded key.
 
-The goal is to keep clear which feed is authoritative, which feed is higher-frequency, what public delay we observed on March 9, 2026, and how each feed is stored in Convex.
+The goal is to keep clear which feed is authoritative, which feed is the current higher-frequency trend helper, what public delays we observed, and how each feed is stored in Convex.
 
 ## Short Version
 
 - Official hourly data is the authoritative airport report.
-- Public MADIS `ASOS-HFM` is a useful higher-frequency supporting feed, not the official hourly report.
+- Hidden NOAA/Synoptic is the current higher-frequency KORD trend feed.
 - Weather.com/Wunderground PWS is a nearby-station helper feed, not an airport observation.
-- On March 9, 2026, public NOAA official METAR dissemination beat public MADIS guest for KORD.
-- Public MADIS guest `ASOS-HFM` was still useful, but it lagged observation time by roughly 8-12 minutes in the checks we ran that day.
+- On March 11, 2026, public NOAA official METAR dissemination still beat the hidden Synoptic feed for the official `:51` row, but Synoptic beat public MADIS for intrahour usefulness.
+- Public MADIS guest `ASOS-HFM` is no longer the active trend feed in the app.
 
 ## Official Hourly Reports
 
@@ -87,44 +87,50 @@ Takeaway:
 - Because our official latest-file poll runs every 2 minutes, the app can still land the row at `:54` even when NOAA publishes around `:53`.
 - `noaaFirstSeenAt` is the first time our app observed the row, not NOAA's upstream issue time.
 
-## Public MADIS HFM
+## Hidden NOAA/Synoptic Trend Feed
 
 ### What this feed is
 
-- We collect rows where the MADIS provider is `ASOS-HFM`.
-- This is a high-frequency ASOS/HFMETAR-style feed from the MADIS public guest service.
-- It is not raw METAR text.
-- It arrives as structured observation values plus quality-control descriptors.
+- We collect rows from NOAA's hidden KORD time-series page dependency, which is backed by `api.synopticdata.com/v2/stations/timeseries`.
+- This feed behaves like a structured KORD intrahour stream with 5-minute `AUTO` rows, inserted special rows, and the official `:51` row when it lands.
+- It is not the authoritative official dissemination path, but it is a better temperature-trend feed than public MADIS guest.
+- It includes raw METAR text for rows where Synoptic exposes it.
 
 Important nuance:
 
-- MADIS documentation refers to HFMETAR as a one-minute ASOS-style feed.
-- In the public guest output we observed for KORD on March 9, 2026, `ASOS-HFM` appeared at 5-minute timestamps, not 1-minute timestamps.
-- So the public guest feed is best treated as a lagged public high-frequency view, not proof of full real-time 1-minute public access.
+- This is a hidden NOAA page dependency, not a documented `api.weather.gov` endpoint.
+- Access depends on a locally stored `NOAA_WRH_SYNOPTIC_TOKEN` plus NOAA-style `Referer`, `Origin`, and browser-like request headers.
+- We use it only as a trend/helper feed, not as the authoritative official-report source.
 
 ### Where we get it
 
-Source endpoint:
+Source chain:
 
-- `https://madis-data.ncep.noaa.gov/madisPublic1/cgi-bin/madisXmlPublicDir`
+- `https://www.weather.gov/wrh/LowTimeseries?site=kord`
+- `https://www.weather.gov/source/wrh/apiKey.js`
+- `https://www.weather.gov/source/wrh/timeseries/lbw_obs.js`
+- `https://api.synopticdata.com/v2/stations/timeseries`
 
 Collector path:
 
-- `madis:pollPublicAsosHfm` in `convex/madis.js`
+- `synoptic:pollStationTimeseries` in `convex/synoptic.js`
 
 The collector builds a station-specific request with:
 
 - `stationIcao = KORD`
-- `lookbackMinutes = 30`
-- `xml = 5` CSV-style response embedded in HTML
+- `recentMinutes = 30`
+- `showemptystations = 1`
+- `units = temp|F,speed|mph,english`
+- `complete = 1`
+- `obtimezone = local`
 
 ### How we poll it
 
-- `kord_public_madis_hfm_every_5_min`
+- `kord_hidden_synoptic_every_5_min`
   - Runs every 5 minutes.
   - Uses a rolling 30-minute lookback.
 
-The rolling lookback matters because public MADIS guest can expose rows late, and sometimes a row first appears partially populated before a later poll fills more fields.
+The rolling overlap matters because we want a deduped intrahour trend curve even if a later poll re-sees the same 5-minute or special row.
 
 ### What we parse
 
@@ -136,16 +142,21 @@ We currently parse and normalize:
 - `dewpointC`, `dewpointF`
 - `relativeHumidity`
 - `windDirDegrees`
-- `windSpeedMps`
-- `windGustMps`
-- `altimeterPa`
-- QC descriptor fields such as `tempQcd`
+- `windSpeedMph`, `windSpeedMps`
+- `visibilityMiles`
+- `ceilingFt`
+- `altimeterInHg`
+- `seaLevelPressureMb`
+- `weatherCondition`
+- `weatherSummary`
+- `metarOrigin`
+- `rawMetar`
 
-The public dump can also include `ASOS`, but our collector currently filters to `ASOS-HFM` only.
+This is enough for the day-page helper chart and for later comparison against official `tgftp` rows and nearby PWS stations.
 
 ### How we save it
 
-Raw-ish observation rows go into `madisHfmObservations` with:
+Raw-ish observation rows go into `synopticObservations` with:
 
 - `stationIcao`
 - `provider`
@@ -154,6 +165,8 @@ Raw-ish observation rows go into `madisHfmObservations` with:
 - `obsTimeUtc`
 - `obsTimeLocal`
 - parsed weather fields
+- `rawMetar`
+- `metarOrigin`
 - `firstSeenAt`
 - `lastSeenAt`
 - `updatedAt`
@@ -162,38 +175,39 @@ Deduping and patching behavior:
 
 - Primary key is effectively `(stationIcao, date, obsTimeUtc)`.
 - If the same observation time appears again later with new values, the row is patched instead of duplicated.
-- This is intentional because the public MADIS guest feed can surface delayed or partially filled rows.
 
-Daily rollups go into `madisHfmDailySummaries` with:
+Daily rollups go into `synopticDailySummaries` with:
 
 - `obsCount`
 - `latestObsTimeUtc`
 - `latestObsTimeLocal`
+- `latestRawMetar`
+- `latestMetarOrigin`
 - `maxTempC`, `maxTempF`
 - `maxTempAtUtc`, `maxTempAtLocal`
 - `minTempC`, `minTempF`
 - `minTempAtUtc`, `minTempAtLocal`
 
-### Observed public delay on March 9, 2026
+### Observed timing vs official NOAA
 
-These are the key observations from the live checks we ran:
+Live comparison for the `00:51Z` KORD cycle on March 11, 2026:
 
-- During the `15:51Z` KORD routine METAR cycle:
-  - Public NOAA latest TXT showed the new official METAR at `15:53:26Z`
-  - Public MADIS guest only advanced `ASOS-HFM` to `15:45Z`
-  - It updated that `15:45Z` row around `15:53:05Z` to `15:53:15Z`
-  - It never reached `15:50Z` or `15:55Z` before the watch ended at `15:57:00Z`
-- At `16:41:41Z`:
-  - Latest public MADIS `ASOS-HFM` row was `16:30Z`
-  - That was about `11 minutes 41 seconds` old
-- At `17:08:00Z`:
-  - Latest public MADIS `ASOS-HFM` row was `17:00Z`
-  - That was about `8 minutes` old
+- Official NOAA latest TXT first showed `KORD 110051Z ...` at `2026-03-11 00:53:54Z`
+- Hidden NOAA/Synoptic first showed the `19:51` local / `110051Z` row at `2026-03-11 00:56:14Z`
+- Public MADIS `ASOS-HFM` only reached `00:50Z` at `2026-03-11 00:58:14Z`
+- Public MADIS standard `ASOS` still had the prior `23:51Z` row after `01:00Z`
 
 Takeaway:
 
-- Public MADIS guest `ASOS-HFM` did not beat public NOAA official METAR dissemination for KORD in the checks we ran on March 9, 2026.
-- It was still useful as a denser temperature curve, but its public delay looked variable and was roughly 8-12 minutes in the spot checks that day.
+- Hidden NOAA/Synoptic did not beat NOAA `tgftp` for the new official row.
+- Hidden NOAA/Synoptic was still much better than public MADIS guest for the intrahour trend use case.
+- That is why the app now uses Synoptic for the helper trend feed instead of MADIS.
+
+## Historical MADIS Note
+
+- Public MADIS guest `ASOS-HFM` was the earlier helper-feed experiment.
+- In the KORD checks we ran on March 9 and March 11, 2026, it lagged both NOAA `tgftp` and the hidden Synoptic feed for practical intrahour use.
+- The old MADIS collector code and tables are still useful as historical context, but they are no longer the active trend path.
 
 ## Weather.com / Wunderground PWS
 
@@ -202,7 +216,7 @@ Takeaway:
 - We collect nearby Personal Weather Station observations from the Weather.com PWS current-observation endpoint.
 - The API key path we use is the one embedded in the public Wunderground KORD page, not the older Weather.com frontend key used elsewhere in the repo.
 - This feed is not an official KORD airport observation.
-- It is intended as a helper/predictor feed to compare against MADIS HFM and the next official KORD hourly report.
+- It is intended as a helper/predictor feed to compare against hidden NOAA/Synoptic rows and the next official KORD hourly report.
 
 ### Where we get it
 
@@ -237,7 +251,7 @@ Current KORD defaults:
 
 These were chosen because:
 
-- they are the current KORD-side Weather.com helper stations we want to compare against MADIS HFM and official hourly reports
+- they are the current KORD-side Weather.com helper stations we want to compare against hidden NOAA/Synoptic rows and official hourly reports
 - the two Bensenville stations sit on the west / southwest side of the airport, closer to the NOAA observing side of KORD than the earlier Edison Park and Rosemont picks
 - `stationId=KORD` was removed from the Weather.com PWS helper set after follow-up testing showed it did not return usable data consistently
 
@@ -318,7 +332,7 @@ Takeaway:
 
 - In the initial snapshot, the chosen PWS stations were fresher than public MADIS guest.
 - That does not yet prove they are the best long-run predictor for KORD.
-- We need a longer saved dataset to compare each station's bias and mean absolute error against MADIS HFM and official hourly KORD reports.
+- We need a longer saved dataset to compare each station's bias and mean absolute error against hidden NOAA/Synoptic rows and official hourly KORD reports.
 
 ## Why We Keep Both
 
@@ -330,7 +344,7 @@ Use this feed when the question is:
 - What was the official hourly temperature?
 - What should count as the authoritative daily official max?
 
-### Public MADIS HFM
+### Hidden NOAA/Synoptic
 
 Use this feed when the question is:
 
@@ -342,15 +356,15 @@ It should be treated as:
 
 - higher-frequency context
 - not the authoritative hourly report
-- potentially delayed in public form
+- a hidden NOAA page dependency rather than a documented public NOAA API
 
 ### Weather.com / Wunderground PWS
 
 Use this feed when the question is:
 
 - Which nearby PWS stations track KORD most closely over time?
-- Do we want a fresher helper signal than public MADIS guest for short-term temperature movement?
-- Do we want to rank nearby PWS stations by bias/MAE against MADIS HFM or official hourly KORD reports?
+- Do we want a fresher helper signal than the hidden NOAA/Synoptic rows for short-term temperature movement?
+- Do we want to rank nearby PWS stations by bias/MAE against hidden NOAA/Synoptic rows or official hourly KORD reports?
 
 It should be treated as:
 
@@ -361,17 +375,17 @@ It should be treated as:
 ## Current UI Exposure
 
 - Official hourly rows appear in the existing official/all day workflows.
-- MADIS HFM is currently exposed on `/kord/day/[date]` only.
+- Hidden NOAA/Synoptic is currently exposed on `/kord/day/[date]` only.
 - Weather.com/Wunderground PWS is currently exposed on `/kord/day/[date]` and `/kord/forecast-snapshots`.
-- MADIS HFM is not shown on `/kord/month`.
+- Hidden NOAA/Synoptic is not shown on `/kord/month`.
 
 ## Relevant Code
 
 - Official ingest:
   - `convex/weather.js`
   - `convex/crons.js`
-- MADIS HFM ingest:
-  - `convex/madis.js`
+- Hidden NOAA/Synoptic ingest:
+  - `convex/synoptic.js`
   - `convex/crons.js`
 - Weather.com/Wunderground PWS ingest:
   - `convex/pws.js`

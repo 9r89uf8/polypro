@@ -36,7 +36,7 @@ Defined in `convex/crons.js` and `convex/kordPhone.js`.
   - Calls `internal.kordPhone.enqueueScheduledCall` with `stationIcao: "KORD"`
   - Internal mutation checks Chicago local time and enqueues only on `:49`/`:52` within fixed local hours `12..16`.
   - No dependency on forecast-derived fields in `dailyComparisons`.
-  - Note: `convex/crons.js` also includes non-phone jobs (for METAR ingest, MADIS HFM, Wunderground-backed Weather.com PWS collection, and forecast/current snapshots). Those do not affect phone enqueue rules.
+  - Note: `convex/crons.js` also includes non-phone jobs (for METAR ingest, hidden NOAA/Synoptic helper collection, Wunderground-backed Weather.com PWS collection, and forecast/current snapshots). Those do not affect phone enqueue rules.
 - Manual trigger:
   - Public mutation `kordPhone:enqueueManualCall`
   - Uses current Chicago local timestamp as `slotLocal`.
