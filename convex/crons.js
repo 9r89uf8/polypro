@@ -54,13 +54,33 @@ crons.cron(
     { stationIcao: "SBGR" },
 );
 
-// Runs a short top-of-hour watch window for SBGR so REDEMET and NOAA tgftp
-// first-seen times are measured with finer resolution than the minute cron.
+// Starts before the hour and keeps watching through shortly after it so
+// REDEMET and NOAA tgftp first-seen times are measured with finer resolution
+// than the minute cron.
 crons.cron(
-    "sbgr_publish_race_watch_minute_59",
-    "59 * * * *",
+    "sbgr_publish_race_watch_minute_55",
+    "55 * * * *",
     api.redemet.watchStationPublishRaceWindow,
-    { stationIcao: "SBGR" },
+    { stationIcao: "SBGR", durationMs: 10 * 60 * 1000 },
+);
+
+// Runs every minute so the official NZWN PreFlight latest METAR feed is
+// captured continuously even without an open browser tab.
+crons.cron(
+    "nzwn_preflight_latest_every_minute",
+    "* * * * *",
+    api.preflight.pollLatestStationMetar,
+    { stationIcao: "NZWN" },
+);
+
+// Runs every minute because NZWN routine METAR publication can drift well past
+// the nominal half-hour boundary, so the NOAA side of the publish-race
+// experiment needs continuous sampling rather than a narrow watch window.
+crons.cron(
+    "nzwn_tgftp_publish_race_every_minute",
+    "* * * * *",
+    api.preflight.pollLatestNoaaPublishRace,
+    { stationIcao: "NZWN" },
 );
 
 // Runs every hour and stores a new KORD snapshot:

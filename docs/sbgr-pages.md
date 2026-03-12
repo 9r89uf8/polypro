@@ -109,10 +109,13 @@ Convex cron:
 - `sbgr_redemet_latest_every_minute`
   - calls `redemet:pollLatestStationMetar`
   - station argument is `SBGR`
-- `sbgr_publish_race_watch_minute_59`
+- `sbgr_publish_race_watch_minute_55`
   - calls `redemet:watchStationPublishRaceWindow`
   - station argument is `SBGR`
-  - polls REDEMET and NOAA `tgftp` in short intervals through the top-of-hour
-    window so first-seen timing is more precise than a once-per-minute cron
+  - starts at minute `55`
+  - passes `durationMs=600000`, so the watch runs for 10 minutes
+  - polls REDEMET and NOAA `tgftp` in short intervals from `:55` through just
+    after the top of the hour so first-seen timing is more precise than a
+    once-per-minute cron
 
 This keeps the current local day updated even if no browser is open.
