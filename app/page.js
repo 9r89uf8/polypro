@@ -11,12 +11,12 @@ export default function Home() {
           POLYPRO
         </p>
         <h1 className="text-3xl font-semibold leading-tight text-foreground md:text-4xl">
-          KORD Weather Toolkit
+          Airport Weather Toolkit
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-black/70">
-          Compare monthly manual vs METAR highs, open today&apos;s live METAR day
-          chart, track hourly 5-day forecast snapshots, run KORD phone-call
-          temperature captures, and keep notes in one place.
+          Compare KORD monthly manual vs METAR highs, open live airport day charts,
+          track forecast snapshots, review official SBGR REDEMET METAR history,
+          and keep notes in one place.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
           <Link
@@ -44,6 +44,12 @@ export default function Home() {
             Open Forecast Snapshots
           </Link>
           <Link
+            href="/sbgr/today"
+            className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-5 py-2.5 text-sm font-semibold text-rose-900 transition hover:-translate-y-0.5 hover:border-rose-400"
+          >
+            Open SBGR Official Day Chart
+          </Link>
+          <Link
             href="/polymarket/chicago-weather"
             className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-5 py-2.5 text-sm font-semibold text-indigo-900 transition hover:-translate-y-0.5 hover:border-indigo-400"
           >
@@ -55,7 +61,6 @@ export default function Home() {
           >
             Open Notes
           </Link>
-
         </div>
       </section>
     </main>

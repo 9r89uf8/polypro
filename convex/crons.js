@@ -45,6 +45,24 @@ crons.cron(
     { stationIcao: "KORD" },
 );
 
+// Runs every minute so the official REDEMET latest SBGR METAR/SPECI feed is
+// captured continuously even without an open browser tab.
+crons.cron(
+    "sbgr_redemet_latest_every_minute",
+    "* * * * *",
+    api.redemet.pollLatestStationMetar,
+    { stationIcao: "SBGR" },
+);
+
+// Runs a short top-of-hour watch window for SBGR so REDEMET and NOAA tgftp
+// first-seen times are measured with finer resolution than the minute cron.
+crons.cron(
+    "sbgr_publish_race_watch_minute_59",
+    "59 * * * *",
+    api.redemet.watchStationPublishRaceWindow,
+    { stationIcao: "SBGR" },
+);
+
 // Runs every hour and stores a new KORD snapshot:
 // - Microsoft + AccuWeather + Google + Weather.com 5-day forecasts
 // - Current temperature from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo
