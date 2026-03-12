@@ -20,6 +20,7 @@ ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title)
 const STATION_ICAO = "SBGR";
 const STATION_NAME = "Guarulhos / Sao Paulo";
 const SAO_PAULO_TIMEZONE = "America/Sao_Paulo";
+const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isValidDate(value) {
@@ -156,12 +157,22 @@ function formatSaoPauloDateTimeSeconds(epochMs) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
 }
 
-function formatUtcDateTimeSeconds(epochMs) {
+function formatChicagoDateTimeSeconds(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
-  const iso = new Date(epochMs).toISOString();
-  return `${iso.slice(0, 19).replace("T", " ")} UTC`;
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: CHICAGO_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+  const parts = getDateParts(formatter, new Date(epochMs));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
 }
 
 function formatRaceWinner(winner) {
@@ -647,9 +658,9 @@ export default function SbgrDayPage() {
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
                 Recent SBGR first-seen timing between official REDEMET and NOAA
-                `tgftp`. The logger watches the top-of-hour window in short
-                intervals, so these rows are for publication timing, not the day
-                chart.
+                `tgftp`. Times in this table are shown in America/Chicago. The
+                logger watches the top-of-hour window in short intervals, so
+                these rows are for publication timing, not the day chart.
               </p>
             </div>
           </div>
@@ -657,7 +668,7 @@ export default function SbgrDayPage() {
             <table className="min-w-full border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Report UTC</th>
+                  <th className="px-3 py-2 font-semibold">Report Time</th>
                   <th className="px-3 py-2 font-semibold">Winner</th>
                   <th className="px-3 py-2 font-semibold">Lead</th>
                   <th className="px-3 py-2 font-semibold">REDEMET Seen</th>
@@ -674,7 +685,7 @@ export default function SbgrDayPage() {
                       className="border-b border-black/5 align-top last:border-b-0"
                     >
                       <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatUtcDateTimeSeconds(row.reportTsUtc)}
+                        {formatChicagoDateTimeSeconds(row.reportTsUtc)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap">
                         <span
@@ -695,13 +706,13 @@ export default function SbgrDayPage() {
                         {formatLeadMs(row.leadMs)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatUtcDateTimeSeconds(row.redemetFirstSeenAt)}
+                        {formatChicagoDateTimeSeconds(row.redemetFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatUtcDateTimeSeconds(row.tgftpFirstSeenAt)}
+                        {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatUtcDateTimeSeconds(row.tgftpLastModifiedAt)}
+                        {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-black/80">
                         {row.rawMetar ?? row.redemetRawMetar ?? row.tgftpRawMetar ?? "—"}

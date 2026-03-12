@@ -461,7 +461,7 @@ export default defineSchema({
     stationIcao: v.string(),
     reportDateLocal: v.string(),
     reportTsUtc: v.number(),
-    reportType: v.union(v.literal("METAR"), v.literal("SPECI")),
+    reportType: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
     rawMetar: v.optional(v.string()),
     redemetRawMetar: v.optional(v.string()),
     tgftpRawMetar: v.optional(v.string()),

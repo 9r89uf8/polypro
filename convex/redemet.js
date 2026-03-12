@@ -485,6 +485,27 @@ function computePublishRaceWinner(redemetFirstSeenAt, tgftpFirstSeenAt) {
   };
 }
 
+function chooseCanonicalRaceRawMetar(existingRawMetar, candidateRawMetar) {
+  const existing = toNonEmptyString(existingRawMetar);
+  const candidate = toNonEmptyString(candidateRawMetar);
+  if (!existing) {
+    return candidate;
+  }
+  if (!candidate) {
+    return existing;
+  }
+
+  const existingHasType = /^(METAR|SPECI)\b/.test(existing);
+  const candidateHasType = /^(METAR|SPECI)\b/.test(candidate);
+  if (!existingHasType && candidateHasType) {
+    return candidate;
+  }
+  if (existingHasType && !candidateHasType) {
+    return existing;
+  }
+  return candidate.length > existing.length ? candidate : existing;
+}
+
 async function recomputeDailySummary(ctx, stationIcao, date) {
   const rows = await ctx.db
     .query("redemetMetarObservations")
@@ -609,13 +630,8 @@ async function fetchLatestTgftpRaceHit(stationIcao) {
   }
   const body = await response.text();
   const parsed = parseNoaaLatestTxt(body);
-  const reportType = extractReportType(parsed.rawMetar);
-  if (!reportType) {
-    throw new Error("NOAA tgftp latest response did not include a parseable METAR type.");
-  }
   return {
     seenAt: Date.now(),
-    reportType,
     reportTsUtc: parsed.tsUtc,
     rawMetar: parsed.rawMetar,
     lastModifiedAt: parseHttpTimestamp(response.headers.get("last-modified")),
@@ -739,7 +755,7 @@ export const recordPublishRaceHit = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
     reportTsUtc: v.number(),
-    reportType: v.union(v.literal("METAR"), v.literal("SPECI")),
+    reportType: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
     source: v.union(v.literal(RACE_SOURCE.REDEMET), v.literal(RACE_SOURCE.TGFTP)),
     rawMetar: v.string(),
     seenAt: v.number(),
@@ -761,8 +777,8 @@ export const recordPublishRaceHit = internalMutationGeneric({
         stationIcao: args.stationIcao,
         reportDateLocal,
         reportTsUtc: args.reportTsUtc,
-        reportType: args.reportType,
         rawMetar: args.rawMetar,
+        ...(args.reportType ? { reportType: args.reportType } : {}),
         ...(args.source === RACE_SOURCE.REDEMET
           ? {
               redemetRawMetar: args.rawMetar,
@@ -785,9 +801,14 @@ export const recordPublishRaceHit = internalMutationGeneric({
 
     const patch = {
       reportDateLocal,
-      reportType: existing.reportType ?? args.reportType,
     };
-    const canonicalRawMetar = existing.rawMetar || args.rawMetar;
+    if (!existing.reportType && args.reportType) {
+      patch.reportType = args.reportType;
+    }
+    const canonicalRawMetar = chooseCanonicalRaceRawMetar(
+      existing.rawMetar,
+      args.rawMetar,
+    );
     if (existing.rawMetar !== canonicalRawMetar) {
       patch.rawMetar = canonicalRawMetar;
     }
@@ -885,7 +906,6 @@ export const pollLatestNoaaPublishRace = actionGeneric({
     const raceRow = await ctx.runMutation("redemet:recordPublishRaceHit", {
       stationIcao,
       reportTsUtc: hit.reportTsUtc,
-      reportType: hit.reportType,
       source: RACE_SOURCE.TGFTP,
       rawMetar: hit.rawMetar,
       seenAt: hit.seenAt,
@@ -898,7 +918,7 @@ export const pollLatestNoaaPublishRace = actionGeneric({
       ok: true,
       stationIcao,
       reportTsUtc: hit.reportTsUtc,
-      reportType: hit.reportType,
+      reportType: raceRow?.reportType ?? null,
       rawMetar: hit.rawMetar,
       tgftpFirstSeenAt: raceRow?.tgftpFirstSeenAt ?? hit.seenAt,
       tgftpLastModifiedAt: hit.lastModifiedAt,
@@ -966,7 +986,6 @@ export const watchStationPublishRaceWindow = actionGeneric({
           ctx.runMutation("redemet:recordPublishRaceHit", {
             stationIcao,
             reportTsUtc: tgftpHit.reportTsUtc,
-            reportType: tgftpHit.reportType,
             source: RACE_SOURCE.TGFTP,
             rawMetar: tgftpHit.rawMetar,
             seenAt: tgftpHit.seenAt,

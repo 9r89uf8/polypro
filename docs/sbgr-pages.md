@@ -41,6 +41,7 @@ What this page displays:
 - `Latest Raw METAR` panel
 - `Publish Race` table showing recent first-seen timing between REDEMET and
   NOAA `tgftp`
+  - publish-race timestamps are displayed in `America/Chicago`
 - Raw observations table:
   - `Local Time`
   - `Type`
