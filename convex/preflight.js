@@ -10,6 +10,12 @@ const PREFLIGHT_FETCH_TIMEOUT_MS = 25000;
 const PREFLIGHT_DEFAULT_BASE_URL = "https://gopreflight.co.nz";
 const NOAA_LATEST_METAR_BASE_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
+const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
+const WEATHERCOM_CURRENT_CONDITIONS_URL =
+  `${WEATHERCOM_API_BASE_URL}/v3/wx/observations/current`;
+// Public Weather.com client key embedded in Wunderground airport pages.
+const WEATHERCOM_WUNDERGROUND_API_KEY =
+  "e1f10a1e78da46f5b10a1e78da96f525";
 const RACE_SOURCE = {
   PREFLIGHT: "preflight",
   TGFTP: "tgftp",
@@ -21,6 +27,8 @@ const PUBLISH_RACE_WINNER = {
 };
 const DEFAULT_RACE_QUERY_LIMIT = 12;
 const MAX_RACE_QUERY_LIMIT = 48;
+const DEFAULT_RACE_WATCH_INTERVAL_MS = 5000;
+const DEFAULT_RACE_WATCH_DURATION_MS = 15 * 60 * 1000;
 
 const aucklandDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: AUCKLAND_TIMEZONE,
@@ -246,6 +254,16 @@ function parseNoaaLatestTxt(rawText) {
 function parseHttpTimestamp(value) {
   const epochMs = Date.parse(String(value ?? "").trim());
   return Number.isFinite(epochMs) ? epochMs : null;
+}
+
+function buildWeatherComAirportCurrentUrl(stationIcao) {
+  const url = new URL(WEATHERCOM_CURRENT_CONDITIONS_URL);
+  url.searchParams.set("apiKey", WEATHERCOM_WUNDERGROUND_API_KEY);
+  url.searchParams.set("language", "en-US");
+  url.searchParams.set("units", "m");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("icaoCode", stationIcao);
+  return url.toString();
 }
 
 function buildObservationRow({
@@ -529,6 +547,69 @@ async function fetchLatestTgftpRaceHit(stationIcao) {
   };
 }
 
+async function fetchLatestWeatherComAirportCurrentReading(stationIcao) {
+  const response = await fetchWithTimeout(
+    buildWeatherComAirportCurrentUrl(stationIcao),
+    {
+      headers: {
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+      },
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Weather.com airport current fetch failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  const payload = await response.json();
+  const tempC = parseNumber(payload?.temperature);
+  if (tempC === null) {
+    throw new Error("Weather.com airport current response missing temperature.");
+  }
+
+  const validTimeUtcSeconds = parseNumber(payload?.validTimeUtc);
+  const observedAtUtc =
+    (validTimeUtcSeconds !== null ? Math.round(validTimeUtcSeconds * 1000) : null) ??
+    parseIsoTimestamp(payload?.validTimeLocal) ??
+    Date.now();
+
+  const phrase =
+    toNonEmptyString(payload?.wxPhraseLong) ??
+    toNonEmptyString(payload?.wxPhraseMedium) ??
+    toNonEmptyString(payload?.wxPhraseShort);
+
+  return {
+    ok: true,
+    stationIcao,
+    source: "weathercom_airport_current",
+    sourceLabel: "Weather.com airport current (unofficial)",
+    observedAtUtc,
+    observedAtLocal: formatAucklandDateTime(observedAtUtc),
+    tempC: roundToTenth(tempC),
+    tempF: toFahrenheit(tempC),
+    relativeHumidity: parseNumber(payload?.relativeHumidity),
+    windSpeedKph: parseNumber(payload?.windSpeed),
+    windGustKph: parseNumber(payload?.windGust),
+    pressureHpa: parseNumber(payload?.pressureMeanSeaLevel),
+    phrase,
+    raw: JSON.stringify(
+      {
+        temperature: payload?.temperature,
+        validTimeUtc: payload?.validTimeUtc,
+        windSpeed: payload?.windSpeed,
+        windGust: payload?.windGust,
+        pressureMeanSeaLevel: payload?.pressureMeanSeaLevel,
+        wxPhraseLong: payload?.wxPhraseLong,
+      },
+      null,
+      0,
+    ),
+  };
+}
+
 export const upsertStationRowsBatch = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
@@ -793,6 +874,122 @@ export const pollLatestNoaaPublishRace = actionGeneric({
       tgftpLastModifiedAt: hit.lastModifiedAt,
       winner: raceRow?.winner ?? null,
       leadMs: raceRow?.leadMs ?? null,
+    };
+  },
+});
+
+export const fetchLatestWeatherComAirportCurrent = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+    return await fetchLatestWeatherComAirportCurrentReading(stationIcao);
+  },
+});
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+export const watchStationPublishRaceWindow = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+    intervalMs: v.optional(v.number()),
+    durationMs: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const intervalMs = Math.max(
+      1000,
+      Math.min(30000, Math.round(args.intervalMs ?? DEFAULT_RACE_WATCH_INTERVAL_MS)),
+    );
+    const durationMs = Math.max(
+      intervalMs,
+      Math.min(20 * 60 * 1000, Math.round(args.durationMs ?? DEFAULT_RACE_WATCH_DURATION_MS)),
+    );
+
+    const startedAt = Date.now();
+    const deadline = startedAt + durationMs;
+    let iterations = 0;
+    let errorCount = 0;
+    let lastError = null;
+    let lastPreflight = null;
+    let lastTgftp = null;
+    const touchedReportTimestamps = new Set();
+
+    while (Date.now() <= deadline) {
+      try {
+        const [preflightHit, tgftpHit] = await Promise.all([
+          fetchLatestPreflightRaceHit(stationIcao),
+          fetchLatestTgftpRaceHit(stationIcao),
+        ]);
+
+        lastPreflight = preflightHit;
+        lastTgftp = tgftpHit;
+
+        const [preflightRaceRow, tgftpRaceRow] = await Promise.all([
+          ctx.runMutation("preflight:recordPublishRaceHit", {
+            stationIcao,
+            reportTsUtc: preflightHit.row.obsTimeUtc,
+            reportType: preflightHit.row.reportType,
+            source: RACE_SOURCE.PREFLIGHT,
+            rawMetar: preflightHit.row.rawMetar,
+            seenAt: preflightHit.seenAt,
+          }),
+          ctx.runMutation("preflight:recordPublishRaceHit", {
+            stationIcao,
+            reportTsUtc: tgftpHit.reportTsUtc,
+            source: RACE_SOURCE.TGFTP,
+            rawMetar: tgftpHit.rawMetar,
+            seenAt: tgftpHit.seenAt,
+            ...(Number.isFinite(tgftpHit.lastModifiedAt)
+              ? { sourceLastModifiedAt: tgftpHit.lastModifiedAt }
+              : {}),
+          }),
+        ]);
+
+        if (preflightRaceRow?.reportTsUtc) {
+          touchedReportTimestamps.add(preflightRaceRow.reportTsUtc);
+        }
+        if (tgftpRaceRow?.reportTsUtc) {
+          touchedReportTimestamps.add(tgftpRaceRow.reportTsUtc);
+        }
+      } catch (error) {
+        errorCount += 1;
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+
+      iterations += 1;
+
+      if (Date.now() + intervalMs > deadline) {
+        break;
+      }
+      await sleep(intervalMs);
+    }
+
+    return {
+      ok: errorCount === 0,
+      stationIcao,
+      startedAt,
+      finishedAt: Date.now(),
+      durationMs,
+      intervalMs,
+      iterations,
+      errorCount,
+      lastError,
+      touchedReportCount: touchedReportTimestamps.size,
+      latestPreflightReportTsUtc: lastPreflight?.row?.obsTimeUtc ?? null,
+      latestTgftpReportTsUtc: lastTgftp?.reportTsUtc ?? null,
     };
   },
 });

@@ -33,12 +33,16 @@ What this page displays:
   - `Latest`
   - `Day Range`
   - `Messages`
+  - `Near-Live Now`
 - One line chart:
   - official NZWN `METAR`
   - off-hour `SPECI` points if the official feed exposes them
   - blue points for `METAR`, red points for `SPECI`
   - x-axis is `Pacific/Auckland` local time
 - `Latest Raw METAR` panel
+- `Near-Live Airport Current` panel
+  - unofficial Weather.com/Wunderground airport-current observation for `NZWN`
+  - separate from the official METAR history series
 - `Publish Race` table showing recent first-seen timing between official
   PreFlight and NOAA `tgftp`
   - publish-race timestamps are displayed in `America/Chicago`
@@ -63,6 +67,9 @@ Behavior details:
     latest official endpoint
 - Manual refresh reruns the same rolling sync, and reruns the latest poll when
   the route date is today.
+- Each page load and manual refresh also fetches a live unofficial
+  `Weather.com/Wunderground` airport-current reading for `NZWN`.
+- The unofficial card is independent of the selected historical date.
 - Observations are deduped by `(stationIcao, date, obsTimeUtc)` in
   `preflightMetarObservations`.
 - Recent publish-race rows are loaded from `preflightPublishRaceReports`.
@@ -79,11 +86,17 @@ Latest official NZWN JSON:
 
 - `https://gopreflight.co.nz/data/aerodromesv3/NZWN`
 
+Near-live unofficial NZWN airport current JSON:
+
+- `https://api.weather.com/v3/wx/observations/current?apiKey=...&language=en-US&units=m&format=json&icaoCode=NZWN`
+
 Requirements:
 
 - Requests must send `Authorization: Bearer <token>`
 - The token is a logged-in user access token captured from PreFlight, stored in
   `PREFLIGHT_AUTH_BEARER_TOKEN`
+- The unofficial Weather.com current endpoint uses the public key embedded in
+  Wunderground airport pages.
 
 Known limitation:
 
@@ -118,7 +131,18 @@ Convex cron:
 - `nzwn_tgftp_publish_race_every_minute`
   - calls `preflight:pollLatestNoaaPublishRace`
   - station argument is `NZWN`
+- `nzwn_publish_race_watch_minute_25_55`
+  - calls `preflight:watchStationPublishRaceWindow`
+  - station argument is `NZWN`
+  - starts at minutes `25` and `55`
+  - passes `durationMs=900000`, so each watch runs for 15 minutes
+  - polls PreFlight and NOAA `tgftp` in short intervals through the usual late
+    `:00` / `:30` release window
 
-NZWN uses continuous minute-by-minute official and NOAA polling for the
-publish-race experiment because routine Wellington reports can appear well after
-the nominal `:00` and `:30` boundaries.
+NZWN uses both:
+
+- continuous minute-by-minute official/NOAA polling as a fallback
+- short-interval watch windows around the routine half-hour boundaries
+
+That combination is needed because Wellington reports can appear several minutes
+after the nominal `:00` and `:30` schedule.

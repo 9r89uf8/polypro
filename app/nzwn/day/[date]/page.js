@@ -192,8 +192,11 @@ function formatLeadMs(leadMs) {
   if (!Number.isFinite(leadMs)) {
     return "—";
   }
+  if (leadMs > 0 && leadMs < 1000) {
+    return "<1s";
+  }
   if (leadMs < 120000) {
-    return `${Math.round(leadMs / 1000)}s`;
+    return `${(leadMs / 1000).toFixed(1)}s`;
   }
   return `${(leadMs / 60000).toFixed(1)} min`;
 }
@@ -218,6 +221,16 @@ function formatLivePollMessage(result) {
     : null;
 
   return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
+}
+
+function formatNearLiveCurrentMessage(result) {
+  if (!result?.ok) {
+    return "Near-live Weather.com airport current unavailable.";
+  }
+  const observedText = result.observedAtLocal
+    ? formatStoredLocalDateTime(result.observedAtLocal)
+    : "—";
+  return `Near-live Weather.com airport current: ${result.tempC?.toFixed(1) ?? "—"}°C at ${observedText}.`;
 }
 
 function buildLineDataset(rows, unit) {
@@ -268,6 +281,8 @@ export default function NzwnDayPage() {
   const [inputDate, setInputDate] = useState(date);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [nearLiveCurrent, setNearLiveCurrent] = useState(null);
+  const [nearLiveError, setNearLiveError] = useState("");
   const inFlightRef = useRef(false);
   const backfilledDateRef = useRef("");
 
@@ -278,6 +293,9 @@ export default function NzwnDayPage() {
 
   const backfillDay = useAction("preflight:backfillDayStationMessages");
   const pollLatest = useAction("preflight:pollLatestStationMetar");
+  const fetchNearLiveCurrent = useAction(
+    "preflight:fetchLatestWeatherComAirportCurrent",
+  );
 
   const dayData = useQuery(
     "preflight:getDayStationRows",
@@ -334,6 +352,22 @@ export default function NzwnDayPage() {
           messages.push(formatLivePollMessage(pollResult));
         }
 
+        try {
+          const unofficialResult = await fetchNearLiveCurrent({
+            stationIcao: STATION_ICAO,
+          });
+          messages.push(formatNearLiveCurrentMessage(unofficialResult));
+          if (!cancelled) {
+            setNearLiveCurrent(unofficialResult);
+            setNearLiveError("");
+          }
+        } catch (error) {
+          if (!cancelled) {
+            const message = error instanceof Error ? error.message : String(error);
+            setNearLiveError(message);
+          }
+        }
+
         if (!cancelled) {
           setLiveMessage(messages.join(" "));
         }
@@ -353,7 +387,7 @@ export default function NzwnDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, backfillDay, pollLatest]);
+  }, [date, isDateValid, isToday, backfillDay, pollLatest, fetchNearLiveCurrent]);
 
   async function handleRefreshNow() {
     if (!isDateValid || inFlightRef.current) {
@@ -374,6 +408,18 @@ export default function NzwnDayPage() {
       if (isToday) {
         const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
         messages.push(formatLivePollMessage(pollResult));
+      }
+
+      try {
+        const unofficialResult = await fetchNearLiveCurrent({
+          stationIcao: STATION_ICAO,
+        });
+        messages.push(formatNearLiveCurrentMessage(unofficialResult));
+        setNearLiveCurrent(unofficialResult);
+        setNearLiveError("");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setNearLiveError(message);
       }
 
       setLiveMessage(messages.join(" "));
@@ -571,7 +617,7 @@ export default function NzwnDayPage() {
           </p>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
               Latest
@@ -622,6 +668,30 @@ export default function NzwnDayPage() {
               rolling recent window.
             </p>
           </div>
+
+          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
+              Near-Live Now
+            </p>
+            <p className="mt-2 text-3xl font-semibold text-foreground">
+              {nearLiveCurrent
+                ? formatTemp(
+                    displayUnit === "C" ? nearLiveCurrent.tempC : nearLiveCurrent.tempF,
+                    displayUnit,
+                  )
+                : "—"}
+            </p>
+            <p className="mt-2 text-sm text-black/65">
+              {nearLiveCurrent?.observedAtLocal
+                ? `Weather.com airport current at ${formatStoredLocalDateTime(
+                    nearLiveCurrent.observedAtLocal,
+                  )}`
+                : "Unofficial airport-current feed not loaded yet."}
+            </p>
+            <p className="mt-2 text-xs text-black/55">
+              Unofficial. Independent of the selected historical date.
+            </p>
+          </div>
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
@@ -655,14 +725,88 @@ export default function NzwnDayPage() {
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
+          <h2 className="text-xl font-semibold text-foreground">
+            Near-Live Airport Current
+          </h2>
+          <p className="mt-1 text-sm text-black/60">
+            Unofficial Weather.com/Wunderground airport-current observation for
+            NZWN. This can be newer than the latest official METAR.
+          </p>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
+                Current Reading
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-foreground">
+                {nearLiveCurrent
+                  ? formatTemp(
+                      displayUnit === "C" ? nearLiveCurrent.tempC : nearLiveCurrent.tempF,
+                      displayUnit,
+                    )
+                  : "—"}
+              </p>
+              <p className="mt-2 text-sm text-black/65">
+                {nearLiveCurrent?.observedAtLocal
+                  ? `Observed ${formatStoredLocalDateTime(
+                      nearLiveCurrent.observedAtLocal,
+                    )}`
+                  : "No near-live current reading loaded yet."}
+              </p>
+              <p className="mt-2 text-sm text-black/65">
+                {nearLiveCurrent?.phrase ?? "—"}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
+                Extra Fields
+              </p>
+              <div className="mt-3 space-y-2 text-sm text-black/70">
+                <p>
+                  Humidity:{" "}
+                  {Number.isFinite(nearLiveCurrent?.relativeHumidity)
+                    ? `${nearLiveCurrent.relativeHumidity}%`
+                    : "—"}
+                </p>
+                <p>
+                  Wind:{" "}
+                  {Number.isFinite(nearLiveCurrent?.windSpeedKph)
+                    ? `${nearLiveCurrent.windSpeedKph} km/h`
+                    : "—"}
+                </p>
+                <p>
+                  Gust:{" "}
+                  {Number.isFinite(nearLiveCurrent?.windGustKph)
+                    ? `${nearLiveCurrent.windGustKph} km/h`
+                    : "—"}
+                </p>
+                <p>
+                  Pressure:{" "}
+                  {Number.isFinite(nearLiveCurrent?.pressureHpa)
+                    ? `${nearLiveCurrent.pressureHpa} hPa`
+                    : "—"}
+                </p>
+                <p>
+                  Status:{" "}
+                  {nearLiveError
+                    ? `Unavailable (${nearLiveError})`
+                    : nearLiveCurrent?.sourceLabel ?? "Loaded"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
                 Recent NZWN first-seen timing between official PreFlight and NOAA
                 `tgftp`. Times in this table are shown in America/Chicago. This
-                logger samples both sources every minute because NZWN publication
-                can drift well past the nominal `:00` and `:30` routine slots.
+                logger runs a 5-second watch around the `:00` and `:30` routine
+                windows and also keeps minute fallback polls because NZWN
+                publication can drift well past the nominal schedule.
               </p>
             </div>
           </div>

@@ -83,6 +83,16 @@ crons.cron(
     { stationIcao: "NZWN" },
 );
 
+// Starts before both routine NZWN boundaries and keeps watching through the
+// usual late-publication window so PreFlight and NOAA tgftp first-seen times
+// are measured more precisely than the minute fallback polls.
+crons.cron(
+    "nzwn_publish_race_watch_minute_25_55",
+    "25,55 * * * *",
+    api.preflight.watchStationPublishRaceWindow,
+    { stationIcao: "NZWN", durationMs: 15 * 60 * 1000 },
+);
+
 // Runs every hour and stores a new KORD snapshot:
 // - Microsoft + AccuWeather + Google + Weather.com 5-day forecasts
 // - Current temperature from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo
