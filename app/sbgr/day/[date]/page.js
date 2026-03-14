@@ -176,6 +176,9 @@ function formatChicagoDateTimeSeconds(epochMs) {
 }
 
 function formatRaceWinner(winner) {
+  if (winner === "aisweb") {
+    return "AISWEB";
+  }
   if (winner === "redemet") {
     return "REDEMET";
   }
@@ -291,6 +294,7 @@ export default function SbgrDayPage() {
   const raceData = useQuery("redemet:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
+    routineOnly: true,
   });
 
   const rows = dayData?.rows ?? [];
@@ -657,10 +661,13 @@ export default function SbgrDayPage() {
             <div>
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
-                Recent SBGR first-seen timing between official REDEMET and NOAA
-                `tgftp`. Times in this table are shown in America/Chicago. The
-                logger watches the top-of-hour window in short intervals, so
-                these rows are for publication timing, not the day chart.
+                Recent routine hourly SBGR METAR first-seen timing across
+                official AISWEB, official REDEMET, and NOAA `tgftp`. Times in
+                this table are shown in America/Chicago. Winner and lead are
+                computed from the earliest two sources seen for that report.
+                Off-hour REDEMET `SPECI` stay in the day chart and raw table,
+                but are excluded here because this watcher is centered on the
+                top-of-hour publication window.
               </p>
             </div>
           </div>
@@ -671,6 +678,7 @@ export default function SbgrDayPage() {
                   <th className="px-3 py-2 font-semibold">Report Time</th>
                   <th className="px-3 py-2 font-semibold">Winner</th>
                   <th className="px-3 py-2 font-semibold">Lead</th>
+                  <th className="px-3 py-2 font-semibold">AISWEB Seen</th>
                   <th className="px-3 py-2 font-semibold">REDEMET Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
@@ -690,7 +698,9 @@ export default function SbgrDayPage() {
                       <td className="px-3 py-3 whitespace-nowrap">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "redemet"
+                            row.winner === "aisweb"
+                              ? "bg-sky-50 text-sky-900"
+                              : row.winner === "redemet"
                               ? "bg-emerald-50 text-emerald-800"
                               : row.winner === "tgftp"
                                 ? "bg-amber-50 text-amber-900"
@@ -706,6 +716,9 @@ export default function SbgrDayPage() {
                         {formatLeadMs(row.leadMs)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
+                        {formatChicagoDateTimeSeconds(row.aiswebFirstSeenAt)}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
                         {formatChicagoDateTimeSeconds(row.redemetFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
@@ -715,13 +728,17 @@ export default function SbgrDayPage() {
                         {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ?? row.redemetRawMetar ?? row.tgftpRawMetar ?? "—"}
+                        {row.rawMetar ??
+                          row.aiswebRawMetar ??
+                          row.redemetRawMetar ??
+                          row.tgftpRawMetar ??
+                          "—"}
                       </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
+                    <td colSpan={8} className="px-3 py-6 text-center text-black/55">
                       No publish-race rows stored yet.
                     </td>
                   </tr>

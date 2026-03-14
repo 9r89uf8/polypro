@@ -13,10 +13,12 @@ const NOAA_LATEST_METAR_BASE_URL =
 const REDEMET_FETCH_TIMEOUT_MS = 25000;
 const REDEMET_EARLY_UTC_HOURS_FOR_LOCAL_DAY = 3;
 const RACE_SOURCE = {
+  AISWEB: "aisweb",
   REDEMET: "redemet",
   TGFTP: "tgftp",
 };
 const PUBLISH_RACE_WINNER = {
+  AISWEB: "aisweb",
   REDEMET: "redemet",
   TGFTP: "tgftp",
   TIE: "tie",
@@ -185,6 +187,30 @@ function getRedemetApiKey() {
   return apiKey;
 }
 
+function getAiswebApiBaseUrl() {
+  const baseUrl = toNonEmptyString(process.env.AISWEB_API_BASE_URL);
+  if (!baseUrl) {
+    throw new Error("Missing AISWEB_API_BASE_URL.");
+  }
+  return baseUrl.replace(/\/+$/, "");
+}
+
+function getAiswebApiKey() {
+  const apiKey = toNonEmptyString(process.env.AISWEB_API_KEY);
+  if (!apiKey) {
+    throw new Error("Missing AISWEB_API_KEY.");
+  }
+  return apiKey;
+}
+
+function getAiswebApiPass() {
+  const apiPass = toNonEmptyString(process.env.AISWEB_API_PASS);
+  if (!apiPass) {
+    throw new Error("Missing AISWEB_API_PASS.");
+  }
+  return apiPass;
+}
+
 function buildLatestInfoUrl(stationIcao) {
   const url = new URL(`${getRedemetApiBaseUrl()}/aerodromos/info`);
   url.searchParams.set("localidade", stationIcao);
@@ -192,6 +218,15 @@ function buildLatestInfoUrl(stationIcao) {
   url.searchParams.set("taf", "'sim'");
   url.searchParams.set("aviso", "'sim'");
   url.searchParams.set("api_key", getRedemetApiKey());
+  return url.toString();
+}
+
+function buildAiswebMetUrl(stationIcao) {
+  const url = new URL(getAiswebApiBaseUrl());
+  url.searchParams.set("apiKey", getAiswebApiKey());
+  url.searchParams.set("apiPass", getAiswebApiPass());
+  url.searchParams.set("area", "met");
+  url.searchParams.set("icaoCode", stationIcao);
   return url.toString();
 }
 
@@ -217,6 +252,62 @@ function parseRedemetUtcTimestamp(value) {
 function extractReportType(rawMetar) {
   const match = /^(METAR|SPECI)\b/.exec(String(rawMetar ?? "").trim().toUpperCase());
   return match ? match[1] : null;
+}
+
+function parseReportTimestampFromRaw(rawMetar, nowEpochMs = Date.now()) {
+  const match = /^(METAR|SPECI)\s+[A-Z0-9]{4}\s+(\d{2})(\d{2})(\d{2})Z\b/.exec(
+    String(rawMetar ?? "").trim(),
+  );
+  if (!match) {
+    return null;
+  }
+
+  const now = new Date(nowEpochMs);
+  const currentYear = now.getUTCFullYear();
+  const currentMonth = now.getUTCMonth();
+  const reportDay = Number(match[2]);
+  const reportHour = Number(match[3]);
+  const reportMinute = Number(match[4]);
+
+  const candidates = [
+    Date.UTC(currentYear, currentMonth - 1, reportDay, reportHour, reportMinute, 0, 0),
+    Date.UTC(currentYear, currentMonth, reportDay, reportHour, reportMinute, 0, 0),
+    Date.UTC(currentYear, currentMonth + 1, reportDay, reportHour, reportMinute, 0, 0),
+  ].filter(Number.isFinite);
+
+  let bestCandidate = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const distance = Math.abs(candidate - nowEpochMs);
+    if (distance < bestDistance) {
+      bestCandidate = candidate;
+      bestDistance = distance;
+    }
+  }
+  return bestCandidate;
+}
+
+function parseAiswebMetXml(xmlText, stationIcao) {
+  const locMatch = /<loc>([^<]+)<\/loc>/i.exec(String(xmlText ?? ""));
+  const metarMatch = /<metar>([\s\S]*?)<\/metar>/i.exec(String(xmlText ?? ""));
+  const location = toNonEmptyString(locMatch?.[1])?.toUpperCase();
+  const rawMetar = toNonEmptyString(metarMatch?.[1])
+    ?.replace(/\s+/g, " ")
+    .trim();
+  if (location && location !== stationIcao.toUpperCase()) {
+    throw new Error(`AISWEB met response returned ${location}, expected ${stationIcao}.`);
+  }
+  if (!rawMetar) {
+    throw new Error("AISWEB met response did not include a METAR.");
+  }
+  const reportTsUtc = parseReportTimestampFromRaw(rawMetar);
+  if (!Number.isFinite(reportTsUtc)) {
+    throw new Error("AISWEB met response did not include a parseable METAR timestamp.");
+  }
+  return {
+    rawMetar,
+    reportTsUtc,
+  };
 }
 
 function parseNoaaLatestTxt(rawText) {
@@ -275,6 +366,30 @@ function parseNoaaLatestTxt(rawText) {
 function parseHttpTimestamp(value) {
   const epochMs = Date.parse(String(value ?? "").trim());
   return Number.isFinite(epochMs) ? epochMs : null;
+}
+
+function computePublishRaceWinner(firstSeenTimes) {
+  const hits = Object.entries(firstSeenTimes)
+    .filter(([, seenAt]) => Number.isFinite(seenAt))
+    .sort((a, b) => a[1] - b[1]);
+
+  if (hits.length < 2) {
+    return { winner: null, leadMs: null };
+  }
+
+  const [firstSource, firstSeenAt] = hits[0];
+  const [, secondSeenAt] = hits[1];
+  if (firstSeenAt === secondSeenAt) {
+    return {
+      winner: PUBLISH_RACE_WINNER.TIE,
+      leadMs: 0,
+    };
+  }
+
+  return {
+    winner: firstSource,
+    leadMs: secondSeenAt - firstSeenAt,
+  };
 }
 
 function buildObservationRow({
@@ -463,28 +578,6 @@ function observationChanged(existing, candidate) {
   return fields.some((field) => existing[field] !== candidate[field]);
 }
 
-function computePublishRaceWinner(redemetFirstSeenAt, tgftpFirstSeenAt) {
-  if (!Number.isFinite(redemetFirstSeenAt) || !Number.isFinite(tgftpFirstSeenAt)) {
-    return { winner: null, leadMs: null };
-  }
-  if (redemetFirstSeenAt < tgftpFirstSeenAt) {
-    return {
-      winner: PUBLISH_RACE_WINNER.REDEMET,
-      leadMs: tgftpFirstSeenAt - redemetFirstSeenAt,
-    };
-  }
-  if (tgftpFirstSeenAt < redemetFirstSeenAt) {
-    return {
-      winner: PUBLISH_RACE_WINNER.TGFTP,
-      leadMs: redemetFirstSeenAt - tgftpFirstSeenAt,
-    };
-  }
-  return {
-    winner: PUBLISH_RACE_WINNER.TIE,
-    leadMs: 0,
-  };
-}
-
 function chooseCanonicalRaceRawMetar(existingRawMetar, candidateRawMetar) {
   const existing = toNonEmptyString(existingRawMetar);
   const candidate = toNonEmptyString(candidateRawMetar);
@@ -504,6 +597,23 @@ function chooseCanonicalRaceRawMetar(existingRawMetar, candidateRawMetar) {
     return existing;
   }
   return candidate.length > existing.length ? candidate : existing;
+}
+
+function inferPublishRaceReportType(row) {
+  const explicitType = row?.reportType;
+  if (explicitType === "METAR" || explicitType === "SPECI") {
+    return explicitType;
+  }
+
+  const candidates = [row?.rawMetar, row?.redemetRawMetar, row?.tgftpRawMetar];
+  for (const candidate of candidates) {
+    const type = extractReportType(candidate);
+    if (type) {
+      return type;
+    }
+  }
+
+  return null;
 }
 
 async function recomputeDailySummary(ctx, stationIcao, date) {
@@ -610,6 +720,25 @@ async function fetchLatestRedemetRaceHit(stationIcao) {
   return {
     seenAt: Date.now(),
     row,
+  };
+}
+
+async function fetchLatestAiswebRaceHit(stationIcao) {
+  const response = await fetchWithTimeout(buildAiswebMetUrl(stationIcao), {
+    headers: {
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`AISWEB met fetch failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const body = await response.text();
+  const parsed = parseAiswebMetXml(body, stationIcao);
+  return {
+    seenAt: Date.now(),
+    reportTsUtc: parsed.reportTsUtc,
+    rawMetar: parsed.rawMetar,
   };
 }
 
@@ -756,7 +885,11 @@ export const recordPublishRaceHit = internalMutationGeneric({
     stationIcao: v.string(),
     reportTsUtc: v.number(),
     reportType: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
-    source: v.union(v.literal(RACE_SOURCE.REDEMET), v.literal(RACE_SOURCE.TGFTP)),
+    source: v.union(
+      v.literal(RACE_SOURCE.AISWEB),
+      v.literal(RACE_SOURCE.REDEMET),
+      v.literal(RACE_SOURCE.TGFTP),
+    ),
     rawMetar: v.string(),
     seenAt: v.number(),
     sourceLastModifiedAt: v.optional(v.number()),
@@ -779,7 +912,12 @@ export const recordPublishRaceHit = internalMutationGeneric({
         reportTsUtc: args.reportTsUtc,
         rawMetar: args.rawMetar,
         ...(args.reportType ? { reportType: args.reportType } : {}),
-        ...(args.source === RACE_SOURCE.REDEMET
+        ...(args.source === RACE_SOURCE.AISWEB
+          ? {
+              aiswebRawMetar: args.rawMetar,
+              aiswebFirstSeenAt: args.seenAt,
+            }
+          : args.source === RACE_SOURCE.REDEMET
           ? {
               redemetRawMetar: args.rawMetar,
               redemetFirstSeenAt: args.seenAt,
@@ -813,7 +951,14 @@ export const recordPublishRaceHit = internalMutationGeneric({
       patch.rawMetar = canonicalRawMetar;
     }
 
-    if (args.source === RACE_SOURCE.REDEMET) {
+    if (args.source === RACE_SOURCE.AISWEB) {
+      if (!existing.aiswebRawMetar) {
+        patch.aiswebRawMetar = args.rawMetar;
+      }
+      if (!Number.isFinite(existing.aiswebFirstSeenAt)) {
+        patch.aiswebFirstSeenAt = args.seenAt;
+      }
+    } else if (args.source === RACE_SOURCE.REDEMET) {
       if (!existing.redemetRawMetar) {
         patch.redemetRawMetar = args.rawMetar;
       }
@@ -835,16 +980,20 @@ export const recordPublishRaceHit = internalMutationGeneric({
       }
     }
 
-    const winnerState = computePublishRaceWinner(
-      patch.redemetFirstSeenAt ?? existing.redemetFirstSeenAt,
-      patch.tgftpFirstSeenAt ?? existing.tgftpFirstSeenAt,
-    );
+    const winnerState = computePublishRaceWinner({
+      [PUBLISH_RACE_WINNER.AISWEB]:
+        patch.aiswebFirstSeenAt ?? existing.aiswebFirstSeenAt,
+      [PUBLISH_RACE_WINNER.REDEMET]:
+        patch.redemetFirstSeenAt ?? existing.redemetFirstSeenAt,
+      [PUBLISH_RACE_WINNER.TGFTP]:
+        patch.tgftpFirstSeenAt ?? existing.tgftpFirstSeenAt,
+    });
     if (winnerState.winner) {
       patch.winner = winnerState.winner;
       patch.leadMs = winnerState.leadMs;
     }
 
-    if (Object.keys(patch).length === 2) {
+    if (Object.keys(patch).length === 1) {
       return existing;
     }
 
@@ -888,6 +1037,39 @@ export const pollLatestStationMetar = actionGeneric({
       },
       availabilityLagMs: Math.max(0, seenAt - row.obsTimeUtc),
       ...result,
+    };
+  },
+});
+
+export const pollLatestAiswebPublishRace = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const hit = await fetchLatestAiswebRaceHit(stationIcao);
+    const raceRow = await ctx.runMutation("redemet:recordPublishRaceHit", {
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: extractReportType(hit.rawMetar) ?? undefined,
+      source: RACE_SOURCE.AISWEB,
+      rawMetar: hit.rawMetar,
+      seenAt: hit.seenAt,
+    });
+
+    return {
+      ok: true,
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: raceRow?.reportType ?? null,
+      rawMetar: hit.rawMetar,
+      aiswebFirstSeenAt: raceRow?.aiswebFirstSeenAt ?? hit.seenAt,
+      winner: raceRow?.winner ?? null,
+      leadMs: raceRow?.leadMs ?? null,
     };
   },
 });
@@ -960,46 +1142,89 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let iterations = 0;
     let errorCount = 0;
     let lastError = null;
+    let lastAisweb = null;
     let lastRedemet = null;
     let lastTgftp = null;
     const touchedReportTimestamps = new Set();
 
     while (Date.now() <= deadline) {
       try {
-        const [redemetHit, tgftpHit] = await Promise.all([
+        const results = await Promise.allSettled([
+          fetchLatestAiswebRaceHit(stationIcao),
           fetchLatestRedemetRaceHit(stationIcao),
           fetchLatestTgftpRaceHit(stationIcao),
         ]);
 
-        lastRedemet = redemetHit;
-        lastTgftp = tgftpHit;
+        const [aiswebResult, redemetResult, tgftpResult] = results;
+        const mutationCalls = [];
 
-        const [redemetRaceRow, tgftpRaceRow] = await Promise.all([
-          ctx.runMutation("redemet:recordPublishRaceHit", {
-            stationIcao,
-            reportTsUtc: redemetHit.row.obsTimeUtc,
-            reportType: redemetHit.row.reportType,
-            source: RACE_SOURCE.REDEMET,
-            rawMetar: redemetHit.row.rawMetar,
-            seenAt: redemetHit.seenAt,
-          }),
-          ctx.runMutation("redemet:recordPublishRaceHit", {
-            stationIcao,
-            reportTsUtc: tgftpHit.reportTsUtc,
-            source: RACE_SOURCE.TGFTP,
-            rawMetar: tgftpHit.rawMetar,
-            seenAt: tgftpHit.seenAt,
-            ...(Number.isFinite(tgftpHit.lastModifiedAt)
-              ? { sourceLastModifiedAt: tgftpHit.lastModifiedAt }
-              : {}),
-          }),
-        ]);
-
-        if (redemetRaceRow?.reportTsUtc) {
-          touchedReportTimestamps.add(redemetRaceRow.reportTsUtc);
+        if (aiswebResult.status === "fulfilled") {
+          lastAisweb = aiswebResult.value;
+          mutationCalls.push(
+            ctx.runMutation("redemet:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: aiswebResult.value.reportTsUtc,
+              reportType: extractReportType(aiswebResult.value.rawMetar) ?? undefined,
+              source: RACE_SOURCE.AISWEB,
+              rawMetar: aiswebResult.value.rawMetar,
+              seenAt: aiswebResult.value.seenAt,
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            aiswebResult.reason instanceof Error
+              ? aiswebResult.reason.message
+              : String(aiswebResult.reason);
         }
-        if (tgftpRaceRow?.reportTsUtc) {
-          touchedReportTimestamps.add(tgftpRaceRow.reportTsUtc);
+
+        if (redemetResult.status === "fulfilled") {
+          lastRedemet = redemetResult.value;
+          mutationCalls.push(
+            ctx.runMutation("redemet:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: redemetResult.value.row.obsTimeUtc,
+              reportType: redemetResult.value.row.reportType,
+              source: RACE_SOURCE.REDEMET,
+              rawMetar: redemetResult.value.row.rawMetar,
+              seenAt: redemetResult.value.seenAt,
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            redemetResult.reason instanceof Error
+              ? redemetResult.reason.message
+              : String(redemetResult.reason);
+        }
+
+        if (tgftpResult.status === "fulfilled") {
+          lastTgftp = tgftpResult.value;
+          mutationCalls.push(
+            ctx.runMutation("redemet:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: tgftpResult.value.reportTsUtc,
+              source: RACE_SOURCE.TGFTP,
+              rawMetar: tgftpResult.value.rawMetar,
+              seenAt: tgftpResult.value.seenAt,
+              ...(Number.isFinite(tgftpResult.value.lastModifiedAt)
+                ? { sourceLastModifiedAt: tgftpResult.value.lastModifiedAt }
+                : {}),
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            tgftpResult.reason instanceof Error
+              ? tgftpResult.reason.message
+              : String(tgftpResult.reason);
+        }
+
+        const raceRows = await Promise.all(mutationCalls);
+        for (const raceRow of raceRows) {
+          if (raceRow?.reportTsUtc) {
+            touchedReportTimestamps.add(raceRow.reportTsUtc);
+          }
         }
       } catch (error) {
         errorCount += 1;
@@ -1025,6 +1250,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
       errorCount,
       lastError,
       touchedReportCount: touchedReportTimestamps.size,
+      latestAiswebReportTsUtc: lastAisweb?.reportTsUtc ?? null,
       latestRedemetReportTsUtc: lastRedemet?.row?.obsTimeUtc ?? null,
       latestTgftpReportTsUtc: lastTgftp?.reportTsUtc ?? null,
     };
@@ -1118,6 +1344,7 @@ export const getRecentPublishRaceReports = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
     limit: v.optional(v.number()),
+    routineOnly: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const stationIcao = String(args.stationIcao ?? "SBGR").trim().toUpperCase();
@@ -1125,17 +1352,22 @@ export const getRecentPublishRaceReports = queryGeneric({
       ? Number(args.limit)
       : DEFAULT_RACE_QUERY_LIMIT;
     const limit = Math.max(1, Math.min(MAX_RACE_QUERY_LIMIT, requestedLimit));
+    const routineOnly = args.routineOnly !== false;
 
     const rows = await ctx.db
       .query("redemetPublishRaceReports")
       .withIndex("by_station_reportTs", (query) => query.eq("stationIcao", stationIcao))
       .order("desc")
-      .take(limit);
+      .take(MAX_RACE_QUERY_LIMIT);
+
+    const filteredRows = routineOnly
+      ? rows.filter((row) => inferPublishRaceReportType(row) !== "SPECI")
+      : rows;
 
     return {
       stationIcao,
-      count: rows.length,
-      rows,
+      count: Math.min(filteredRows.length, limit),
+      rows: filteredRows.slice(0, limit),
     };
   },
 });

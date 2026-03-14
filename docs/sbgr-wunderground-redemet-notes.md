@@ -145,6 +145,10 @@ Important handling note:
   - `REDEMET_API_BASE_URL`
   - `REDEMET_API_KEY`
   - `REDEMET_SBGR_LATEST_METAR_URL`
+  - `AISWEB_API_BASE_URL`
+  - `AISWEB_API_KEY`
+  - `AISWEB_API_PASS`
+  - `AISWEB_SBGR_LATEST_MET_URL`
 
 ## Official Latest SBGR Endpoint
 
@@ -436,24 +440,184 @@ Scope note:
 - this is one directly measured live cycle
 - it is strong evidence that the Brazilian official source can beat NOAA `tgftp` for SBGR publication timing
 
+## Likely Operational Dissemination Path
+
+Official DECEA / WMO / NWS material strongly suggests that NOAA is not pulling
+SBGR from REDEMET. The more likely path is the operational OPMET / telecom
+network, with REDEMET as a slower public presentation layer.
+
+Strongest official evidence:
+
+- Brazil AIP `GEN 3.5` says the `EMS` / `EMS-A` surface meteorological stations
+  are responsible for making and disseminating:
+  - `METAR`
+  - `SPECI`
+  - `METAR AUTO`
+  - `SPECI AUTO`
+- The same AIP says the `CMI` provides:
+  - `VOLMET`
+  - `D-VOLMET`
+  which are operational aviation weather dissemination services
+- DECEA's `EMA-800` quality material for `EMS-A3` says the station transmits
+  `METAR AUTO` / `SPECI AUTO` to the `Banco Internacional de Mensagens OPMET de
+  Brasília`
+- DECEA's own quality indicator for manual `METAR/SPECI` measures the
+  `Índice de envio do METAR/SPECI dentro do horário` to the `Banco OPMET`
+  and cites `Fonte dos dados: REDEMET e Banco OPMET`
+  - sampled SBGR row:
+    - `AERÓDROMO: SBGR`
+    - `Indicador: 99.75`
+- WMO says operational `OPMET` information (`METAR`, `SPECI`, `TAF`, `SIGMET`,
+  etc.) is disseminated in real time over ICAO-approved aeronautical and
+  meteorological telecommunication networks
+- NWS Telecommunications Gateway documentation says the US international
+  switching centers sit on the WMO GTS main trunk network and that the gateway
+  operates the `OPMET data bank` containing aviation messages like `METAR`,
+  `TAF`, `SIGMET`, and `AIRMET`
+
+Most defensible path from those sources:
+
+1. SBGR observation is produced by the Brazilian aeronautical meteorology
+   station / service (`EMS`, `EMS-A`, `CMA`, under DECEA / CIMAER)
+2. The operational report is sent to the Brazilian `Banco OPMET`
+3. From there it is exchanged over ICAO / WMO operational telecom paths
+   (`AFTN` / `AMHS` / `GTS` style network)
+4. NOAA/NWS ingests that operational traffic into its own `OPMET data bank`
+5. `tgftp` latest-station text updates from that operational side
+6. REDEMET public latest endpoints can lag because they are a different public
+   app / API layer
+
+Inference note:
+
+- Steps `2` through `5` are the most defensible interpretation of the official
+  documents plus the measured timing behavior
+- I do not have packet-level proof of the exact Brazil-to-NOAA routing path for
+  SBGR specifically
+- But the official docs make `Banco OPMET`, not the REDEMET public API, look
+  like the operational timeliness-critical system
+
+## Other Official Public Surface Worth Timing
+
+The official DECEA `AISWEB` aerodrome page for SBGR also shows current
+operational weather fields directly, including the latest raw `METAR`:
+
+- `https://aisweb.decea.mil.br/?i=aerodromos&codigo=SBGR`
+
+Sampled page details included:
+
+- current `METAR`
+- `CMA 24HR`
+- `D-ATIS: 127.750`
+- wind / visibility / cloud / temperature / QNH fields
+
+Practical implication:
+
+- if we want the closest public Brazilian mirror to the operational side, the
+  next useful timing comparison is likely:
+  - `AISWEB` vs `tgftp` vs `REDEMET`
+
+What the page source shows:
+
+- the SBGR `METAR` / `TAF` block is server-rendered HTML, not a client-side
+  weather XHR/fetch
+- that weather block is explicitly branded with the `REDEMET` logo
+- the only public AISWEB page-level API calls I found on that aerodrome page
+  were:
+  - `area=notam`
+  - `area=sol` (sunrise/sunset)
+- sampled `area=sol` response was only:
+  - date
+  - sunrise
+  - sunset
+  - weekday
+  - aerodrome
+  - coordinates
+- I did not find a public client-side AISWEB weather API call for the displayed
+  SBGR `METAR` / `TAF`
+
+Most defensible interpretation:
+
+- AISWEB is probably rendering that weather block from:
+  - the same REDEMET/public meteorology backend, or
+  - a shared internal DECEA/CIMAER meteorology data source
+- I do not yet have proof that AISWEB is pulling directly from the public
+  REDEMET API endpoint itself
+
+## Direct AISWEB Meteorology API
+
+The official AISWEB API documentation page does expose a dedicated meteorology
+service:
+
+- `Informações Meteorológicas (met) - mensagens METAR/TAF de acordo com a localidade escolhida`
+
+Direct live SBGR probe:
+
+- `https://aisweb.decea.mil.br/api/?apiKey=...&apiPass=...&area=met&icaoCode=SBGR`
+
+Sample live response:
+
+```xml
+<aisweb>
+  <met>
+    <loc>SBGR</loc>
+    <metar>METAR SBGR 140200Z 09002KT 9999 FEW006 17/17 Q1015=</metar>
+    <taf>TAF SBGR 132200Z 1400/1506 ...</taf>
+  </met>
+</aisweb>
+```
+
+Useful implications:
+
+- there is an official DECEA public API surface for SBGR `METAR` / `TAF`
+- this is more direct than scraping:
+  - `https://aisweb.decea.mil.br/?i=aerodromos&codigo=SBGR`
+- the AISWEB aerodrome page and the direct `area=met` API returned the same
+  SBGR `METAR` in the sampled run
+- this `area=met` route is now the best official DECEA public candidate to time
+  against:
+  - `tgftp`
+  - `REDEMET`
+
+Important access note:
+
+- the public AISWEB API page says API access should be requested from DECEA
+- the SBGR aerodrome page source still embeds an `apiKey` / `apiPass` pair
+  that works for `area=sol`
+- in the sampled run, that same pair also worked for `area=met`
+- because those credentials are page-exposed and may change, treat them as
+  unstable implementation details rather than a permanent contract
+
 ## In-Repo Publish Race Logger
 
 The repo now includes an SBGR publish-race logger built on top of the official
-REDEMET latest endpoint and NOAA `tgftp`.
+AISWEB `area=met` endpoint, the official REDEMET latest endpoint, and NOAA
+`tgftp`.
 
 Current implementation:
 
+- AISWEB latest poll path writes first-seen times into
+  `redemetPublishRaceReports`
 - REDEMET latest poll path writes first-seen times into
   `redemetPublishRaceReports`
 - NOAA `tgftp` race rows are written by a dedicated race poller
 - an hourly watch window starts at minute `55`
 - the scheduled watch currently runs for `10 minutes`
-- during that watch window the app polls both sources every few seconds and
-  stores whichever source first exposed each new SBGR report
+- during that watch window the app polls all three sources every few seconds
+  and stores whichever source first exposed each new SBGR report
+
+Important scope limit:
+
+- this watch is reliable for the routine hourly SBGR `METAR` race
+- it is not a trustworthy mid-hour `SPECI` race measurement
+- REDEMET can still surface useful off-hour `SPECI` rows that appear in the day
+  chart and raw observations table
+- the SBGR page now filters the race table down to routine `METAR` rows only so
+  those off-hour `SPECI` do not get misleading `winner` / `lead` readings
 
 Stored race fields include:
 
 - `reportTsUtc`
+- `aiswebFirstSeenAt`
 - `redemetFirstSeenAt`
 - `tgftpFirstSeenAt`
 - optional `tgftpLastModifiedAt`

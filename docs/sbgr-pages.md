@@ -1,7 +1,7 @@
 # SBGR Pages
 
-This document describes the SBGR routes and the official REDEMET-backed ingest
-used by those pages.
+This document describes the SBGR routes and the official Brazilian ingest used
+by those pages.
 
 ## `/sbgr/today`
 
@@ -39,8 +39,10 @@ What this page displays:
   - blue points for `METAR`, red points for `SPECI`
   - x-axis is `America/Sao_Paulo` local time
 - `Latest Raw METAR` panel
-- `Publish Race` table showing recent first-seen timing between REDEMET and
-  NOAA `tgftp`
+- `Publish Race` table showing recent first-seen timing across AISWEB,
+  REDEMET, and NOAA `tgftp`
+  - routine hourly `METAR` rows only
+  - off-hour `SPECI` remain in the chart and raw observations table
   - publish-race timestamps are displayed in `America/Chicago`
 - Raw observations table:
   - `Local Time`
@@ -66,16 +68,27 @@ Behavior details:
   `redemetMetarObservations`.
 - Recent publish-race rows are loaded from `redemetPublishRaceReports`.
 - The publish-race logger is separate from the day chart ingest:
+  - AISWEB first-seen times are written by the race logger
   - REDEMET first-seen times can also be written by the existing latest poll
   - NOAA `tgftp` first-seen times are written by the race logger
-  - winner/lead are computed only when both sources have first-seen times for
-    the same `reportTsUtc`
+  - winner/lead are computed from the earliest two sources seen for the same
+    `reportTsUtc`
+  - the page intentionally filters the publish-race table down to routine
+    hourly `METAR` rows
+  - reason:
+    - the SBGR race watcher is centered on the `:55` top-of-hour window
+    - that makes it useful for routine publication timing
+    - it is not a trustworthy mid-hour `SPECI` race measurement
 
 ## Official Sources
 
 Latest official SBGR JSON:
 
 - `https://api-redemet.decea.mil.br/aerodromos/info?localidade=SBGR&metar='sim'&taf='sim'&aviso='sim'&api_key=...`
+
+Latest official AISWEB SBGR XML:
+
+- `https://aisweb.decea.mil.br/api/?apiKey=...&apiPass=...&area=met&icaoCode=SBGR`
 
 Historical official message search:
 
@@ -99,8 +112,10 @@ Rows are then filtered back down to the selected `America/Sao_Paulo` local date.
   - stores obs count, latest row fields, min/max temps, and min/max times
 - `redemetPublishRaceReports`
   - one row per station/report timestamp
-  - stores REDEMET first-seen time, NOAA `tgftp` first-seen time, optional
-    `tgftp` `Last-Modified`, winner, and lead
+  - stores AISWEB first-seen time, REDEMET first-seen time, NOAA `tgftp`
+    first-seen time, optional `tgftp` `Last-Modified`, winner, and lead
+  - may also contain off-hour `SPECI` rows captured by REDEMET, but the day
+    page race table hides those by default
 
 ## Scheduled Ingest
 
@@ -114,8 +129,8 @@ Convex cron:
   - station argument is `SBGR`
   - starts at minute `55`
   - passes `durationMs=600000`, so the watch runs for 10 minutes
-  - polls REDEMET and NOAA `tgftp` in short intervals from `:55` through just
-    after the top of the hour so first-seen timing is more precise than a
-    once-per-minute cron
+  - polls AISWEB, REDEMET, and NOAA `tgftp` in short intervals from `:55`
+    through just after the top of the hour so first-seen timing is more
+    precise than a once-per-minute cron
 
 This keeps the current local day updated even if no browser is open.

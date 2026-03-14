@@ -55,8 +55,8 @@ crons.cron(
 );
 
 // Starts before the hour and keeps watching through shortly after it so
-// REDEMET and NOAA tgftp first-seen times are measured with finer resolution
-// than the minute cron.
+// AISWEB, REDEMET, and NOAA tgftp first-seen times are measured with finer
+// resolution than the minute cron.
 crons.cron(
     "sbgr_publish_race_watch_minute_55",
     "55 * * * *",
