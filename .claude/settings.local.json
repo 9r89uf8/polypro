@@ -155,7 +155,22 @@
       "WebFetch(domain:www.radiocom-inc.com)",
       "WebFetch(domain:radiocominc.com)",
       "WebFetch(domain:www.atcnetwork.com)",
-      "WebFetch(domain:www.atc-network.com)"
+      "WebFetch(domain:www.atc-network.com)",
+      "WebFetch(domain:ajuda.decea.gov.br)",
+      "WebFetch(domain:www.hobeco.net)",
+      "WebFetch(domain:www.wunderground.com)",
+      "WebFetch(domain:datis.clowd.io)",
+      "WebFetch(domain:atis.info)",
+      "WebFetch(domain:www.iacit.com.br)",
+      "WebFetch(domain:cam.airlive.net)",
+      "WebFetch(domain:docs.vaisala.com)",
+      "WebFetch(domain:weathermap.netatmo.com)",
+      "WebFetch(domain:metjet.metra.co.nz)",
+      "WebFetch(domain:help.metconnect.co.nz)",
+      "WebFetch(domain:gopreflight.co.nz)",
+      "Bash(grep:*)",
+      "WebFetch(domain:aviation.meteo.fr)",
+      "WebFetch(domain:metar.vatsim.net)"
     ]
   }
 }

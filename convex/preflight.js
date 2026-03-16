@@ -512,6 +512,90 @@ async function fetchPreflightPayload(stationIcao) {
   return await response.json();
 }
 
+async function fetchPreflightStatus() {
+  const response = await fetchWithTimeout(
+    `${getPreflightBaseUrl()}/source/status`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: getPreflightAuthHeader(),
+        "Cache-Control": "no-cache",
+      },
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `PreFlight status fetch failed (${response.status}): ${text.slice(0, 200)}`,
+    );
+  }
+  return await response.json();
+}
+
+function findStatusRows(statusPayload) {
+  if (!statusPayload) {
+    return [];
+  }
+  if (Array.isArray(statusPayload)) {
+    return statusPayload;
+  }
+  // The response might be wrapped: { data: [...] }, { rows: [...] }, { status: [...] }, etc.
+  if (typeof statusPayload === "object") {
+    for (const key of Object.keys(statusPayload)) {
+      if (Array.isArray(statusPayload[key])) {
+        return statusPayload[key];
+      }
+    }
+    // Might be an object keyed by type name: { metar: {...}, atis: {...}, ... }
+    const entries = Object.entries(statusPayload);
+    if (entries.length > 0 && entries.every(([, v]) => v && typeof v === "object" && !Array.isArray(v))) {
+      return entries.map(([key, value]) => ({ ...value, _key: key }));
+    }
+  }
+  return [];
+}
+
+function findMetarStatusRow(statusPayload) {
+  const rows = findStatusRows(statusPayload);
+  // Try matching by `type` field first (case-insensitive).
+  let metarRow = rows.find(
+    (row) => String(row?.type ?? "").toUpperCase() === "METAR",
+  );
+  if (metarRow) {
+    return metarRow;
+  }
+  // Try matching by the synthesized `_key` from object-keyed responses.
+  metarRow = rows.find(
+    (row) => String(row?._key ?? "").toUpperCase() === "METAR",
+  );
+  return metarRow ?? null;
+}
+
+function extractMetarStatusFingerprint(statusPayload) {
+  const metarRow = findMetarStatusRow(statusPayload);
+  if (!metarRow) {
+    return null;
+  }
+  // Include every non-function field so any change is detectable.
+  return JSON.stringify(metarRow);
+}
+
+function describeStatusShape(statusPayload) {
+  if (statusPayload === null || statusPayload === undefined) {
+    return "null";
+  }
+  if (Array.isArray(statusPayload)) {
+    const sample = statusPayload[0];
+    const keys = sample && typeof sample === "object" ? Object.keys(sample).slice(0, 8).join(",") : "?";
+    return `array[${statusPayload.length}] keys=${keys}`;
+  }
+  if (typeof statusPayload === "object") {
+    const topKeys = Object.keys(statusPayload).slice(0, 8).join(",");
+    return `object{${topKeys}}`;
+  }
+  return typeof statusPayload;
+}
+
 async function fetchLatestPreflightRaceHit(stationIcao) {
   const payload = await fetchPreflightPayload(stationIcao);
   const row = parseLatestObservation(payload, stationIcao);
@@ -707,6 +791,7 @@ export const recordPublishRaceHit = internalMutationGeneric({
     rawMetar: v.string(),
     seenAt: v.number(),
     sourceLastModifiedAt: v.optional(v.number()),
+    statusSeenAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -738,6 +823,9 @@ export const recordPublishRaceHit = internalMutationGeneric({
         ...(args.source === RACE_SOURCE.TGFTP &&
         Number.isFinite(args.sourceLastModifiedAt)
           ? { tgftpLastModifiedAt: args.sourceLastModifiedAt }
+          : {}),
+        ...(Number.isFinite(args.statusSeenAt)
+          ? { statusFirstSeenAt: args.statusSeenAt }
           : {}),
         createdAt: now,
         updatedAt: now,
@@ -780,6 +868,13 @@ export const recordPublishRaceHit = internalMutationGeneric({
       ) {
         patch.tgftpLastModifiedAt = args.sourceLastModifiedAt;
       }
+    }
+
+    if (
+      Number.isFinite(args.statusSeenAt) &&
+      !Number.isFinite(existing.statusFirstSeenAt)
+    ) {
+      patch.statusFirstSeenAt = args.statusSeenAt;
     }
 
     const winnerState = computePublishRaceWinner(
@@ -891,6 +986,31 @@ export const fetchLatestWeatherComAirportCurrent = actionGeneric({
   },
 });
 
+export const probePreflightStatus = actionGeneric({
+  args: {},
+  handler: async () => {
+    const raw = await fetchPreflightStatus();
+    const shape = describeStatusShape(raw);
+    const metarRow = findMetarStatusRow(raw);
+    const fingerprint = extractMetarStatusFingerprint(raw);
+    const allRows = findStatusRows(raw);
+    const typeKeys = allRows
+      .map((row) => row?.type ?? row?._key ?? "?")
+      .slice(0, 20);
+    return {
+      ok: true,
+      shape,
+      metarRowFound: metarRow !== null,
+      metarRowSample: metarRow
+        ? JSON.stringify(metarRow).slice(0, 500)
+        : null,
+      fingerprint: fingerprint ? fingerprint.slice(0, 300) : null,
+      typeKeys,
+      totalRows: allRows.length,
+    };
+  },
+});
+
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -927,24 +1047,98 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let lastTgftp = null;
     const touchedReportTimestamps = new Set();
 
+    // Status fingerprint tracking for the hidden /source/status endpoint.
+    // We track the aerodromesv3 reportTsUtc at each status poll so that
+    // when the fingerprint changes we can tell whether aerodromesv3 already
+    // showed the new report (common case with 5-iteration polling gap).
+    let lastStatusFingerprint = null;
+    let pendingStatusSeenAt = null;
+    let reportTsAtPreviousStatusPoll = null;
+    let statusErrorCount = 0;
+    let lastStatusError = null;
+    let statusShape = null;
+    let statusMetarRowFound = false;
+    let statusFingerprintChangeCount = 0;
+
     while (Date.now() <= deadline) {
       try {
-        const [preflightHit, tgftpHit] = await Promise.all([
+        // Poll status every 5 iterations (~5s) to reduce overhead.
+        const shouldPollStatus = iterations % 5 === 0;
+        const statusPromise = shouldPollStatus
+          ? fetchPreflightStatus().catch((error) => {
+              statusErrorCount += 1;
+              lastStatusError = error instanceof Error ? error.message : String(error);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const [preflightHit, tgftpHit, statusResult] = await Promise.all([
           fetchLatestPreflightRaceHit(stationIcao),
           fetchLatestTgftpRaceHit(stationIcao),
+          statusPromise,
         ]);
 
         lastPreflight = preflightHit;
         lastTgftp = tgftpHit;
 
+        const currentReportTs = preflightHit.row.obsTimeUtc;
+
+        // Detect status fingerprint changes.
+        if (statusResult !== null && statusShape === null) {
+          statusShape = describeStatusShape(statusResult);
+          statusMetarRowFound = findMetarStatusRow(statusResult) !== null;
+        }
+        if (shouldPollStatus) {
+          const currentFingerprint = extractMetarStatusFingerprint(statusResult);
+          if (
+            currentFingerprint !== null &&
+            lastStatusFingerprint !== null &&
+            currentFingerprint !== lastStatusFingerprint
+          ) {
+            pendingStatusSeenAt = Date.now();
+            statusFingerprintChangeCount += 1;
+          }
+          if (currentFingerprint !== null) {
+            lastStatusFingerprint = currentFingerprint;
+          }
+        }
+
+        // Associate pending status change with the current report.
+        // Because we poll status every ~5s, the typical case is that
+        // aerodromesv3 already shows the new report by the time we
+        // detect the fingerprint change.  We associate when:
+        //   (a) the current report is newer than the one at the previous
+        //       status poll (status changed while old report was showing,
+        //       now the new one appeared), OR
+        //   (b) the fingerprint just changed this iteration and the
+        //       current report is already the new one (both updated
+        //       between the previous and current status polls).
+        const isNewSincePreviousStatusPoll =
+          reportTsAtPreviousStatusPoll !== null &&
+          currentReportTs > reportTsAtPreviousStatusPoll;
+        const justDetectedChange =
+          shouldPollStatus && statusFingerprintChangeCount > 0 && pendingStatusSeenAt !== null;
+        const statusSeenAtForThisReport =
+          pendingStatusSeenAt !== null && (isNewSincePreviousStatusPoll || justDetectedChange)
+            ? pendingStatusSeenAt
+            : undefined;
+
+        // Update the previous-poll baseline after computing association.
+        if (shouldPollStatus) {
+          reportTsAtPreviousStatusPoll = currentReportTs;
+        }
+
         const [preflightRaceRow, tgftpRaceRow] = await Promise.all([
           ctx.runMutation("preflight:recordPublishRaceHit", {
             stationIcao,
-            reportTsUtc: preflightHit.row.obsTimeUtc,
+            reportTsUtc: currentReportTs,
             reportType: preflightHit.row.reportType,
             source: RACE_SOURCE.PREFLIGHT,
             rawMetar: preflightHit.row.rawMetar,
             seenAt: preflightHit.seenAt,
+            ...(statusSeenAtForThisReport !== undefined
+              ? { statusSeenAt: statusSeenAtForThisReport }
+              : {}),
           }),
           ctx.runMutation("preflight:recordPublishRaceHit", {
             stationIcao,
@@ -957,6 +1151,11 @@ export const watchStationPublishRaceWindow = actionGeneric({
               : {}),
           }),
         ]);
+
+        // Clear once associated with a new report.
+        if (statusSeenAtForThisReport !== undefined && isNewSincePreviousStatusPoll) {
+          pendingStatusSeenAt = null;
+        }
 
         if (preflightRaceRow?.reportTsUtc) {
           touchedReportTimestamps.add(preflightRaceRow.reportTsUtc);
@@ -986,6 +1185,11 @@ export const watchStationPublishRaceWindow = actionGeneric({
       intervalMs,
       iterations,
       errorCount,
+      statusErrorCount,
+      lastStatusError,
+      statusShape,
+      statusMetarRowFound,
+      statusFingerprintChangeCount,
       lastError,
       touchedReportCount: touchedReportTimestamps.size,
       latestPreflightReportTsUtc: lastPreflight?.row?.obsTimeUtc ?? null,

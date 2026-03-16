@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as aeroweb from "../aeroweb.js";
 import type * as crons from "../crons.js";
 import type * as forecastCollector from "../forecastCollector.js";
 import type * as http from "../http.js";
@@ -29,6 +30,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  aeroweb: typeof aeroweb;
   crons: typeof crons;
   forecastCollector: typeof forecastCollector;
   http: typeof http;

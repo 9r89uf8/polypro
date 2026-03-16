@@ -17,9 +17,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
 
-const STATION_ICAO = "NZWN";
-const STATION_NAME = "Wellington International";
-const AUCKLAND_TIMEZONE = "Pacific/Auckland";
+const STATION_ICAO = "LFPG";
+const STATION_NAME = "Paris Charles de Gaulle";
+const PARIS_TIMEZONE = "Europe/Paris";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -38,9 +38,9 @@ function getDateParts(formatter, date) {
   return values;
 }
 
-function aucklandTodayKey() {
+function parisTodayKey() {
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: AUCKLAND_TIMEZONE,
+    timeZone: PARIS_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -139,12 +139,12 @@ function formatStoredLocalDateTime(tsLocal) {
   return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
-function formatAucklandDateTimeSeconds(epochMs) {
+function formatParisDateTimeSeconds(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: AUCKLAND_TIMEZONE,
+    timeZone: PARIS_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -176,8 +176,8 @@ function formatChicagoDateTimeSeconds(epochMs) {
 }
 
 function formatRaceWinner(winner) {
-  if (winner === "preflight") {
-    return "PreFlight";
+  if (winner === "aeroweb") {
+    return "AEROWEB";
   }
   if (winner === "tgftp") {
     return "NOAA tgftp";
@@ -201,36 +201,19 @@ function formatLeadMs(leadMs) {
   return `${(leadMs / 60000).toFixed(1)} min`;
 }
 
-function formatBackfillMessage(result) {
-  if (!result?.ok) {
-    return "Rolling sync skipped.";
-  }
-  return `Rolling sync: saved ${result.insertedCount} new rows from ${result.rowCount} NZWN messages for this date. PreFlight currently exposed ${result.exposedMessageCount} recent messages.`;
-}
-
 function formatLivePollMessage(result) {
   if (!result?.ok) {
     return "Latest official poll skipped.";
   }
 
-  const firstSeenText = Number.isFinite(result.row?.preflightFirstSeenAt)
-    ? formatAucklandDateTimeSeconds(result.row.preflightFirstSeenAt)
+  const firstSeenText = Number.isFinite(result.row?.aerowebFirstSeenAt)
+    ? formatParisDateTimeSeconds(result.row.aerowebFirstSeenAt)
     : null;
   const lagText = Number.isFinite(result.availabilityLagMs)
     ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
     : null;
 
   return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
-}
-
-function formatNearLiveCurrentMessage(result) {
-  if (!result?.ok) {
-    return "Near-live Weather.com airport current unavailable.";
-  }
-  const observedText = result.observedAtLocal
-    ? formatStoredLocalDateTime(result.observedAtLocal)
-    : "—";
-  return `Near-live Weather.com airport current: ${result.tempC?.toFixed(1) ?? "—"}°C at ${observedText}.`;
 }
 
 function buildLineDataset(rows, unit) {
@@ -253,7 +236,7 @@ function buildLineDataset(rows, unit) {
     .filter(Boolean);
 
   return {
-    label: "Official PreFlight",
+    label: "Official AEROWEB",
     data: points,
     borderColor: "#0f4c81",
     backgroundColor: "#0f4c81",
@@ -273,7 +256,7 @@ function buildLineDataset(rows, unit) {
   };
 }
 
-export default function NzwnDayPage() {
+export default function ParisDayPage() {
   const params = useParams();
   const router = useRouter();
   const date = String(params?.date ?? "");
@@ -281,24 +264,17 @@ export default function NzwnDayPage() {
   const [inputDate, setInputDate] = useState(date);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [nearLiveCurrent, setNearLiveCurrent] = useState(null);
-  const [nearLiveError, setNearLiveError] = useState("");
   const inFlightRef = useRef(false);
-  const backfilledDateRef = useRef("");
 
   const isDateValid = isValidDate(date);
-  const aucklandTodayDate = aucklandTodayKey();
-  const isToday = isDateValid && date === aucklandTodayDate;
+  const parisTodayDate = parisTodayKey();
+  const isToday = isDateValid && date === parisTodayDate;
   const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
-  const backfillDay = useAction("preflight:backfillDayStationMessages");
-  const pollLatest = useAction("preflight:pollLatestStationMetar");
-  const fetchNearLiveCurrent = useAction(
-    "preflight:fetchLatestWeatherComAirportCurrent",
-  );
+  const pollLatest = useAction("aeroweb:pollLatestStationMetar");
 
   const dayData = useQuery(
-    "preflight:getDayStationRows",
+    "aeroweb:getDayStationRows",
     isDateValid
       ? {
           stationIcao: STATION_ICAO,
@@ -306,9 +282,10 @@ export default function NzwnDayPage() {
         }
       : "skip",
   );
-  const raceData = useQuery("preflight:getRecentPublishRaceReports", {
+  const raceData = useQuery("aeroweb:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
+    routineOnly: true,
   });
 
   const rows = dayData?.rows ?? [];
@@ -327,6 +304,12 @@ export default function NzwnDayPage() {
       setLiveMessage("");
       return;
     }
+    if (!isToday) {
+      setLiveMessage(
+        "Historical LFPG dates depend on rows captured live from authenticated AEROWEB polling. No authenticated day-history backfill endpoint is wired yet.",
+      );
+      return;
+    }
 
     let cancelled = false;
 
@@ -336,46 +319,15 @@ export default function NzwnDayPage() {
       }
       inFlightRef.current = true;
       try {
-        const messages = [];
-
-        if (backfilledDateRef.current !== date) {
-          const backfillResult = await backfillDay({
-            stationIcao: STATION_ICAO,
-            date,
-          });
-          messages.push(formatBackfillMessage(backfillResult));
-          backfilledDateRef.current = date;
-        }
-
-        if (isToday) {
-          const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-          messages.push(formatLivePollMessage(pollResult));
-        }
-
-        try {
-          const unofficialResult = await fetchNearLiveCurrent({
-            stationIcao: STATION_ICAO,
-          });
-          messages.push(formatNearLiveCurrentMessage(unofficialResult));
-          if (!cancelled) {
-            setNearLiveCurrent(unofficialResult);
-            setNearLiveError("");
-          }
-        } catch (error) {
-          if (!cancelled) {
-            const message = error instanceof Error ? error.message : String(error);
-            setNearLiveError(message);
-          }
-        }
-
+        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
         if (!cancelled) {
-          setLiveMessage(messages.join(" "));
+          setLiveMessage(formatLivePollMessage(pollResult));
         }
       } catch (error) {
         console.error(error);
         if (!cancelled) {
           const message = error instanceof Error ? error.message : String(error);
-          setLiveMessage(`NZWN sync failed: ${message}`);
+          setLiveMessage(`LFPG sync failed: ${message}`);
         }
       } finally {
         inFlightRef.current = false;
@@ -387,42 +339,18 @@ export default function NzwnDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, backfillDay, pollLatest, fetchNearLiveCurrent]);
+  }, [date, isDateValid, isToday, pollLatest]);
 
   async function handleRefreshNow() {
-    if (!isDateValid || inFlightRef.current) {
+    if (!isDateValid || !isToday || inFlightRef.current) {
       return;
     }
 
     setIsRefreshing(true);
     inFlightRef.current = true;
     try {
-      const messages = [];
-      const backfillResult = await backfillDay({
-        stationIcao: STATION_ICAO,
-        date,
-      });
-      backfilledDateRef.current = date;
-      messages.push(formatBackfillMessage(backfillResult));
-
-      if (isToday) {
-        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-        messages.push(formatLivePollMessage(pollResult));
-      }
-
-      try {
-        const unofficialResult = await fetchNearLiveCurrent({
-          stationIcao: STATION_ICAO,
-        });
-        messages.push(formatNearLiveCurrentMessage(unofficialResult));
-        setNearLiveCurrent(unofficialResult);
-        setNearLiveError("");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setNearLiveError(message);
-      }
-
-      setLiveMessage(messages.join(" "));
+      const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
+      setLiveMessage(formatLivePollMessage(pollResult));
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -438,7 +366,7 @@ export default function NzwnDayPage() {
     if (!isValidDate(inputDate)) {
       return;
     }
-    router.push(`/nzwn/day/${inputDate}`);
+    router.push(`/paris/day/${inputDate}`);
   }
 
   const chartData = useMemo(
@@ -483,7 +411,7 @@ export default function NzwnDayPage() {
           type: "linear",
           min: 0,
           max: 1439,
-          title: { display: true, text: "Local Time (Pacific/Auckland)" },
+          title: { display: true, text: "Local Time (Europe/Paris)" },
           ticks: {
             stepSize: 60,
             callback(value) {
@@ -503,16 +431,16 @@ export default function NzwnDayPage() {
     return (
       <main className="min-h-screen px-4 py-8 md:px-8">
         <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-6">
-          <h1 className="text-2xl font-semibold text-red-800">Invalid NZWN date</h1>
+          <h1 className="text-2xl font-semibold text-red-800">Invalid Paris date</h1>
           <p className="mt-2 text-sm text-red-700">
             Use a `YYYY-MM-DD` date in the route.
           </p>
           <div className="mt-4">
             <Link
-              href="/nzwn/today"
+              href="/paris/today"
               className="inline-flex rounded-full border border-red-300 px-4 py-2 text-sm font-semibold text-red-800"
             >
-              Open NZWN today
+              Open Paris today
             </Link>
           </div>
         </div>
@@ -531,10 +459,10 @@ export default function NzwnDayPage() {
             {STATION_NAME} Official METAR Day Chart
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
-            Official NZWN METAR from MetService&apos;s PreFlight product. Today is
-            kept live from the official rolling endpoint; selected dates can only
-            be backfilled from the recent messages that endpoint still exposes, so
-            older dates depend on rows we already captured live.
+            Official LFPG METAR from Meteo-France&apos;s authenticated AEROWEB
+            `showmessage.php` endpoint. Today is kept live from the authenticated
+            official page; older dates can only show rows we already captured live
+            because a day-history endpoint is not confirmed yet.
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -545,15 +473,15 @@ export default function NzwnDayPage() {
               Home
             </Link>
             <Link
-              href="/nzwn/today"
+              href="/paris/today"
               className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 hover:border-sky-400"
             >
-              Current Date {aucklandTodayDate}
+              Current Date {parisTodayDate}
             </Link>
             {quickPreviousDates.map((previousDate) => (
               <Link
                 key={previousDate}
-                href={`/nzwn/day/${previousDate}`}
+                href={`/paris/day/${previousDate}`}
                 className="inline-flex rounded-full border border-black/15 bg-white/70 px-4 py-2 text-sm font-semibold text-black hover:border-black"
               >
                 {previousDate}
@@ -562,11 +490,11 @@ export default function NzwnDayPage() {
           </div>
 
           <form onSubmit={handleGoToDate} className="mt-4 flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium text-black/70" htmlFor="nzwn-day-picker">
+            <label className="text-sm font-medium text-black/70" htmlFor="paris-day-picker">
               Pick Date
             </label>
             <input
-              id="nzwn-day-picker"
+              id="paris-day-picker"
               type="date"
               value={inputDate}
               onChange={(event) => setInputDate(event.target.value)}
@@ -600,24 +528,31 @@ export default function NzwnDayPage() {
             <button
               type="button"
               onClick={handleRefreshNow}
-              disabled={isRefreshing}
+              disabled={isRefreshing || !isToday}
               className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isRefreshing ? "Refreshing..." : "Refresh from PreFlight"}
+              {isRefreshing ? "Refreshing..." : "Refresh Current AEROWEB"}
             </button>
             {isToday ? (
               <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
-                Live official ingest enabled
+                Live authenticated ingest enabled
               </span>
-            ) : null}
+            ) : (
+              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-amber-900">
+                Historical capture only
+              </span>
+            )}
           </div>
 
           <p className="mt-4 text-sm text-black/70">
-            {liveMessage || "Waiting for PreFlight sync..."}
+            {liveMessage ||
+              (isToday
+                ? "Waiting for AEROWEB sync..."
+                : "Historical LFPG dates depend on previously captured live AEROWEB rows.")}
           </p>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 md:grid-cols-3">
           <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
               Latest
@@ -663,33 +598,8 @@ export default function NzwnDayPage() {
               {summary?.obsCount ?? 0}
             </p>
             <p className="mt-2 text-sm text-black/65">
-              Routine NZWN METAR is typically every 30 minutes. Full-day coverage
-              depends on rows being captured live because PreFlight only exposes a
-              rolling recent window.
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Near-Live Now
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {nearLiveCurrent
-                ? formatTemp(
-                    displayUnit === "C" ? nearLiveCurrent.tempC : nearLiveCurrent.tempF,
-                    displayUnit,
-                  )
-                : "—"}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              {nearLiveCurrent?.observedAtLocal
-                ? `Weather.com airport current at ${formatStoredLocalDateTime(
-                    nearLiveCurrent.observedAtLocal,
-                  )}`
-                : "Unofficial airport-current feed not loaded yet."}
-            </p>
-            <p className="mt-2 text-xs text-black/55">
-              Unofficial. Independent of the selected historical date.
+              Official AEROWEB routine METAR with any captured off-cycle SPECI in
+              the same stored day series.
             </p>
           </div>
         </section>
@@ -711,7 +621,7 @@ export default function NzwnDayPage() {
               <Line data={chartData} options={chartOptions} />
             ) : (
               <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No NZWN observations stored for this date yet.
+                No LFPG observations stored for this date yet.
               </div>
             )}
           </div>
@@ -725,88 +635,14 @@ export default function NzwnDayPage() {
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">
-            Near-Live Airport Current
-          </h2>
-          <p className="mt-1 text-sm text-black/60">
-            Unofficial Weather.com/Wunderground airport-current observation for
-            NZWN. This can be newer than the latest official METAR.
-          </p>
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-                Current Reading
-              </p>
-              <p className="mt-2 text-2xl font-semibold text-foreground">
-                {nearLiveCurrent
-                  ? formatTemp(
-                      displayUnit === "C" ? nearLiveCurrent.tempC : nearLiveCurrent.tempF,
-                      displayUnit,
-                    )
-                  : "—"}
-              </p>
-              <p className="mt-2 text-sm text-black/65">
-                {nearLiveCurrent?.observedAtLocal
-                  ? `Observed ${formatStoredLocalDateTime(
-                      nearLiveCurrent.observedAtLocal,
-                    )}`
-                  : "No near-live current reading loaded yet."}
-              </p>
-              <p className="mt-2 text-sm text-black/65">
-                {nearLiveCurrent?.phrase ?? "—"}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-                Extra Fields
-              </p>
-              <div className="mt-3 space-y-2 text-sm text-black/70">
-                <p>
-                  Humidity:{" "}
-                  {Number.isFinite(nearLiveCurrent?.relativeHumidity)
-                    ? `${nearLiveCurrent.relativeHumidity}%`
-                    : "—"}
-                </p>
-                <p>
-                  Wind:{" "}
-                  {Number.isFinite(nearLiveCurrent?.windSpeedKph)
-                    ? `${nearLiveCurrent.windSpeedKph} km/h`
-                    : "—"}
-                </p>
-                <p>
-                  Gust:{" "}
-                  {Number.isFinite(nearLiveCurrent?.windGustKph)
-                    ? `${nearLiveCurrent.windGustKph} km/h`
-                    : "—"}
-                </p>
-                <p>
-                  Pressure:{" "}
-                  {Number.isFinite(nearLiveCurrent?.pressureHpa)
-                    ? `${nearLiveCurrent.pressureHpa} hPa`
-                    : "—"}
-                </p>
-                <p>
-                  Status:{" "}
-                  {nearLiveError
-                    ? `Unavailable (${nearLiveError})`
-                    : nearLiveCurrent?.sourceLabel ?? "Loaded"}
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
-                Recent NZWN first-seen timing between official PreFlight and NOAA
-                `tgftp`. Times in this table are shown in America/Chicago. This
-                logger runs a 1-second watch starting at `:04` and `:34` and
-                also keeps minute fallback polls because NZWN publication can
-                drift well past the nominal schedule.
+                Recent routine half-hour LFPG METAR first-seen timing across the
+                authenticated AEROWEB `showmessage.php` endpoint and NOAA `tgftp`.
+                Times in this table are shown in America/Chicago. Winner and lead
+                are computed from the earliest two public first-seen timestamps.
               </p>
             </div>
           </div>
@@ -817,8 +653,7 @@ export default function NzwnDayPage() {
                   <th className="px-3 py-2 font-semibold">Report Time</th>
                   <th className="px-3 py-2 font-semibold">Winner</th>
                   <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">Status Seen</th>
-                  <th className="px-3 py-2 font-semibold">PreFlight Seen</th>
+                  <th className="px-3 py-2 font-semibold">AEROWEB Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
                   <th className="px-3 py-2 font-semibold">Raw METAR</th>
@@ -837,7 +672,7 @@ export default function NzwnDayPage() {
                       <td className="px-3 py-3 whitespace-nowrap">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "preflight"
+                            row.winner === "aeroweb"
                               ? "bg-emerald-50 text-emerald-800"
                               : row.winner === "tgftp"
                                 ? "bg-amber-50 text-amber-900"
@@ -853,12 +688,7 @@ export default function NzwnDayPage() {
                         {formatLeadMs(row.leadMs)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.statusFirstSeenAt
-                          ? formatChicagoDateTimeSeconds(row.statusFirstSeenAt)
-                          : "—"}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.preflightFirstSeenAt)}
+                        {formatChicagoDateTimeSeconds(row.aerowebFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
                         {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
@@ -867,13 +697,13 @@ export default function NzwnDayPage() {
                         {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ?? row.preflightRawMetar ?? row.tgftpRawMetar ?? "—"}
+                        {row.rawMetar ?? row.aerowebRawMetar ?? row.tgftpRawMetar ?? "—"}
                       </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-black/55">
+                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
                       No publish-race rows stored yet.
                     </td>
                   </tr>
@@ -924,8 +754,8 @@ export default function NzwnDayPage() {
                           : formatTemp(row.tempF, "F")}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.preflightFirstSeenAt
-                          ? formatAucklandDateTimeSeconds(row.preflightFirstSeenAt)
+                        {row.aerowebFirstSeenAt
+                          ? formatParisDateTimeSeconds(row.aerowebFirstSeenAt)
                           : "—"}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">

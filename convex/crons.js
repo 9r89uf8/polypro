@@ -93,6 +93,35 @@ crons.cron(
     { stationIcao: "NZWN", durationMs: 15 * 60 * 1000 },
 );
 
+// Runs every minute so the authenticated AEROWEB latest LFPG METAR feed is
+// captured continuously even without an open browser tab.
+crons.cron(
+    "paris_aeroweb_latest_every_minute",
+    "* * * * *",
+    api.aeroweb.pollLatestStationMetar,
+    { stationIcao: "LFPG" },
+);
+
+// Runs every minute so the NOAA side of the Paris publish-race experiment is
+// always sampled, even when routine publication drifts a little past the
+// expected half-hour marks.
+crons.cron(
+    "paris_tgftp_publish_race_every_minute",
+    "* * * * *",
+    api.aeroweb.pollLatestNoaaPublishRace,
+    { stationIcao: "LFPG" },
+);
+
+// Starts one minute before both routine LFPG boundaries and keeps watching
+// through the usual post-publication window so AEROWEB and NOAA tgftp
+// first-seen times are measured more precisely than the minute fallback polls.
+crons.cron(
+    "paris_publish_race_watch_minute_29_59",
+    "29,59 * * * *",
+    api.aeroweb.watchStationPublishRaceWindow,
+    { stationIcao: "LFPG", durationMs: 10 * 60 * 1000 },
+);
+
 // Runs every hour and stores a new KORD snapshot:
 // - Microsoft + AccuWeather + Google + Weather.com 5-day forecasts
 // - Current temperature from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo
