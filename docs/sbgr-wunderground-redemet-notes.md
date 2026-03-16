@@ -695,9 +695,9 @@ Current implementation:
 - REDEMET `mensagens/metar` also contributes the official `recebimento`
   timestamp into `redemetPublishRaceReports`
 - NOAA `tgftp` race rows are written by a dedicated race poller
-- an hourly watch window starts at minute `55`
+- an hourly watch window starts at minute `54`
 - the scheduled watch currently runs for `10 minutes`
-- during that watch window the app polls both sources every few seconds
+- during that watch window the app polls both sources every `1s` by default
   and stores whichever source first exposed each new SBGR report
 
 Important scope limit:

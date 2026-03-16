@@ -58,8 +58,8 @@ crons.cron(
 // REDEMET mensagens/metar and NOAA tgftp first-seen times are measured with
 // finer resolution than the minute cron.
 crons.cron(
-    "sbgr_publish_race_watch_minute_55",
-    "55 * * * *",
+    "sbgr_publish_race_watch_minute_54",
+    "54 * * * *",
     api.redemet.watchStationPublishRaceWindow,
     { stationIcao: "SBGR", durationMs: 10 * 60 * 1000 },
 );

@@ -3,6 +3,86 @@
 Verified against the official New Zealand PreFlight app and authenticated
 `/data/...` endpoints on March 12-13, 2026.
 
+Additional Wunderground / Weather.com page checks were captured on March 16,
+2026.
+
+## Unofficial Wunderground / Weather.com Wellington page
+
+Wunderground page:
+
+- `https://www.wunderground.com/history/daily/nz/wellington`
+
+Observed page behavior from the current HTML:
+
+- the canonical route is city-level Wellington, not an airport-specific `NZWN`
+  path
+- the visible header renders:
+  - `Wellington, Wellington, New Zealand Weather History`
+- the visible current-station label says:
+  - `Wellington Intl Airport Station`
+- but the station selector marks the current station type as:
+  - `Personal Weather Station`
+- the selector link for the active station points to:
+  - `https://www.wunderground.com/history/daily/nz/wellington/IWELLI185/date/2026-3-16`
+  - while still labeling it `Wellington Intl Airport (NZWN)`
+
+Interpretation:
+
+- this is not a clean airport-station history surface
+- the page appears to mix a Wellington city geocode, airport identity, and a
+  nearby Wunderground PWS
+
+## Weather.com endpoints exposed by the Wellington page
+
+Embedded public Weather.com key already present in the Wunderground page:
+
+- `e1f10a1e78da46f5b10a1e78da96f525`
+
+Embedded Weather.com endpoints visible in the current page HTML:
+
+- `https://api.weather.com/v3/wx/observations/current?apiKey=...&geocode=-41.286,174.777&units=e&language=en-US&format=json`
+- `https://api.weather.com/v3/location/near?apiKey=...&geocode=-41.286,174.777&product=pws&format=json`
+- `https://api.weather.com/v3/location/near?apiKey=...&geocode=-41.286,174.777&product=airport&subproduct=major&format=json`
+- `https://api.weather.com/v3/wx/observations/current?apiKey=...&language=en-US&units=e&format=json&icaoCode=NZWN`
+- `https://api.weather.com/v3/wx/forecast/daily/5day?apiKey=...&geocode=-41.286,174.777&units=e&language=en-US&format=json`
+- `https://api.weather.com/v3/dateTime?apiKey=...&geocode=-41.286,174.777&format=json`
+- `https://api.weather.com/v3/location/search?apiKey=...&language=en-US&query=wellington,nz&countryCode=nz&format=json`
+- `https://api.weather.com/v2/pws/observations/current?apiKey=...&units=e&stationId=IWELLI185&format=json`
+- generic history path also present:
+  - `https://api.weather.com/v2/pws/history`
+
+Observed embedded Wellington payload clues on March 16, 2026:
+
+- `v3/location/search` for `wellington,nz` returned city/locality rows with:
+  - `icaoCode=NZQW`
+  - `pwsId=IWELLI185`
+- `v3/location/near?...product=airport&subproduct=major...` returned:
+  - `Wellington Intl Airport`
+  - `icaoCode=NZWN`
+  - distance about `5.14 km` from the page geocode
+- `v2/pws/observations/current?...stationId=IWELLI185...` returned a current
+  observation for:
+  - `Wellington Central`
+  - coordinates about `-41.285, 174.774`
+- `v3/wx/observations/current?...icaoCode=NZWN` returned a separate airport
+  current observation keyed directly by `NZWN`
+
+Interpretation:
+
+- Weather.com exposes both:
+  - an airport-current feed keyed by `icaoCode=NZWN`
+  - a separate nearby-PWS feed keyed by `IWELLI185`
+- as with the SBGR Wunderground page, the Wellington history surface is
+  convenient but should not be treated as authoritative official `NZWN` METAR
+  history
+- the strongest reading is that Wunderground is blending:
+  - airport current conditions / airport branding
+  - a city geocode
+  - nearby PWS-oriented history/current capability
+- that lines up with the app behavior in this repo:
+  - Weather.com is useful as an unofficial near-live helper feed
+  - PreFlight remains the official Wellington source surface
+
 ## Official app
 
 - Main app: `https://gopreflight.co.nz/app`
@@ -583,8 +663,194 @@ Practical implication:
 - `BWR` probably exists only as an operational verbal/reporting pathway, not as
   a public structured web feed
 
+## MetService one layer deeper
+
+The official/public MetService material now points to a deeper split than
+PreFlight alone:
+
+- public/open MetService website data
+- authenticated PreFlight
+- older/newer MetService aviation briefing products
+- commercial MetService aviation APIs and dashboards
+
+### Public MetService web surface
+
+Current official MetService open-access data does not expose a public live
+aviation `METAR` feed for Wellington:
+
+- `about.metservice.com/open-access-data` lists:
+  - `3 hourly observational data from the surface synoptic network`
+  - coded upper-air data
+  - radar and satellite assets
+- important non-finding:
+  - that open-access page does not list `METAR`, `METAR AUTO`, or a public
+    aviation OPMET endpoint
+
+Practical implication:
+
+- if we stay on public/open MetService websites only, I do not currently see a
+  direct MetService web page that obviously beats `NOAA tgftp` for NZWN `METAR`
+  publication
+
+### Current commercial MetService aviation layer
+
+The current official MetService aviation product page shows a more capable
+commercial layer behind PreFlight:
+
+- `PreFlight Pro`
+  - developed by `Aeropath and MetService`
+  - explicitly shows aerodrome `METARs`, `TAFs`, `NOTAMs`, charts, and webcams
+- `Aviation Dashboards`
+  - include `1-Minute Data Widgets`
+  - described as updating `every few minutes`
+- `APIs for Aviation`
+  - `Aviation API`
+    - includes `METAR`, `TAFs`, `SIGMETs`, `GRAFOR`, radar imagery, and other
+      aviation products
+  - `1-minute API`
+    - includes latest AWS observations around NZ
+
+Practical implication:
+
+- MetService clearly has a deeper aviation-data layer than the public
+  PreFlight page we currently poll
+- the most promising commercial candidates are now:
+  - `Aviation API` for direct `METAR`
+  - `1-minute API` for near-live AWS sensor state
+- but the public product page does not expose direct self-service API docs or a
+  public trial endpoint, so I cannot yet verify publish timing from here
+
+### Direct MetService briefing products still alive
+
+Current official CAA guidance says:
+
+- `PreFlight` is the main web-based briefing service for NZ general aviation
+- `MetJet` is still the web-based MetService briefing system intended primarily
+  for airlines and other commercial operators by arrangement
+- `IFIS` still continues to provide preflight text and graphical MET
+  information while the transition continues
+
+Current Airways guidance says:
+
+- `PreFlight will eventually replace both the MetFlight GA and MetFlight
+  commercial products delivered by MetService`
+
+That wording matters:
+
+- `MetFlight` is legacy / being replaced
+- `MetJet` is still current enough to be named by CAA as the briefing option
+  for commercial operators above `10,000 ft`
+
+### MetJet looks closer to raw OPMET than PreFlight
+
+The currently reachable MetJet help pages still expose a direct OPMET workflow:
+
+- login URL:
+  - `https://metjet.metra.co.nz`
+- the help text says users can:
+  - select `SIGMETs / TAFs / METARs`
+  - choose how many `METARs` they want
+  - click `Get OPMET`
+- the NZ map description says:
+  - New Zealand-specific weather information embeds manual observations
+    (`METARs/SPECIs`) and AWS reports in `METAR` code format
+- the AWS locations table includes Wellington as:
+  - `NZWNA Wellington International Airport`
+- the help text also distinguishes:
+  - `INTERNATIONAL AWS REPORTS`
+  - where `NZWNA` is one of the locations using the full ICAO `METAR` code
+
+Practical implication:
+
+- if the goal is specifically a *MetService-controlled place to check the coded
+  Wellington aerodrome report before `NOAA tgftp`*, `MetJet` is now the
+  strongest concrete candidate I have found
+- it looks operationally closer to direct OPMET retrieval than the current
+  PreFlight `aerodromesv3/NZWN` presentation layer
+- I have not yet measured `MetJet` vs `tgftp`, so this is a source-priority
+  inference, not a timing proof
+
+### Current best MetService-side ranking
+
+For the specific question "what MetService-side place is most likely to beat
+`NOAA tgftp` for NZWN?", my current ranking is:
+
+1. `MetJet` authenticated OPMET view
+2. MetService commercial `Aviation API`
+3. hidden PreFlight `/source/status`
+4. PreFlight `aerodromesv3/NZWN`
+5. public/open MetService web pages
+
+Why this ranking:
+
+- `MetJet` is described and tooled as direct OPMET retrieval
+- `Aviation API` explicitly advertises `METAR` access, but I do not yet have
+  docs or a live sample to rank it above MetJet
+- hidden PreFlight `source/status` may flip before the visible station packet,
+  but it is still a layer-status feed, not the direct coded report surface
+- `aerodromesv3/NZWN` is what we currently poll and is already a presentation
+  layer
+- public/open MetService pages do not expose a useful live aviation METAR feed
+
+Best practical next move:
+
+- get access to `MetJet` or MetService `Aviation API`
+- run the same NZWN publish-race logger against:
+  - `MetJet` latest NZWN/NZWNA OPMET result
+  - PreFlight `aerodromesv3/NZWN`
+  - PreFlight `/source/status`
+  - `NOAA tgftp`
+- without that authenticated comparison, I can narrow the likely winner, but I
+  cannot yet prove which MetService path actually beats `tgftp`
+
+## In-Repo publish-race logger
+
+The repo now includes an NZWN publish-race logger built on the official
+PreFlight station packet and NOAA `tgftp`.
+
+Current implementation:
+
+- `preflight:pollLatestStationMetar`
+  - fetches the current official station packet from:
+    - `https://gopreflight.co.nz/data/aerodromesv3/NZWN`
+  - parses the latest exposed `METAR` / `SPECI`
+  - upserts the latest row into `preflightMetarObservations`
+  - records `preflightFirstSeenAt` into `preflightPublishRaceReports`
+- `preflight:pollLatestNoaaPublishRace`
+  - records NOAA `tgftp` first-seen times
+  - also stores HTTP `Last-Modified` when available
+- `preflight:watchStationPublishRaceWindow`
+  - polls both PreFlight and NOAA `tgftp` every `1s`
+  - scheduled watch starts at minutes `04` and `34`
+  - each watch runs for `15 minutes`
+- minute fallback polls still run continuously for both:
+  - official PreFlight latest
+  - NOAA `tgftp`
+
+Stored race fields include:
+
+- `reportTsUtc`
+- `preflightFirstSeenAt`
+- `tgftpFirstSeenAt`
+- optional `tgftpLastModifiedAt`
+- `winner`
+- `leadMs`
+
+Current practical reading:
+
+- the logged PreFlight side today is the visible station packet
+  `aerodromesv3/NZWN`, not the hidden `/source/status` route
+- that keeps the current race logger tied to the same station payload the day
+  page uses
+- if later live measurements show `/source/status` consistently flips earlier
+  than `aerodromesv3/NZWN`, that hidden status feed is the next obvious
+  official upgrade path for the NZWN race logger
+
 ## Practical takeaways
 
+- Wunderground / Weather.com is useful for an unofficial Wellington helper
+  current feed, but it is mixing airport branding with a nearby city/PWS
+  context.
 - The official PreFlight stack is much richer than a simple METAR viewer.
 - For NZWN specifically, the best station endpoint remains:
   - `aerodromesv3/NZWN`
