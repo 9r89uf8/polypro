@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.76",
     "chart.js": "^4.5.1",
     "chartjs-plugin-annotation": "^3.1.0",
     "convex": "^1.32.0",

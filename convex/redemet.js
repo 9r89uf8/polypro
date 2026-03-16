@@ -834,16 +834,28 @@ function getRedemetMetMessagesWindow(nowEpochMs = Date.now()) {
   };
 }
 
+function getRedemetMetMessagesRaceWindow(nowEpochMs = Date.now()) {
+  const start = new Date(nowEpochMs - 3 * 60 * 60 * 1000);
+  start.setUTCMinutes(0, 0, 0);
+  const end = new Date(nowEpochMs + 1 * 60 * 60 * 1000);
+  end.setUTCMinutes(0, 0, 0);
+  return {
+    startEpochMs: start.getTime(),
+    endEpochMs: end.getTime(),
+  };
+}
+
 async function fetchLatestRedemetMessageRaceHit(stationIcao) {
-  const { startEpochMs, endEpochMs } = getRedemetMetMessagesWindow();
+  const { startEpochMs, endEpochMs } = getRedemetMetMessagesRaceWindow();
   const response = await fetchWithTimeout(
-    buildRedemetMetMessagesUrl(stationIcao, startEpochMs, endEpochMs),
+    buildRedemetMetMessagesUrl(stationIcao, startEpochMs, endEpochMs, 6),
     {
       headers: {
         "Cache-Control": "no-cache",
       },
     },
   );
+  const respondedAt = Date.now();
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
@@ -853,7 +865,7 @@ async function fetchLatestRedemetMessageRaceHit(stationIcao) {
   const payload = await response.json();
   const latest = parseRedemetMetMessages(payload, stationIcao);
   return {
-    seenAt: Date.now(),
+    seenAt: respondedAt,
     reportTsUtc: latest.reportTsUtc,
     rawMetar: latest.rawMetar,
     receivedAt: latest.receivedAt,
@@ -946,6 +958,7 @@ async function fetchLatestTgftpRaceHit(stationIcao) {
       },
     },
   );
+  const respondedAt = Date.now();
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
@@ -955,7 +968,7 @@ async function fetchLatestTgftpRaceHit(stationIcao) {
   const body = await response.text();
   const parsed = parseNoaaLatestTxt(body);
   return {
-    seenAt: Date.now(),
+    seenAt: respondedAt,
     reportTsUtc: parsed.tsUtc,
     rawMetar: parsed.rawMetar,
     lastModifiedAt: parseHttpTimestamp(response.headers.get("last-modified")),

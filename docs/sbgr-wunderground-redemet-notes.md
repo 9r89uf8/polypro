@@ -1529,7 +1529,427 @@ Realistic answer for SBGR message access:
 - probably unrealistic as a general public web user with no operational role
   or `AFTN` identity
 
-Best practical next move if we truly want to beat `tgftp`:
+## Deep Timing Comparison: REDEMET mensagens/metar vs NOAA
 
-- pursue authorized `AMHS WEB` / Banco OPMET access through an operational
-  aviation entity rather than hunting another public endpoint
+On `2026-03-16`, a head-to-head comparison of REDEMET `recebimento` timestamps
+vs NOAA `aviationweather.gov` `receiptTime` over 12 consecutive hours showed:
+
+- REDEMET registered the SBGR METAR first in `12 out of 12` hours
+- average lead: `~47 seconds`
+- range: `14 seconds` to `101 seconds` (excluding one `09Z` NOAA outlier at
+  `29 minutes` late)
+
+Sampled hour-by-hour detail:
+
+- `03:00Z` — REDEMET first by `13.8s`
+- `04:00Z` — REDEMET first by `53.4s`
+- `05:00Z` — REDEMET first by `31.6s`
+- `06:00Z` — REDEMET first by `76.2s`
+- `07:00Z` — REDEMET first by `16.8s`
+- `08:00Z` — REDEMET first by `101.0s`
+- `09:00Z` — REDEMET first by `1904s` (NOAA outlier, likely GTS hiccup)
+- `10:00Z` — REDEMET first by `30.3s`
+- `11:00Z` — REDEMET first by `22.1s`
+- `12:00Z` — REDEMET first by `66.4s`
+- `13:00Z` — REDEMET first by `71.3s`
+- `14:00Z` — REDEMET first by `37.4s`
+
+REDEMET `recebimento` relative to nominal observation time:
+
+- mean: `~2 min 45 sec` before the nominal hour
+- range: `48 seconds` to `6 min 24 sec` early, with one observation `30 seconds`
+  late
+- the variability is large, but the direction is consistent: REDEMET almost
+  always registers the METAR before the nominal observation hour
+
+At `14:00Z` all three timestamps were measurable:
+
+- REDEMET `recebimento`: `14:00:30 UTC` (first)
+- tgftp `Last-Modified`: `14:00:37 UTC` (7 seconds later)
+- NOAA `receiptTime`: `14:01:07 UTC` (37 seconds later)
+
+Ordering for that cycle: REDEMET > tgftp > aviationweather.gov
+
+Caching analysis:
+
+- REDEMET: `Cache-Control: no-cache, private`, `X-Cache: MISS`, `Age: 0` on
+  every request — no caching
+- aviationweather.gov: `Cache-Control: max-age=120` (2-minute cache on HTTP
+  responses, but `receiptTime` is a database timestamp unaffected by HTTP
+  caching)
+- tgftp: no `Cache-Control`, no `ETag` — static file served by Apache, with
+  `Last-Modified` as the authoritative write-time
+
+Interpretation:
+
+- REDEMET `mensagens/metar` is structurally closer to the source than NOAA
+  because DECEA receives Brazilian METARs directly from Banco OPMET, while NOAA
+  receives them via international GTS relay
+- the earlier March 13-14, 2026 finding that tgftp was faster by `~5 minutes`
+  was measured against the slower REDEMET summary-style public path, not the
+  `mensagens/metar` message-bank endpoint
+- the live race between REDEMET `mensagens/metar` and tgftp is now within
+  `single-digit seconds`, with the in-repo publish-race table showing REDEMET
+  winning some cycles and tgftp winning others
+- REDEMET's internal `recebimento` consistently leads NOAA's `receiptTime` by
+  `~47 seconds` on average, which is the structural GTS propagation delay
+- tgftp can still occasionally win the poller race (e.g. the `0400Z` cycle on
+  `2026-03-16` where tgftp updated a few seconds before REDEMET registered it),
+  likely because tgftp file writes happen directly from GTS ingestion while
+  `receiptTime` on aviationweather.gov includes additional processing
+
+Additional surfaces exhaustively tested on `2026-03-16`:
+
+- `aviationweather.gov` API — same NOAA pipeline as tgftp, exposes
+  `receiptTime` with millisecond precision, `Cache-Control: max-age=120`
+- WMO WIS 2.0 MQTT brokers — publicly accessible with `everyone/everyone`
+  credentials on four global brokers, but METAR data is not flowing from any
+  country (discovery metadata records exist as placeholders only)
+- OGIMET, CheckWX, AVWX, Windy, IEM — all downstream of NOAA
+- CPTEC/INPE — proxies REDEMET, endpoint broken for SBGR
+- INMET — no airport stations, separate from aviation network
+- D-ATIS via ACARS (airframes.io / atis.guru) — theoretically `3-8 minutes`
+  faster than any web source, but requires SDR feeder near Guarulhos with
+  insufficient current coverage
+
+Practical conclusion:
+
+- REDEMET `mensagens/metar` is now confirmed as a viable public surface for
+  matching or beating NOAA tgftp on SBGR routine METAR cycles
+- the public web race is no longer considered exhausted for SBGR
+- the in-repo publish-race logger targets the right endpoint
+- the remaining optimization opportunity is in poller responsiveness, not in
+  finding a different source
+
+## Why REDEMET Gets The METAR First But Sometimes Loses The Race
+
+The `~47 second` average lead of REDEMET `recebimento` over NOAA `receiptTime`
+is misleading because `receiptTime` is not tgftp.
+
+tgftp is a simple file write at the NOAA Telecom Gateway — it updates nearly
+the instant the GTS message arrives. The `receiptTime` field on
+aviationweather.gov is a separate, slower NOAA database record. The real
+structural lead of REDEMET `recebimento` over the tgftp file write is only
+`~15-20 seconds`, not `47`.
+
+The dissemination pipeline:
+
+```
+SBGR station observation
+  │
+  ▼
+Banco OPMET (DECEA internal)
+  │
+  ├──► REDEMET database write (recebimento = T+0)
+  │         │
+  │         ▼ 10-22 seconds (variable)
+  │    api-redemet.decea.mil.br/mensagens/metar
+  │    [database query → API gateway → JSON serialization]
+  │         │
+  │         ▼
+  │    public API response  ◄── our poller sees it here
+  │
+  └──► AFTN / AMHS / GTS international relay
+            │
+            ▼ ~18-21 seconds
+       NOAA Telecom Gateway
+            │
+            ├──► tgftp file write (~0 seconds)  ◄── our poller sees it here
+            │
+            └──► aviationweather.gov DB (~35 seconds later = receiptTime)
+```
+
+Sampled proof from `2026-03-16`:
+
+`0400Z` cycle (tgftp won by `~4 seconds`):
+
+- REDEMET `recebimento`: `03:56:44` (T+0)
+- tgftp `firstSeenAt`: `03:57:02` (T+18s — GTS transit)
+- REDEMET `firstSeenAt`: `03:57:06` (T+22s — publication delay ate the lead)
+- NOAA `receiptTime`: `03:57:37` (T+53s — the slower NOAA DB record)
+
+`0500Z` cycle (REDEMET won by `~11 seconds`):
+
+- REDEMET `recebimento`: `04:55:24` (T+0)
+- REDEMET `firstSeenAt`: `04:55:34` (T+10s — fast publication this cycle)
+- tgftp `firstSeenAt`: `04:55:45` (T+21s — GTS transit)
+- NOAA `receiptTime`: `04:55:55` (T+31s)
+
+The race math:
+
+```
+REDEMET structural lead over tgftp file write:  ~15-20 seconds
+REDEMET publication penalty (API query cost):   -10 to -22 seconds
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Net public race margin:                         -4s to +11s
+```
+
+tgftp does not actually get the data first — it just publishes faster because a
+static file write has near-zero publication cost, while REDEMET's API layer
+(database query, `api-umbrella` gateway, JSON serialization) consumes `10-22
+seconds` of the `~15-20 second` structural head start.
+
+The race winner on any given cycle depends on whether REDEMET's publication
+delay that hour is closer to `10 seconds` (REDEMET wins) or `22 seconds`
+(tgftp wins).
+
+## Banco OPMET Direct Access
+
+The reason REDEMET's publication delay exists is that `mensagens/metar` is a
+public API querying a downstream database — not the operational message store
+itself.
+
+The operational root is Banco OPMET (`SBBRYZYX`), the Brazilian international
+OPMET data bank operated by DECEA. It receives the raw observation directly
+from the SBGR meteorological station via the internal DECEA/CIMAER network
+before any public API or international GTS relay is involved.
+
+If we could read from Banco OPMET directly instead of from REDEMET's public
+API, we would eliminate the entire `10-22 second` publication delay and gain the
+full `~15-20 second` structural lead over tgftp on every cycle.
+
+Known paths to Banco OPMET:
+
+- `Sistema Opmet` (`https://opmet.decea.mil.br/webapp/`) — the operational web
+  console that sits directly on the OPMET stack. Auth-gated with JWT sessions,
+  machine activation, and `OBSERVER` role logic. Its `message` service handles
+  message traceability, compose, and real-time STOMP/SockJS subscriptions. The
+  real-time subscription path (`/user/topic/report/{userId}`) is the strongest
+  candidate for zero-delay push notification of new METARs, but requires
+  authenticated access.
+- `AMHS WEB` (`https://amhsbr.decea.mil.br/taweb/`) — the AFTN/AMHS web
+  interface. Access request form asks for ANAC code, AFTN address, and ICAO
+  code. Designed for operational aviation actors (airlines, dispatch shops,
+  airport MET units, SISCEAB participants).
+- `AFTN` / `AMHS` direct message subscription — the underlying aeronautical
+  fixed telecom network. Not a web surface at all. Requires an assigned AFTN
+  address and authorized connection.
+
+What direct Banco OPMET access would look like:
+
+- the observation arrives at Banco OPMET essentially at the `recebimento`
+  timestamp (or earlier, since `recebimento` is the REDEMET DB write, not
+  the Banco OPMET receipt)
+- a push subscription via `Sistema Opmet` STOMP/SockJS would deliver the new
+  METAR within seconds of Banco OPMET receipt, with no polling delay
+- estimated lead over tgftp: the full `~15-20 seconds` structural advantage
+  on every cycle, not the `0-11 seconds` that survives the REDEMET API path
+- estimated lead over REDEMET `mensagens/metar`: `10-22 seconds` (the entire
+  publication delay we are currently losing)
+
+Practical feasibility:
+
+- `Sistema Opmet` is the closest visible system to the operational side, but
+  its auth boundary is holding — no public API key, client credential, or
+  anonymous access path was found in passive review
+- `AMHS WEB` access requires an operational aviation role
+- neither system is realistically accessible for a general external user
+- the most plausible path is through an operational aviation entity already
+  embedded in the Brazilian messaging ecosystem (airline, dispatch shop,
+  airport, or MET unit)
+
+## Deep Source Investigation (`2026-03-16`)
+
+### Sistema Opmet Additional Findings
+
+Swagger UI confirmed on production microservices:
+
+- `https://opmet.decea.mil.br/auth/swagger-ui.html` → `403`
+- `https://opmet.decea.mil.br/administrator/swagger-ui.html` → `403`
+- `https://opmet.decea.mil.br/obs/swagger-ui.html` → `403`
+- `https://opmet.decea.mil.br/message/swagger-ui.html` → `403`
+
+Swagger exists but is auth-gated. No PWA manifest, no service worker deployed.
+
+A 12th production service discovered: `tendmet` (tendency meteorological
+metrics), mapped at `/rest/tendmet/metrics/reqreport`. Not publicly documented.
+
+The runtime `environment.json` also exposes `24` distinct REST report endpoints
+across the `obs`, `audit`, `report`, and `message` services, including IWXXM
+TX/RX reports and statistical endpoints.
+
+No public self-registration path found. Access is institutional through
+DECEA/CISCEA administration.
+
+### AMHS WEB Confirmed As Terminal-Only
+
+AMHS WEB (`https://amhsbr.decea.mil.br/taweb/`) uses a TLS certificate that
+fails standard verification (internal CA). It is strictly an AMHS mail client
+— a browser-based terminal for composing and receiving ATS messages. It is
+not a path to *getting* data; it is a tool for entities that already have
+AFTN/AMHS authorization. No public endpoints, no API, no documentation
+exposed.
+
+### Commercial AFTN Access
+
+Tier 1 — global network operators:
+
+- `SITA ATC Messaging Distribution` — subscription-based, serves `3,000+`
+  aviation stakeholders, handles AFTN/AMHS conversion. No public pricing.
+- `Collins Aerospace / ARINC` — operates the largest private ground-based
+  aviation network. Products include `ARINC Mail` (web-based) and `ARINC
+  Integrator` (SaaS or on-prem). No public pricing.
+
+Tier 2 — smaller/specialized:
+
+- `AvFinity` (US) — flat monthly fee, AFTN/NADIN connectivity, primarily for
+  flight plan filing but supports general AFTN message exchange
+- `Skysoft Servicios` (Argentina) — ICAO supplier, provides OPMET Databank
+  software to developing-country ANSPs (Argentina, Paraguay, Ethiopia,
+  Venezuela). Their OPMET Databank is server software installed inside ANSP
+  networks with X.400 P3 connection — not a hosted service or data broker.
+  No presence in Brazil, no public API, no relevance to SBGR. Brazil's AMHS
+  is run by Atech (Embraer subsidiary), a completely separate supply chain.
+
+AFTN addresses are not commercially purchasable — they are assigned by
+national civil aviation authorities. You must be a recognized aviation entity
+(airline, ANSP, airport authority, MET service) to receive one.
+
+### WIFS and SADIS APIs
+
+Both provide OPMET data including METAR in TAC and IWXXM format for the SAM
+region, but both require institutional approval:
+
+- `WIFS API` (`https://aviationweather.gov/wifs/api/`) — requires ICAO State
+  MET Authority approval AND FAA approval. Collections include
+  `tac_opmet_reports` and `iwxxm_opmet_reports`. Rate limited at `100
+  requests/minute`, `5,000/day`. SAM region coverage.
+- `SADIS API` (`https://gateway.api-management.metoffice.cloud/sadis-opmet/1/`)
+  — requires SADIS Manager approval. OAuth2 auth. `36 hours` of data in
+  `5-minute` packets. `80,000 requests/day`. SAM region available.
+
+Both consume data FROM the GTS, so they cannot be faster than REDEMET for
+Brazilian stations. They are distribution endpoints, not alternative sources.
+
+### REDEMET API Registration Currently Suspended
+
+The registration page at `https://api-redemet.decea.mil.br/cadastro-api/`
+currently displays that API key registration is temporarily suspended due to
+scheduled maintenance. Users with urgent needs are directed to DECEA's SAC.
+
+No tiered access exists — there is no premium or priority API level. The
+public API key embedded in the REDEMET production bundle still works for the
+`mensagens/metar` endpoint.
+
+### DECEA Full System Inventory
+
+Notable DECEA systems discovered beyond what was previously documented:
+
+- `GeoAISWEB GeoServer` (`https://geoaisweb.decea.mil.br/geoserver/`) —
+  fully public, no auth required, `122` WFS feature types in the `ICA`
+  workspace (airports, airways, FIR boundaries, obstacles, navaids). OGC
+  WMS/WFS. Not real-time weather, but the most open DECEA data surface.
+- `BNDMET` (`https://bndmet.decea.mil.br/`) — National Meteorological
+  Database, `900+` weather stations, partnership with INMET. API key required.
+  Climatological data, not real-time METAR.
+- `CGNA ATFM Portal` (`https://portal.cgna.decea.mil.br/`) — daily ATFM
+  briefings, met briefings, WebRadar, SWAP. Login required for most content.
+- `Portal SWIM-BR` (`https://portalswim.decea.mil.br/`) — public information
+  portal for DECEA's SWIM initiative. No callable API services yet.
+- Brazil is the first `CAR/SAM` country to adopt `IWXXM 3.0` (November 2020).
+  The new OPMET system supports dual-channel distribution: SWIM (XML over
+  internet) + AMHS (for redundancy).
+
+### Brazilian Weather Aggregators
+
+All confirmed downstream of REDEMET or NOAA:
+
+- `Climatempo` — consumer forecasts, no METAR API
+- `Metsul` — premium weather, no aviation feed
+- `Metarsul Meteorologia` — uses REDEMET as data source
+- `metar.cloud` — sources from NOAA AWC
+- `CPTEC/INPE` — proxies REDEMET, SBGR endpoint broken
+
+No Brazilian startup or aggregator has an independent METAR data pipeline.
+
+### D-ATIS Via VDL2/ACARS — The Only Path Faster Than REDEMET
+
+D-ATIS is generated from the weather observation BEFORE the METAR enters the
+OPMET publication chain. The timing advantage is structural:
+
+1. weather observation taken at SBGR station
+2. ATIS system generates D-ATIS text (available via ACARS datalink immediately)
+3. observation encoded as METAR, sent to WEBMET
+4. WEBMET sends to Banco OPMET
+5. Banco OPMET writes to REDEMET database (`recebimento`)
+6. REDEMET API makes it queryable (`10-22 seconds` later)
+
+D-ATIS bypasses steps `3` through `6` entirely.
+
+SITA operates D-ATIS at SBGR under a 20-year concession (through `~2032`),
+with `24` ACARS stations and `5` VDL2 stations deployed across Brazil.
+
+Key frequencies for São Paulo:
+
+- ACARS primary: `131.550 MHz`
+- VDL2 main channel: `136.975 MHz`
+- SBGR ATIS (voice): `127.750 MHz`
+
+Equipment for a self-operated VDL2 feeder:
+
+- RTL-SDR dongle (`~$25-35 USD`) or Airspy Mini/R2
+- VHF airband antenna (discone or dedicated `130-137 MHz`)
+- Raspberry Pi or similar SBC
+- software: `dumpvdl2` (VDL2) and `acarsdec` (ACARS)
+- line of sight to SBGR area (elevation critical)
+
+Known challenge: a community member on `acars-vdl2.groups.io` attempted VDL2
+reception at SBGR and experienced signal issues (signal too low for complete
+message capture). Antenna placement and elevation are critical.
+
+D-ATIS limitation: it is only transmitted when an aircraft requests it, so
+coverage is intermittent during low-traffic periods. SBGR is a major
+international hub, so traffic should be frequent during operational hours.
+
+Current D-ATIS aggregators:
+
+- `atis.guru` lists SBGR among `535` supported airports (`27` Brazilian), but
+  currently shows `No ATIS available` — insufficient local feeder coverage
+- `airframes.io` aggregates ACARS/VDL2 messages from volunteer feeders; API
+  key required, negligible South American coverage
+
+### VOLMET / D-VOLMET
+
+Brazil operates `METEORO` frequencies (not traditional VOLMET). Southeast
+region covering SBGR uses `132.450 MHz` and `132.050 MHz`. These broadcast
+METAR text after it is generated, so they do not bypass the publication delay.
+D-VOLMET has the same ACARS/VDL2 access challenge as D-ATIS.
+
+### Exhaustive Source Ranking
+
+Tier 1 — genuinely faster than REDEMET API:
+
+- D-ATIS capture via VDL2/ACARS receiver near SBGR (only path that predates
+  `recebimento`)
+
+Tier 2 — same source, authorized closer access:
+
+- `Sistema Opmet` STOMP/SockJS subscription (institutional auth required)
+- `AMHS WEB` / direct AFTN subscription (aviation entity required)
+- `SITA` / `ARINC` commercial AFTN bridge (enterprise pricing)
+
+Tier 3 — same source, public, already in use:
+
+- REDEMET `mensagens/metar` (the current race contestant)
+
+Tier 4 — downstream of REDEMET, slower:
+
+- NOAA `tgftp` (GTS relay, `~18-21 seconds` after Banco OPMET)
+- `aviationweather.gov` API (`~35 seconds` after tgftp)
+- everything else (OGIMET, CheckWX, AVWX, IEM, WIS2, aggregators)
+
+Current best practical strategy:
+
+- continue using REDEMET `mensagens/metar` as the primary source — it wins the
+  public race when publication delay is low, and ties when it is high
+- optimize the poller to minimize the gap between REDEMET's internal receipt
+  and our detection (already done: `seenAt` at HTTP response headers, narrower
+  query window, smaller page size)
+- accumulate race data to confirm the structural advantage holds
+- if a consistent lead over tgftp is needed on every cycle, there are two
+  realistic paths:
+  - authorized access to Banco OPMET / Sistema Opmet through an operational
+    aviation entity (eliminates the `10-22 second` publication delay)
+  - self-operated VDL2/ACARS receiver near SBGR capturing D-ATIS responses
+    (bypasses the entire OPMET chain, potentially `3-8 minutes` ahead of any
+    web source, but intermittent and hardware-dependent)

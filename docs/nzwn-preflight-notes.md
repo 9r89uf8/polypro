@@ -720,6 +720,143 @@ Practical implication:
 - but the public product page does not expose direct self-service API docs or a
   public trial endpoint, so I cannot yet verify publish timing from here
 
+### What the 1-minute layer appears to be
+
+The current official MetService aviation page and the reachable MetJet help
+pages together make the `1-minute` layer more concrete:
+
+- current public MetService product wording:
+  - `1-minute API` includes the latest observations from MetService Automatic
+    Weather Stations
+  - `1-Minute Data Widgets` show:
+    - wind speeds
+    - direction
+    - gusts/lulls
+    - visibility
+    - cloud
+    - temperature
+    - pressure
+    - state of the sky
+  - dashboard widgets are described as updating `every few minutes`
+- current MetJet help wording:
+  - `1 minute data is available for a number of airports throughout NZ via the
+    MetConnect website`
+  - access is `available on a monthly subscription basis`
+  - the linked MetDisplay page `Data is refreshed every minute`
+  - users can switch between:
+    - runways
+    - magnetic / true
+    - graphic and text display views
+  - the display includes `State of the Sky` with:
+    - visibility
+    - cloud
+    - present weather when available
+
+Important read on that split:
+
+- the current commercial `Aviation Dashboards` wording sounds like a polished
+  presentation layer over the same underlying AWS feed
+- the older `MetConnect` / `MetDisplay` wording looks closer to the raw
+  operational minute-data display
+- that means the likely order inside MetService is:
+  - underlying AWS minute data
+  - MetConnect / 1-minute API style access
+  - dashboard widget presentation
+
+### Why the 1-minute API is interesting for NZWN
+
+MetJet help still exposes Wellington’s international AWS identity as:
+
+- `NZWNA Wellington International Airport`
+
+That matters because:
+
+- it confirms Wellington has a distinct AWS-side identity separate from the
+  visible routine `NZWN` METAR presentation
+- it matches the older MetService convention where international aerodrome AWS
+  reports use a fifth-letter `A` suffix
+- it strongly suggests the `1-minute API` is the path to the live Wellington
+  sensor state behind the later coded report generation
+
+### But it probably does not directly solve the METAR race
+
+The `1-minute API` looks valuable, but likely for a different reason than a
+direct `METAR` race:
+
+- it appears to expose sensor observations, not a coded `METAR` text product
+- those minute snapshots are the upstream ingredients from which the later
+  `METAR AUTO` is generated
+- so it may show:
+  - wind shifts
+  - visibility drops
+  - cloud-base changes
+  - pressure / temperature changes
+  before the next routine coded report appears
+- but it probably will not by itself answer:
+  - "when did the official coded NZWN `METAR` first publish?"
+
+Practical implication:
+
+- if the goal is to beat `NOAA tgftp` on *coded official METAR publication*,
+  the `1-minute API` is probably not the first target
+- if the goal is to beat `tgftp` on *useful official weather awareness at
+  Wellington*, the `1-minute API` may actually be the higher-value path
+
+### Current 1-minute API take
+
+My current take is:
+
+- `1-minute API` is likely the best MetService path for near-live Wellington
+  airport sensor state
+- `MetJet` / direct OPMET retrieval is likely the best MetService path for the
+  actual coded-report race against `NOAA tgftp`
+- the strongest combined strategy would be:
+  - race `MetJet` against `tgftp` for coded publication timing
+  - use `1-minute API` / MetConnect-style data to understand what the AWS was
+    already seeing before the coded report flipped
+
+### Stable authenticated sample shape
+
+The MetConnect documentation now gives a clearer answer on whether there is a
+stable authenticated sample path:
+
+- documentation home:
+  - `https://help.metconnect.co.nz/metconnect/node/209`
+- minute-observations doc:
+  - `https://help.metconnect.co.nz/metconnect/node/249`
+- current-trend doc:
+  - `https://help.metconnect.co.nz/metconnect/node/231`
+
+What those docs confirm:
+
+- there is a stable `Local -> Observations -> Minute` page family inside
+  authenticated MetConnect
+- the minute page shows `one minute intervals`
+- by default it shows `60 observations from the current hour`
+- it can also show the last 60 minutes from any hour in the previous `24 hours`
+- it supports:
+  - a `Location Controller`
+  - per-column graphs
+  - `CSV` export
+  - print export
+- the related `Trend` page shows:
+  - the last `6 hours` of observations
+  - the following `16 hours` of forecasts
+  - a summary tab with past-hour observations in `5 minute` increments
+
+Practical implication:
+
+- yes, there appears to be a stable authenticated *page* we could sample once
+  credentials are available
+- the best current candidate is:
+  - MetConnect `Local -> Observations -> Minute`
+  - with the location controller set to `NZWNA`
+- I still do **not** have evidence of a stable public or documented raw JSON
+  endpoint behind that page
+- so at this stage the realistic next capture path is:
+  - browser/session automation against authenticated MetConnect pages
+  - not a clean unauthenticated API fetch
+
 ### Direct MetService briefing products still alive
 
 Current official CAA guidance says:
