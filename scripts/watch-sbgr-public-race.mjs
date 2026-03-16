@@ -1,13 +1,9 @@
 const STATION = "SBGR";
-const INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS ?? 5000);
+const INTERVAL_MS = Number(process.env.WATCH_INTERVAL_MS ?? 1000);
 const TIMEOUT_MS = Number(process.env.WATCH_TIMEOUT_MS ?? 75 * 60 * 1000);
-const REDEMET_URL =
-  "https://api-redemet.decea.mil.br/aerodromos/info?localidade=SBGR&metar=%27sim%27&taf=%27sim%27&aviso=%27sim%27&api_key=ouyaq0gZ4pEyTFIz86fJyby2snpspM66yU728dB2";
+const REDEMET_API_KEY = "ouyaq0gZ4pEyTFIz86fJyby2snpspM66yU728dB2";
 const TGFTP_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations/SBGR.TXT";
-const AISWEB_URL =
-  "https://aisweb.decea.mil.br/api/?apiKey=1587263166&apiPass=3199249e-755b-1033-a49b-72567f175e3a&area=met&icaoCode=SBGR";
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -19,6 +15,13 @@ function pad2(value) {
 function parseHttpTimestamp(value) {
   const epochMs = Date.parse(String(value ?? "").trim());
   return Number.isFinite(epochMs) ? epochMs : null;
+}
+
+function formatUtcHourKey(epochMs) {
+  const date = new Date(epochMs);
+  return `${date.getUTCFullYear()}${pad2(date.getUTCMonth() + 1)}${pad2(date.getUTCDate())}${pad2(
+    date.getUTCHours(),
+  )}`;
 }
 
 function toIsoOrNull(epochMs) {
@@ -58,27 +61,66 @@ function parseMetarTimestampFromRaw(rawMetar, nowEpochMs = Date.now()) {
   return best;
 }
 
-function parseRedemetTimestamp(value) {
+function parseSqlTimestamp(value) {
   const match =
-    /^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})(?:\(UTC\))?$/.exec(
+    /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
       String(value ?? "").trim(),
     );
   if (!match) {
     return null;
   }
   return Date.UTC(
-    Number(match[3]),
-    Number(match[2]) - 1,
     Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
     Number(match[4]),
     Number(match[5]),
-    0,
+    Number(match[6] ?? 0),
     0,
   );
 }
 
+function buildRedemetMessagesUrl(nowEpochMs = Date.now()) {
+  const start = new Date(nowEpochMs - 12 * 60 * 60 * 1000);
+  start.setUTCMinutes(0, 0, 0);
+  const end = new Date(nowEpochMs + 2 * 60 * 60 * 1000);
+  end.setUTCMinutes(0, 0, 0);
+  return `https://api-redemet.decea.mil.br/mensagens/metar/${STATION}?api_key=${REDEMET_API_KEY}&data_ini=${formatUtcHourKey(start.getTime())}&data_fim=${formatUtcHourKey(end.getTime())}&page_tam=24`;
+}
+
+function parseRedemetMessages(payload) {
+  const rows = Array.isArray(payload?.data?.data) ? payload.data.data : [];
+  const normalized = rows
+    .map((row) => {
+      const rawMetar = String(row?.mens ?? "").trim();
+      const reportTsUtc = parseSqlTimestamp(row?.validade_inicial);
+      const receivedAt = parseSqlTimestamp(row?.recebimento);
+      if (!rawMetar || !Number.isFinite(reportTsUtc)) {
+        return null;
+      }
+      return {
+        rawMetar,
+        reportTsUtc,
+        receivedAt,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      if (left.reportTsUtc !== right.reportTsUtc) {
+        return right.reportTsUtc - left.reportTsUtc;
+      }
+      return (right.receivedAt ?? Number.NEGATIVE_INFINITY) -
+        (left.receivedAt ?? Number.NEGATIVE_INFINITY);
+    });
+
+  if (!normalized.length) {
+    throw new Error("Unexpected REDEMET mensagens/metar payload.");
+  }
+  return normalized[0];
+}
+
 async function fetchRedemet() {
-  const response = await fetch(REDEMET_URL, {
+  const response = await fetch(buildRedemetMessagesUrl(), {
     cache: "no-store",
     headers: { "Cache-Control": "no-cache" },
   });
@@ -87,13 +129,13 @@ async function fetchRedemet() {
     throw new Error(`REDEMET ${response.status}`);
   }
   const payload = await response.json();
-  const rawMetar = String(payload?.data?.metar ?? "").trim();
-  const reportTsUtc = parseRedemetTimestamp(payload?.data?.data);
+  const parsed = parseRedemetMessages(payload);
   return {
     source: "redemet",
     fetchedAt,
-    reportTsUtc,
-    rawMetar,
+    reportTsUtc: parsed.reportTsUtc,
+    rawMetar: parsed.rawMetar,
+    receivedAt: parsed.receivedAt,
     headers: {
       date: response.headers.get("date"),
       age: response.headers.get("age"),
@@ -157,42 +199,6 @@ async function fetchTgftp() {
   };
 }
 
-function parseAiswebMetXml(xmlText) {
-  const match = /<metar>([\s\S]*?)<\/metar>/i.exec(String(xmlText ?? ""));
-  if (!match) {
-    throw new Error("AISWEB METAR XML block not found.");
-  }
-  const rawMetar = match[1].replace(/\s+/g, " ").trim();
-  const reportTsUtc = parseMetarTimestampFromRaw(rawMetar);
-  return { reportTsUtc, rawMetar };
-}
-
-async function fetchAisweb() {
-  const response = await fetch(AISWEB_URL, {
-    cache: "no-store",
-    headers: { "Cache-Control": "no-cache" },
-  });
-  const fetchedAt = Date.now();
-  if (!response.ok) {
-    throw new Error(`AISWEB ${response.status}`);
-  }
-  const xml = await response.text();
-  const parsed = parseAiswebMetXml(xml);
-  return {
-    source: "aisweb",
-    fetchedAt,
-    reportTsUtc: parsed.reportTsUtc,
-    rawMetar: parsed.rawMetar,
-    headers: {
-      date: response.headers.get("date"),
-      age: response.headers.get("age"),
-      cacheControl: response.headers.get("cache-control"),
-      etag: response.headers.get("etag"),
-      lastModified: response.headers.get("last-modified"),
-    },
-  };
-}
-
 function formatShort(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
@@ -206,37 +212,68 @@ function compactResult(result) {
     source: result.source,
     fetchedAt: formatShort(result.fetchedAt),
     reportTsUtc: formatShort(result.reportTsUtc),
+    receivedAt: formatShort(result.receivedAt),
     rawMetar: result.rawMetar,
     headers: result.headers,
   };
 }
 
 async function sampleAll() {
-  const [aisweb, redemet, tgftp] = await Promise.all([
-    fetchAisweb(),
+  const [redemet, tgftp] = await Promise.all([
     fetchRedemet(),
     fetchTgftp(),
   ]);
-  return { aisweb, redemet, tgftp };
+  return { redemet, tgftp };
+}
+
+async function sampleAllWithFallback(previousSample = null) {
+  const settled = await Promise.allSettled([
+    fetchRedemet(),
+    fetchTgftp(),
+  ]);
+  const sources = ["redemet", "tgftp"];
+  const sample = {};
+
+  for (let index = 0; index < sources.length; index += 1) {
+    const source = sources[index];
+    const result = settled[index];
+    if (result.status === "fulfilled") {
+      sample[source] = result.value;
+      continue;
+    }
+
+    const message =
+      result.reason instanceof Error ? result.reason.message : String(result.reason);
+    console.log(
+      `# Warning ${source} sample failed at ${formatShort(Date.now())}: ${message}`,
+    );
+
+    if (previousSample?.[source]) {
+      sample[source] = previousSample[source];
+      continue;
+    }
+
+    throw result.reason;
+  }
+
+  return sample;
 }
 
 function getMaxReportTs(sample) {
   return Math.max(
-    sample.aisweb.reportTsUtc ?? Number.NEGATIVE_INFINITY,
     sample.redemet.reportTsUtc ?? Number.NEGATIVE_INFINITY,
     sample.tgftp.reportTsUtc ?? Number.NEGATIVE_INFINITY,
   );
 }
 
 async function main() {
-  console.log(`# Watching ${STATION} AISWEB vs REDEMET vs tgftp`);
+  console.log(`# Watching ${STATION} REDEMET mensagens/metar vs tgftp`);
   console.log(`# Started at ${formatShort(Date.now())}`);
   console.log(`# Interval ${INTERVAL_MS} ms, timeout ${TIMEOUT_MS} ms`);
 
-  const baseline = await sampleAll();
+  const baseline = await sampleAllWithFallback();
   const baselineMaxTs = getMaxReportTs(baseline);
   console.log(JSON.stringify({ baseline: {
-    aisweb: compactResult(baseline.aisweb),
     redemet: compactResult(baseline.redemet),
     tgftp: compactResult(baseline.tgftp),
   } }, null, 2));
@@ -244,19 +281,16 @@ async function main() {
   const deadline = Date.now() + TIMEOUT_MS;
   let targetReportTsUtc = null;
   const firstSeen = {
-    aisweb: null,
     redemet: null,
     tgftp: null,
   };
   const latestHits = {
-    aisweb: baseline.aisweb,
     redemet: baseline.redemet,
     tgftp: baseline.tgftp,
   };
 
   while (Date.now() < deadline) {
-    const sample = await sampleAll();
-    latestHits.aisweb = sample.aisweb;
+    const sample = await sampleAllWithFallback(latestHits);
     latestHits.redemet = sample.redemet;
     latestHits.tgftp = sample.tgftp;
 
@@ -271,7 +305,7 @@ async function main() {
     }
 
     if (Number.isFinite(targetReportTsUtc)) {
-      for (const source of ["aisweb", "redemet", "tgftp"]) {
+      for (const source of ["redemet", "tgftp"]) {
         if (!firstSeen[source] && sample[source].reportTsUtc === targetReportTsUtc) {
           firstSeen[source] = sample[source];
           console.log(
@@ -280,6 +314,7 @@ async function main() {
                 source,
                 firstSeenAt: formatShort(sample[source].fetchedAt),
                 reportTsUtc: formatShort(sample[source].reportTsUtc),
+                receivedAt: formatShort(sample[source].receivedAt),
                 rawMetar: sample[source].rawMetar,
                 headers: sample[source].headers,
               },
@@ -290,7 +325,7 @@ async function main() {
         }
       }
 
-      if (firstSeen.aisweb && firstSeen.redemet && firstSeen.tgftp) {
+      if (firstSeen.redemet && firstSeen.tgftp) {
         break;
       }
     }
@@ -306,6 +341,7 @@ async function main() {
         hit
           ? {
               fetchedAt: toIsoOrNull(hit.fetchedAt),
+              receivedAt: toIsoOrNull(hit.receivedAt),
               rawMetar: hit.rawMetar,
               headers: hit.headers,
             }
@@ -313,13 +349,12 @@ async function main() {
       ]),
     ),
     latestHits: {
-      aisweb: compactResult(latestHits.aisweb),
       redemet: compactResult(latestHits.redemet),
       tgftp: compactResult(latestHits.tgftp),
     },
   };
 
-  if (firstSeen.aisweb && firstSeen.redemet && firstSeen.tgftp) {
+  if (firstSeen.redemet && firstSeen.tgftp) {
     const winners = Object.entries(firstSeen)
       .map(([source, hit]) => [source, hit.fetchedAt])
       .sort((a, b) => a[1] - b[1]);

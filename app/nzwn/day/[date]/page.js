@@ -804,9 +804,9 @@ export default function NzwnDayPage() {
               <p className="mt-1 text-sm text-black/60">
                 Recent NZWN first-seen timing between official PreFlight and NOAA
                 `tgftp`. Times in this table are shown in America/Chicago. This
-                logger runs a 5-second watch around the `:00` and `:30` routine
-                windows and also keeps minute fallback polls because NZWN
-                publication can drift well past the nominal schedule.
+                logger runs a 1-second watch starting at `:04` and `:34` and
+                also keeps minute fallback polls because NZWN publication can
+                drift well past the nominal schedule.
               </p>
             </div>
           </div>

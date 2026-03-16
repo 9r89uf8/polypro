@@ -131,18 +131,18 @@ Convex cron:
 - `nzwn_tgftp_publish_race_every_minute`
   - calls `preflight:pollLatestNoaaPublishRace`
   - station argument is `NZWN`
-- `nzwn_publish_race_watch_minute_25_55`
+- `nzwn_publish_race_watch_minute_04_34`
   - calls `preflight:watchStationPublishRaceWindow`
   - station argument is `NZWN`
-  - starts at minutes `25` and `55`
+  - starts at minutes `04` and `34`
   - passes `durationMs=900000`, so each watch runs for 15 minutes
-  - polls PreFlight and NOAA `tgftp` in short intervals through the usual late
-    `:00` / `:30` release window
+  - polls PreFlight and NOAA `tgftp` every `1s` through the usual late
+    post-`:00` / post-`:30` release window
 
 NZWN uses both:
 
 - continuous minute-by-minute official/NOAA polling as a fallback
-- short-interval watch windows around the routine half-hour boundaries
+- 1-second watch windows starting at `:04` and `:34`
 
 That combination is needed because Wellington reports can appear several minutes
 after the nominal `:00` and `:30` schedule.

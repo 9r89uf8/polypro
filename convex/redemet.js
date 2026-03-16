@@ -13,19 +13,23 @@ const NOAA_LATEST_METAR_BASE_URL =
 const REDEMET_FETCH_TIMEOUT_MS = 25000;
 const REDEMET_EARLY_UTC_HOURS_FOR_LOCAL_DAY = 3;
 const RACE_SOURCE = {
+  AISWEB_CANONICAL: "aiswebCanonical",
   AISWEB: "aisweb",
+  PWA: "pwa",
   REDEMET: "redemet",
   TGFTP: "tgftp",
 };
 const PUBLISH_RACE_WINNER = {
+  AISWEB_CANONICAL: "aiswebCanonical",
   AISWEB: "aisweb",
+  PWA: "pwa",
   REDEMET: "redemet",
   TGFTP: "tgftp",
   TIE: "tie",
 };
 const DEFAULT_RACE_QUERY_LIMIT = 12;
 const MAX_RACE_QUERY_LIMIT = 48;
-const DEFAULT_RACE_WATCH_INTERVAL_MS = 5000;
+const DEFAULT_RACE_WATCH_INTERVAL_MS = 1000;
 const DEFAULT_RACE_WATCH_DURATION_MS = 4 * 60 * 1000;
 
 const saoPauloDateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -195,6 +199,11 @@ function getAiswebApiBaseUrl() {
   return baseUrl.replace(/\/+$/, "");
 }
 
+function getAiswebCanonicalApiBaseUrl() {
+  const baseUrl = toNonEmptyString(process.env.AISWEB_CANONICAL_API_BASE_URL);
+  return (baseUrl ?? "https://api.decea.mil.br/aisweb/").replace(/\/+$/, "");
+}
+
 function getAiswebApiKey() {
   const apiKey = toNonEmptyString(process.env.AISWEB_API_KEY);
   if (!apiKey) {
@@ -221,8 +230,39 @@ function buildLatestInfoUrl(stationIcao) {
   return url.toString();
 }
 
+function formatUtcApiHourKey(epochMs) {
+  const date = new Date(epochMs);
+  return `${date.getUTCFullYear()}${pad2(date.getUTCMonth() + 1)}${pad2(date.getUTCDate())}${pad2(
+    date.getUTCHours(),
+  )}`;
+}
+
+function buildRedemetMetMessagesUrl(stationIcao, startEpochMs, endEpochMs, pageSize = 24) {
+  const url = new URL(`${getRedemetApiBaseUrl()}/mensagens/metar/${stationIcao}`);
+  url.searchParams.set("api_key", getRedemetApiKey());
+  url.searchParams.set("data_ini", formatUtcApiHourKey(startEpochMs));
+  url.searchParams.set("data_fim", formatUtcApiHourKey(endEpochMs));
+  url.searchParams.set("page_tam", String(pageSize));
+  return url.toString();
+}
+
+function buildRedemetPwaUrl(stationIcao) {
+  const url = new URL(`${getRedemetApiBaseUrl()}/mensagens/pwa/${stationIcao}`);
+  url.searchParams.set("api_key", getRedemetApiKey());
+  return url.toString();
+}
+
 function buildAiswebMetUrl(stationIcao) {
   const url = new URL(getAiswebApiBaseUrl());
+  url.searchParams.set("apiKey", getAiswebApiKey());
+  url.searchParams.set("apiPass", getAiswebApiPass());
+  url.searchParams.set("area", "met");
+  url.searchParams.set("icaoCode", stationIcao);
+  return url.toString();
+}
+
+function buildAiswebCanonicalMetUrl(stationIcao) {
+  const url = new URL(getAiswebCanonicalApiBaseUrl());
   url.searchParams.set("apiKey", getAiswebApiKey());
   url.searchParams.set("apiPass", getAiswebApiPass());
   url.searchParams.set("area", "met");
@@ -245,6 +285,25 @@ function parseRedemetUtcTimestamp(value) {
     Number(match[4]),
     Number(match[5]),
     0,
+    0,
+  );
+}
+
+function parseSqlUtcTimestamp(value) {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
+      String(value ?? "").trim(),
+    );
+  if (!match) {
+    return null;
+  }
+  return Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6] ?? 0),
     0,
   );
 }
@@ -605,7 +664,11 @@ function inferPublishRaceReportType(row) {
     return explicitType;
   }
 
-  const candidates = [row?.rawMetar, row?.redemetRawMetar, row?.tgftpRawMetar];
+  const candidates = [
+    row?.rawMetar,
+    row?.redemetRawMetar,
+    row?.tgftpRawMetar,
+  ];
   for (const candidate of candidates) {
     const type = extractReportType(candidate);
     if (type) {
@@ -723,6 +786,117 @@ async function fetchLatestRedemetRaceHit(stationIcao) {
   };
 }
 
+function parseRedemetMetMessages(payload, stationIcao) {
+  const rows = Array.isArray(payload?.data?.data) ? payload.data.data : [];
+  const normalizedRows = rows
+    .map((row) => {
+      const location = toNonEmptyString(row?.id_localidade)?.toUpperCase();
+      const rawMetar = toNonEmptyString(row?.mens);
+      const reportTsUtc = parseSqlUtcTimestamp(row?.validade_inicial);
+      const receivedAt = parseSqlUtcTimestamp(row?.recebimento);
+      if (location !== stationIcao.toUpperCase()) {
+        return null;
+      }
+      if (!rawMetar || !Number.isFinite(reportTsUtc)) {
+        return null;
+      }
+      return {
+        rawMetar,
+        reportTsUtc,
+        receivedAt,
+      };
+    })
+    .filter(Boolean);
+
+  if (!normalizedRows.length) {
+    throw new Error(`REDEMET mensagens/metar did not include a ${stationIcao} METAR.`);
+  }
+
+  normalizedRows.sort((left, right) => {
+    if (left.reportTsUtc !== right.reportTsUtc) {
+      return right.reportTsUtc - left.reportTsUtc;
+    }
+    return (right.receivedAt ?? Number.NEGATIVE_INFINITY) -
+      (left.receivedAt ?? Number.NEGATIVE_INFINITY);
+  });
+
+  return normalizedRows[0];
+}
+
+function getRedemetMetMessagesWindow(nowEpochMs = Date.now()) {
+  const start = new Date(nowEpochMs - 12 * 60 * 60 * 1000);
+  start.setUTCMinutes(0, 0, 0);
+  const end = new Date(nowEpochMs + 2 * 60 * 60 * 1000);
+  end.setUTCMinutes(0, 0, 0);
+  return {
+    startEpochMs: start.getTime(),
+    endEpochMs: end.getTime(),
+  };
+}
+
+async function fetchLatestRedemetMessageRaceHit(stationIcao) {
+  const { startEpochMs, endEpochMs } = getRedemetMetMessagesWindow();
+  const response = await fetchWithTimeout(
+    buildRedemetMetMessagesUrl(stationIcao, startEpochMs, endEpochMs),
+    {
+      headers: {
+        "Cache-Control": "no-cache",
+      },
+    },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `REDEMET mensagens/metar fetch failed (${response.status}): ${text.slice(0, 200)}`,
+    );
+  }
+  const payload = await response.json();
+  const latest = parseRedemetMetMessages(payload, stationIcao);
+  return {
+    seenAt: Date.now(),
+    reportTsUtc: latest.reportTsUtc,
+    rawMetar: latest.rawMetar,
+    receivedAt: latest.receivedAt,
+  };
+}
+
+function parseRedemetPwaPayload(payload, stationIcao) {
+  const stationPayload = payload?.[stationIcao.toUpperCase()];
+  const rawMetar = toNonEmptyString(stationPayload?.metar);
+  if (!rawMetar) {
+    throw new Error(`REDEMET pwa did not include a ${stationIcao} METAR.`);
+  }
+  const reportTsUtc = parseReportTimestampFromRaw(rawMetar);
+  if (!Number.isFinite(reportTsUtc)) {
+    throw new Error("REDEMET pwa did not include a parseable METAR timestamp.");
+  }
+  return {
+    rawMetar,
+    reportTsUtc,
+  };
+}
+
+async function fetchLatestRedemetPwaRaceHit(stationIcao) {
+  const response = await fetchWithTimeout(buildRedemetPwaUrl(stationIcao), {
+    headers: {
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `REDEMET pwa fetch failed (${response.status}): ${text.slice(0, 200)}`,
+    );
+  }
+  const payload = await response.json();
+  const parsed = parseRedemetPwaPayload(payload, stationIcao);
+  return {
+    seenAt: Date.now(),
+    reportTsUtc: parsed.reportTsUtc,
+    rawMetar: parsed.rawMetar,
+  };
+}
+
 async function fetchLatestAiswebRaceHit(stationIcao) {
   const response = await fetchWithTimeout(buildAiswebMetUrl(stationIcao), {
     headers: {
@@ -732,6 +906,27 @@ async function fetchLatestAiswebRaceHit(stationIcao) {
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`AISWEB met fetch failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const body = await response.text();
+  const parsed = parseAiswebMetXml(body, stationIcao);
+  return {
+    seenAt: Date.now(),
+    reportTsUtc: parsed.reportTsUtc,
+    rawMetar: parsed.rawMetar,
+  };
+}
+
+async function fetchLatestAiswebCanonicalRaceHit(stationIcao) {
+  const response = await fetchWithTimeout(buildAiswebCanonicalMetUrl(stationIcao), {
+    headers: {
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `AISWEB canonical met fetch failed (${response.status}): ${text.slice(0, 200)}`,
+    );
   }
   const body = await response.text();
   const parsed = parseAiswebMetXml(body, stationIcao);
@@ -886,13 +1081,16 @@ export const recordPublishRaceHit = internalMutationGeneric({
     reportTsUtc: v.number(),
     reportType: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
     source: v.union(
+      v.literal(RACE_SOURCE.AISWEB_CANONICAL),
       v.literal(RACE_SOURCE.AISWEB),
+      v.literal(RACE_SOURCE.PWA),
       v.literal(RACE_SOURCE.REDEMET),
       v.literal(RACE_SOURCE.TGFTP),
     ),
     rawMetar: v.string(),
     seenAt: v.number(),
     sourceLastModifiedAt: v.optional(v.number()),
+    sourceReceivedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -917,10 +1115,23 @@ export const recordPublishRaceHit = internalMutationGeneric({
               aiswebRawMetar: args.rawMetar,
               aiswebFirstSeenAt: args.seenAt,
             }
+          : args.source === RACE_SOURCE.AISWEB_CANONICAL
+          ? {
+              aiswebCanonicalRawMetar: args.rawMetar,
+              aiswebCanonicalFirstSeenAt: args.seenAt,
+            }
+          : args.source === RACE_SOURCE.PWA
+          ? {
+              pwaRawMetar: args.rawMetar,
+              pwaFirstSeenAt: args.seenAt,
+            }
           : args.source === RACE_SOURCE.REDEMET
           ? {
               redemetRawMetar: args.rawMetar,
               redemetFirstSeenAt: args.seenAt,
+              ...(Number.isFinite(args.sourceReceivedAt)
+                ? { redemetReceivedAt: args.sourceReceivedAt }
+                : {}),
             }
           : {
               tgftpRawMetar: args.rawMetar,
@@ -951,25 +1162,61 @@ export const recordPublishRaceHit = internalMutationGeneric({
       patch.rawMetar = canonicalRawMetar;
     }
 
-    if (args.source === RACE_SOURCE.AISWEB) {
+    if (args.source === RACE_SOURCE.AISWEB_CANONICAL) {
+      if (!existing.aiswebCanonicalRawMetar) {
+        patch.aiswebCanonicalRawMetar = args.rawMetar;
+      }
+      if (
+        !Number.isFinite(existing.aiswebCanonicalFirstSeenAt) ||
+        args.seenAt < existing.aiswebCanonicalFirstSeenAt
+      ) {
+        patch.aiswebCanonicalFirstSeenAt = args.seenAt;
+      }
+    } else if (args.source === RACE_SOURCE.AISWEB) {
       if (!existing.aiswebRawMetar) {
         patch.aiswebRawMetar = args.rawMetar;
       }
-      if (!Number.isFinite(existing.aiswebFirstSeenAt)) {
+      if (
+        !Number.isFinite(existing.aiswebFirstSeenAt) ||
+        args.seenAt < existing.aiswebFirstSeenAt
+      ) {
         patch.aiswebFirstSeenAt = args.seenAt;
+      }
+    } else if (args.source === RACE_SOURCE.PWA) {
+      if (!existing.pwaRawMetar) {
+        patch.pwaRawMetar = args.rawMetar;
+      }
+      if (
+        !Number.isFinite(existing.pwaFirstSeenAt) ||
+        args.seenAt < existing.pwaFirstSeenAt
+      ) {
+        patch.pwaFirstSeenAt = args.seenAt;
       }
     } else if (args.source === RACE_SOURCE.REDEMET) {
       if (!existing.redemetRawMetar) {
         patch.redemetRawMetar = args.rawMetar;
       }
-      if (!Number.isFinite(existing.redemetFirstSeenAt)) {
+      if (
+        !Number.isFinite(existing.redemetFirstSeenAt) ||
+        args.seenAt < existing.redemetFirstSeenAt
+      ) {
         patch.redemetFirstSeenAt = args.seenAt;
+      }
+      if (
+        Number.isFinite(args.sourceReceivedAt) &&
+        (!Number.isFinite(existing.redemetReceivedAt) ||
+          args.sourceReceivedAt < existing.redemetReceivedAt)
+      ) {
+        patch.redemetReceivedAt = args.sourceReceivedAt;
       }
     } else {
       if (!existing.tgftpRawMetar) {
         patch.tgftpRawMetar = args.rawMetar;
       }
-      if (!Number.isFinite(existing.tgftpFirstSeenAt)) {
+      if (
+        !Number.isFinite(existing.tgftpFirstSeenAt) ||
+        args.seenAt < existing.tgftpFirstSeenAt
+      ) {
         patch.tgftpFirstSeenAt = args.seenAt;
       }
       if (
@@ -981,8 +1228,12 @@ export const recordPublishRaceHit = internalMutationGeneric({
     }
 
     const winnerState = computePublishRaceWinner({
+      [PUBLISH_RACE_WINNER.AISWEB_CANONICAL]:
+        patch.aiswebCanonicalFirstSeenAt ?? existing.aiswebCanonicalFirstSeenAt,
       [PUBLISH_RACE_WINNER.AISWEB]:
         patch.aiswebFirstSeenAt ?? existing.aiswebFirstSeenAt,
+      [PUBLISH_RACE_WINNER.PWA]:
+        patch.pwaFirstSeenAt ?? existing.pwaFirstSeenAt,
       [PUBLISH_RACE_WINNER.REDEMET]:
         patch.redemetFirstSeenAt ?? existing.redemetFirstSeenAt,
       [PUBLISH_RACE_WINNER.TGFTP]:
@@ -1019,21 +1270,13 @@ export const pollLatestStationMetar = actionGeneric({
       seenAt,
       rows: [row],
     });
-    const raceRow = await ctx.runMutation("redemet:recordPublishRaceHit", {
-      stationIcao,
-      reportTsUtc: row.obsTimeUtc,
-      reportType: row.reportType,
-      source: RACE_SOURCE.REDEMET,
-      rawMetar: row.rawMetar,
-      seenAt,
-    });
 
     return {
       ok: true,
       stationIcao,
       row: {
         ...row,
-        redemetFirstSeenAt: raceRow?.redemetFirstSeenAt ?? seenAt,
+        redemetFirstSeenAt: seenAt,
       },
       availabilityLagMs: Math.max(0, seenAt - row.obsTimeUtc),
       ...result,
@@ -1068,6 +1311,73 @@ export const pollLatestAiswebPublishRace = actionGeneric({
       reportType: raceRow?.reportType ?? null,
       rawMetar: hit.rawMetar,
       aiswebFirstSeenAt: raceRow?.aiswebFirstSeenAt ?? hit.seenAt,
+      winner: raceRow?.winner ?? null,
+      leadMs: raceRow?.leadMs ?? null,
+    };
+  },
+});
+
+export const pollLatestAiswebCanonicalPublishRace = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const hit = await fetchLatestAiswebCanonicalRaceHit(stationIcao);
+    const raceRow = await ctx.runMutation("redemet:recordPublishRaceHit", {
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: extractReportType(hit.rawMetar) ?? undefined,
+      source: RACE_SOURCE.AISWEB_CANONICAL,
+      rawMetar: hit.rawMetar,
+      seenAt: hit.seenAt,
+    });
+
+    return {
+      ok: true,
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: raceRow?.reportType ?? null,
+      rawMetar: hit.rawMetar,
+      aiswebCanonicalFirstSeenAt:
+        raceRow?.aiswebCanonicalFirstSeenAt ?? hit.seenAt,
+      winner: raceRow?.winner ?? null,
+      leadMs: raceRow?.leadMs ?? null,
+    };
+  },
+});
+
+export const pollLatestRedemetPwaPublishRace = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const hit = await fetchLatestRedemetPwaRaceHit(stationIcao);
+    const raceRow = await ctx.runMutation("redemet:recordPublishRaceHit", {
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: extractReportType(hit.rawMetar) ?? undefined,
+      source: RACE_SOURCE.PWA,
+      rawMetar: hit.rawMetar,
+      seenAt: hit.seenAt,
+    });
+
+    return {
+      ok: true,
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: raceRow?.reportType ?? null,
+      rawMetar: hit.rawMetar,
+      pwaFirstSeenAt: raceRow?.pwaFirstSeenAt ?? hit.seenAt,
       winner: raceRow?.winner ?? null,
       leadMs: raceRow?.leadMs ?? null,
     };
@@ -1142,7 +1452,6 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let iterations = 0;
     let errorCount = 0;
     let lastError = null;
-    let lastAisweb = null;
     let lastRedemet = null;
     let lastTgftp = null;
     const touchedReportTimestamps = new Set();
@@ -1150,44 +1459,26 @@ export const watchStationPublishRaceWindow = actionGeneric({
     while (Date.now() <= deadline) {
       try {
         const results = await Promise.allSettled([
-          fetchLatestAiswebRaceHit(stationIcao),
-          fetchLatestRedemetRaceHit(stationIcao),
+          fetchLatestRedemetMessageRaceHit(stationIcao),
           fetchLatestTgftpRaceHit(stationIcao),
         ]);
 
-        const [aiswebResult, redemetResult, tgftpResult] = results;
+        const [redemetResult, tgftpResult] = results;
         const mutationCalls = [];
-
-        if (aiswebResult.status === "fulfilled") {
-          lastAisweb = aiswebResult.value;
-          mutationCalls.push(
-            ctx.runMutation("redemet:recordPublishRaceHit", {
-              stationIcao,
-              reportTsUtc: aiswebResult.value.reportTsUtc,
-              reportType: extractReportType(aiswebResult.value.rawMetar) ?? undefined,
-              source: RACE_SOURCE.AISWEB,
-              rawMetar: aiswebResult.value.rawMetar,
-              seenAt: aiswebResult.value.seenAt,
-            }),
-          );
-        } else {
-          errorCount += 1;
-          lastError =
-            aiswebResult.reason instanceof Error
-              ? aiswebResult.reason.message
-              : String(aiswebResult.reason);
-        }
 
         if (redemetResult.status === "fulfilled") {
           lastRedemet = redemetResult.value;
           mutationCalls.push(
             ctx.runMutation("redemet:recordPublishRaceHit", {
               stationIcao,
-              reportTsUtc: redemetResult.value.row.obsTimeUtc,
-              reportType: redemetResult.value.row.reportType,
+              reportTsUtc: redemetResult.value.reportTsUtc,
+              reportType: extractReportType(redemetResult.value.rawMetar) ?? undefined,
               source: RACE_SOURCE.REDEMET,
-              rawMetar: redemetResult.value.row.rawMetar,
+              rawMetar: redemetResult.value.rawMetar,
               seenAt: redemetResult.value.seenAt,
+              ...(Number.isFinite(redemetResult.value.receivedAt)
+                ? { sourceReceivedAt: redemetResult.value.receivedAt }
+                : {}),
             }),
           );
         } else {
@@ -1250,8 +1541,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
       errorCount,
       lastError,
       touchedReportCount: touchedReportTimestamps.size,
-      latestAiswebReportTsUtc: lastAisweb?.reportTsUtc ?? null,
-      latestRedemetReportTsUtc: lastRedemet?.row?.obsTimeUtc ?? null,
+      latestRedemetReportTsUtc: lastRedemet?.reportTsUtc ?? null,
       latestTgftpReportTsUtc: lastTgftp?.reportTsUtc ?? null,
     };
   },

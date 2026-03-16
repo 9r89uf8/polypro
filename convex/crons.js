@@ -54,9 +54,9 @@ crons.cron(
     { stationIcao: "SBGR" },
 );
 
-// Starts before the hour and keeps watching through shortly after it so
-// AISWEB, REDEMET, and NOAA tgftp first-seen times are measured with finer
-// resolution than the minute cron.
+// Starts before the hour and keeps watching through shortly after it so the
+// REDEMET mensagens/metar and NOAA tgftp first-seen times are measured with
+// finer resolution than the minute cron.
 crons.cron(
     "sbgr_publish_race_watch_minute_55",
     "55 * * * *",
@@ -83,12 +83,12 @@ crons.cron(
     { stationIcao: "NZWN" },
 );
 
-// Starts before both routine NZWN boundaries and keeps watching through the
-// usual late-publication window so PreFlight and NOAA tgftp first-seen times
-// are measured more precisely than the minute fallback polls.
+// Starts four minutes after both routine NZWN boundaries and keeps watching
+// through the usual late-publication window so PreFlight and NOAA tgftp
+// first-seen times are measured more precisely than the minute fallback polls.
 crons.cron(
-    "nzwn_publish_race_watch_minute_25_55",
-    "25,55 * * * *",
+    "nzwn_publish_race_watch_minute_04_34",
+    "4,34 * * * *",
     api.preflight.watchStationPublishRaceWindow,
     { stationIcao: "NZWN", durationMs: 15 * 60 * 1000 },
 );

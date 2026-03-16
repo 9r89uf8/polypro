@@ -27,7 +27,7 @@ const PUBLISH_RACE_WINNER = {
 };
 const DEFAULT_RACE_QUERY_LIMIT = 12;
 const MAX_RACE_QUERY_LIMIT = 48;
-const DEFAULT_RACE_WATCH_INTERVAL_MS = 5000;
+const DEFAULT_RACE_WATCH_INTERVAL_MS = 1000;
 const DEFAULT_RACE_WATCH_DURATION_MS = 15 * 60 * 1000;
 
 const aucklandDateFormatter = new Intl.DateTimeFormat("en-US", {
