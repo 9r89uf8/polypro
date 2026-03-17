@@ -43,9 +43,10 @@ What this page displays:
 - `Near-Live Airport Current` panel
   - unofficial Weather.com/Wunderground airport-current observation for `NZWN`
   - separate from the official METAR history series
-- `Publish Race` table showing recent first-seen timing between official
-  PreFlight and NOAA `tgftp`
+- `Publish Race` table showing recent first-seen timing across official
+  PreFlight, authenticated AEROWEB, and NOAA `tgftp`
   - publish-race timestamps are displayed in `America/Chicago`
+  - the UI only shows those three race sources plus `tgftp` `Last-Modified`
 - Raw observations table:
   - `Local Time`
   - `Type`
@@ -75,16 +76,22 @@ Behavior details:
 - Recent publish-race rows are loaded from `preflightPublishRaceReports`.
 - The publish-race logger is separate from the day chart ingest:
   - official first-seen times are written by `preflight:pollLatestStationMetar`
+  - AEROWEB first-seen times are written by
+    `preflight:pollLatestAerowebPublishRace`
   - NOAA `tgftp` first-seen times are written by
     `preflight:pollLatestNoaaPublishRace`
-  - winner/lead are computed only when both sources have first-seen times for
-    the same `reportTsUtc`
+  - winner/lead are computed from the earliest two sources seen for the same
+    `reportTsUtc`
 
 ## Official Source
 
 Latest official NZWN JSON:
 
 - `https://gopreflight.co.nz/data/aerodromesv3/NZWN`
+
+Authenticated AEROWEB NZWN message page used in the publish-race logger:
+
+- `https://aviation.meteo.fr/showmessage.php?code=NZWN`
 
 Near-live unofficial NZWN airport current JSON:
 
@@ -118,8 +125,9 @@ Known limitation:
   - stores obs count, latest row fields, min/max temps, and min/max times
 - `preflightPublishRaceReports`
   - one row per station/report timestamp
-  - stores PreFlight first-seen time, NOAA `tgftp` first-seen time, optional
-    `tgftp` `Last-Modified`, winner, and lead
+  - stores PreFlight first-seen time, authenticated AEROWEB first-seen time,
+    NOAA `tgftp` first-seen time, optional `tgftp` `Last-Modified`, winner,
+    and lead
 
 ## Scheduled Ingest
 
@@ -131,17 +139,20 @@ Convex cron:
 - `nzwn_tgftp_publish_race_every_minute`
   - calls `preflight:pollLatestNoaaPublishRace`
   - station argument is `NZWN`
+- `nzwn_aeroweb_publish_race_every_minute`
+  - calls `preflight:pollLatestAerowebPublishRace`
+  - station argument is `NZWN`
 - `nzwn_publish_race_watch_minute_04_34`
   - calls `preflight:watchStationPublishRaceWindow`
   - station argument is `NZWN`
   - starts at minutes `04` and `34`
   - passes `durationMs=900000`, so each watch runs for 15 minutes
-  - polls PreFlight and NOAA `tgftp` every `1s` through the usual late
-    post-`:00` / post-`:30` release window
+  - polls PreFlight, AEROWEB, and NOAA `tgftp` every `1s` through the usual
+    late post-`:00` / post-`:30` release window
 
 NZWN uses both:
 
-- continuous minute-by-minute official/NOAA polling as a fallback
+- continuous minute-by-minute PreFlight/AEROWEB/NOAA polling as a fallback
 - 1-second watch windows starting at `:04` and `:34`
 
 That combination is needed because Wellington reports can appear several minutes

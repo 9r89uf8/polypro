@@ -55,8 +55,8 @@ crons.cron(
 );
 
 // Starts before the hour and keeps watching through shortly after it so the
-// REDEMET mensagens/metar and NOAA tgftp first-seen times are measured with
-// finer resolution than the minute cron.
+// REDEMET mensagens/metar, authenticated AEROWEB, and NOAA tgftp first-seen
+// times are measured with finer resolution than the minute cron.
 crons.cron(
     "sbgr_publish_race_watch_minute_54",
     "54 * * * *",
@@ -83,9 +83,19 @@ crons.cron(
     { stationIcao: "NZWN" },
 );
 
+// Runs every minute because AEROWEB also exposes NZWN, and we want the same
+// continuous fallback sampling used for the PreFlight-vs-NOAA timing race.
+crons.cron(
+    "nzwn_aeroweb_publish_race_every_minute",
+    "* * * * *",
+    api.preflight.pollLatestAerowebPublishRace,
+    { stationIcao: "NZWN" },
+);
+
 // Starts four minutes after both routine NZWN boundaries and keeps watching
-// through the usual late-publication window so PreFlight and NOAA tgftp
-// first-seen times are measured more precisely than the minute fallback polls.
+// through the usual late-publication window so PreFlight, authenticated
+// AEROWEB, and NOAA tgftp first-seen times are measured more precisely than the
+// minute fallback polls.
 crons.cron(
     "nzwn_publish_race_watch_minute_04_34",
     "4,34 * * * *",
@@ -120,6 +130,36 @@ crons.cron(
     "29,59 * * * *",
     api.aeroweb.watchStationPublishRaceWindow,
     { stationIcao: "LFPG", durationMs: 10 * 60 * 1000 },
+);
+
+// Runs every minute so the authenticated AEROWEB latest EDDM METAR feed is
+// captured continuously even without an open browser tab.
+crons.cron(
+    "munich_aeroweb_latest_every_minute",
+    "* * * * *",
+    api.aeroweb.pollLatestStationMetar,
+    { stationIcao: "EDDM" },
+);
+
+// Runs every minute so the NOAA side of the Munich publish-race experiment is
+// always sampled, even when routine publication drifts a little past the
+// expected half-hour marks.
+crons.cron(
+    "munich_tgftp_publish_race_every_minute",
+    "* * * * *",
+    api.aeroweb.pollLatestNoaaPublishRace,
+    { stationIcao: "EDDM" },
+);
+
+// Starts one minute before the observed EDDM :20 and :50 routine boundaries
+// and keeps watching through the usual post-publication window so AEROWEB and
+// NOAA tgftp first-seen times are measured more precisely than the minute
+// fallback polls.
+crons.cron(
+    "munich_publish_race_watch_minute_19_49",
+    "19,49 * * * *",
+    api.aeroweb.watchStationPublishRaceWindow,
+    { stationIcao: "EDDM", durationMs: 10 * 60 * 1000 },
 );
 
 // Runs every hour and stores a new KORD snapshot:

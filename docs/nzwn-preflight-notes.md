@@ -1004,3 +1004,22 @@ Current practical reading:
 - `https://about.metservice.com/preflight` returned a 404 in the sampled run, so
   the useful official surface is the live `gopreflight.co.nz` app rather than a
   public product page there.
+
+## AEROWEB Cross-Check
+
+Verified on `2026-03-17` with a normal authenticated `aviation.meteo.fr`
+session:
+
+- `https://aviation.meteo.fr/showmessage.php?code=NZWN`
+
+Sample response:
+
+- `METAR NZWN 170000Z AUTO 20009KT 9999 BKN033/// 18/14 Q1023=`
+
+Practical read:
+
+- `Meteo-France` `AEROWEB` is not just a France-only surface; the same logged-in
+  web UI also exposes `NZWN`.
+- That makes `AEROWEB` a real third race candidate for Wellington alongside
+  PreFlight and `NOAA tgftp`.
+- It is authenticated, not public no-credential access.

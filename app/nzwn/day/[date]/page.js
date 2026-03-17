@@ -176,6 +176,9 @@ function formatChicagoDateTimeSeconds(epochMs) {
 }
 
 function formatRaceWinner(winner) {
+  if (winner === "aeroweb") {
+    return "AEROWEB";
+  }
   if (winner === "preflight") {
     return "PreFlight";
   }
@@ -802,11 +805,12 @@ export default function NzwnDayPage() {
             <div>
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
-                Recent NZWN first-seen timing between official PreFlight and NOAA
-                `tgftp`. Times in this table are shown in America/Chicago. This
-                logger runs a 1-second watch starting at `:04` and `:34` and
-                also keeps minute fallback polls because NZWN publication can
-                drift well past the nominal schedule.
+                Recent NZWN first-seen timing across official PreFlight,
+                authenticated AEROWEB, and NOAA `tgftp`. Times in this table are
+                shown in America/Chicago. This logger runs a 1-second watch
+                starting at `:04` and `:34` and also keeps minute fallback polls
+                because NZWN publication can drift well past the nominal
+                schedule.
               </p>
             </div>
           </div>
@@ -817,8 +821,8 @@ export default function NzwnDayPage() {
                   <th className="px-3 py-2 font-semibold">Report Time</th>
                   <th className="px-3 py-2 font-semibold">Winner</th>
                   <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">Status Seen</th>
                   <th className="px-3 py-2 font-semibold">PreFlight Seen</th>
+                  <th className="px-3 py-2 font-semibold">AEROWEB Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
                   <th className="px-3 py-2 font-semibold">Raw METAR</th>
@@ -837,7 +841,9 @@ export default function NzwnDayPage() {
                       <td className="px-3 py-3 whitespace-nowrap">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "preflight"
+                            row.winner === "aeroweb"
+                              ? "bg-cyan-50 text-cyan-900"
+                              : row.winner === "preflight"
                               ? "bg-emerald-50 text-emerald-800"
                               : row.winner === "tgftp"
                                 ? "bg-amber-50 text-amber-900"
@@ -853,12 +859,10 @@ export default function NzwnDayPage() {
                         {formatLeadMs(row.leadMs)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.statusFirstSeenAt
-                          ? formatChicagoDateTimeSeconds(row.statusFirstSeenAt)
-                          : "—"}
+                        {formatChicagoDateTimeSeconds(row.preflightFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.preflightFirstSeenAt)}
+                        {formatChicagoDateTimeSeconds(row.aerowebFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
                         {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
@@ -867,7 +871,11 @@ export default function NzwnDayPage() {
                         {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ?? row.preflightRawMetar ?? row.tgftpRawMetar ?? "—"}
+                        {row.rawMetar ??
+                          row.preflightRawMetar ??
+                          row.aerowebRawMetar ??
+                          row.tgftpRawMetar ??
+                          "—"}
                       </td>
                     </tr>
                   ))

@@ -4,6 +4,7 @@ import {
   queryGeneric,
 } from "convex/server";
 import { v } from "convex/values";
+import { fetchLatestAerowebMessage } from "./aerowebShared.js";
 
 const AUCKLAND_TIMEZONE = "Pacific/Auckland";
 const PREFLIGHT_FETCH_TIMEOUT_MS = 25000;
@@ -17,10 +18,12 @@ const WEATHERCOM_CURRENT_CONDITIONS_URL =
 const WEATHERCOM_WUNDERGROUND_API_KEY =
   "e1f10a1e78da46f5b10a1e78da96f525";
 const RACE_SOURCE = {
+  AEROWEB: "aeroweb",
   PREFLIGHT: "preflight",
   TGFTP: "tgftp",
 };
 const PUBLISH_RACE_WINNER = {
+  AEROWEB: "aeroweb",
   PREFLIGHT: "preflight",
   TGFTP: "tgftp",
   TIE: "tie",
@@ -365,25 +368,27 @@ function observationChanged(existing, candidate) {
   return fields.some((field) => existing[field] !== candidate[field]);
 }
 
-function computePublishRaceWinner(preflightFirstSeenAt, tgftpFirstSeenAt) {
-  if (!Number.isFinite(preflightFirstSeenAt) || !Number.isFinite(tgftpFirstSeenAt)) {
+function computePublishRaceWinner(firstSeenTimes) {
+  const hits = Object.entries(firstSeenTimes)
+    .filter(([, seenAt]) => Number.isFinite(seenAt))
+    .sort((a, b) => a[1] - b[1]);
+
+  if (hits.length < 2) {
     return { winner: null, leadMs: null };
   }
-  if (preflightFirstSeenAt < tgftpFirstSeenAt) {
+
+  const [firstSource, firstSeenAt] = hits[0];
+  const [, secondSeenAt] = hits[1];
+  if (firstSeenAt === secondSeenAt) {
     return {
-      winner: PUBLISH_RACE_WINNER.PREFLIGHT,
-      leadMs: tgftpFirstSeenAt - preflightFirstSeenAt,
+      winner: PUBLISH_RACE_WINNER.TIE,
+      leadMs: 0,
     };
   }
-  if (tgftpFirstSeenAt < preflightFirstSeenAt) {
-    return {
-      winner: PUBLISH_RACE_WINNER.TGFTP,
-      leadMs: preflightFirstSeenAt - tgftpFirstSeenAt,
-    };
-  }
+
   return {
-    winner: PUBLISH_RACE_WINNER.TIE,
-    leadMs: 0,
+    winner: firstSource,
+    leadMs: secondSeenAt - firstSeenAt,
   };
 }
 
@@ -787,7 +792,11 @@ export const recordPublishRaceHit = internalMutationGeneric({
     stationIcao: v.string(),
     reportTsUtc: v.number(),
     reportType: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
-    source: v.union(v.literal(RACE_SOURCE.PREFLIGHT), v.literal(RACE_SOURCE.TGFTP)),
+    source: v.union(
+      v.literal(RACE_SOURCE.AEROWEB),
+      v.literal(RACE_SOURCE.PREFLIGHT),
+      v.literal(RACE_SOURCE.TGFTP),
+    ),
     rawMetar: v.string(),
     seenAt: v.number(),
     sourceLastModifiedAt: v.optional(v.number()),
@@ -811,7 +820,12 @@ export const recordPublishRaceHit = internalMutationGeneric({
         reportTsUtc: args.reportTsUtc,
         rawMetar: args.rawMetar,
         ...(args.reportType ? { reportType: args.reportType } : {}),
-        ...(args.source === RACE_SOURCE.PREFLIGHT
+        ...(args.source === RACE_SOURCE.AEROWEB
+          ? {
+              aerowebRawMetar: args.rawMetar,
+              aerowebFirstSeenAt: args.seenAt,
+            }
+          : args.source === RACE_SOURCE.PREFLIGHT
           ? {
               preflightRawMetar: args.rawMetar,
               preflightFirstSeenAt: args.seenAt,
@@ -848,7 +862,14 @@ export const recordPublishRaceHit = internalMutationGeneric({
       patch.rawMetar = canonicalRawMetar;
     }
 
-    if (args.source === RACE_SOURCE.PREFLIGHT) {
+    if (args.source === RACE_SOURCE.AEROWEB) {
+      if (!existing.aerowebRawMetar) {
+        patch.aerowebRawMetar = args.rawMetar;
+      }
+      if (!Number.isFinite(existing.aerowebFirstSeenAt)) {
+        patch.aerowebFirstSeenAt = args.seenAt;
+      }
+    } else if (args.source === RACE_SOURCE.PREFLIGHT) {
       if (!existing.preflightRawMetar) {
         patch.preflightRawMetar = args.rawMetar;
       }
@@ -877,10 +898,14 @@ export const recordPublishRaceHit = internalMutationGeneric({
       patch.statusFirstSeenAt = args.statusSeenAt;
     }
 
-    const winnerState = computePublishRaceWinner(
-      patch.preflightFirstSeenAt ?? existing.preflightFirstSeenAt,
-      patch.tgftpFirstSeenAt ?? existing.tgftpFirstSeenAt,
-    );
+    const winnerState = computePublishRaceWinner({
+      [PUBLISH_RACE_WINNER.AEROWEB]:
+        patch.aerowebFirstSeenAt ?? existing.aerowebFirstSeenAt,
+      [PUBLISH_RACE_WINNER.PREFLIGHT]:
+        patch.preflightFirstSeenAt ?? existing.preflightFirstSeenAt,
+      [PUBLISH_RACE_WINNER.TGFTP]:
+        patch.tgftpFirstSeenAt ?? existing.tgftpFirstSeenAt,
+    });
     if (winnerState.winner) {
       patch.winner = winnerState.winner;
       patch.leadMs = winnerState.leadMs;
@@ -973,6 +998,39 @@ export const pollLatestNoaaPublishRace = actionGeneric({
   },
 });
 
+export const pollLatestAerowebPublishRace = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const hit = await fetchLatestAerowebMessage(stationIcao);
+    const raceRow = await ctx.runMutation("preflight:recordPublishRaceHit", {
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: hit.reportType,
+      source: RACE_SOURCE.AEROWEB,
+      rawMetar: hit.rawMetar,
+      seenAt: hit.seenAt,
+    });
+
+    return {
+      ok: true,
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: raceRow?.reportType ?? hit.reportType,
+      rawMetar: hit.rawMetar,
+      aerowebFirstSeenAt: raceRow?.aerowebFirstSeenAt ?? hit.seenAt,
+      winner: raceRow?.winner ?? null,
+      leadMs: raceRow?.leadMs ?? null,
+    };
+  },
+});
+
 export const fetchLatestWeatherComAirportCurrent = actionGeneric({
   args: {
     stationIcao: v.string(),
@@ -1044,6 +1102,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let errorCount = 0;
     let lastError = null;
     let lastPreflight = null;
+    let lastAeroweb = null;
     let lastTgftp = null;
     const touchedReportTimestamps = new Set();
 
@@ -1059,6 +1118,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let statusShape = null;
     let statusMetarRowFound = false;
     let statusFingerprintChangeCount = 0;
+    const aerowebSessionRef = { cookieHeader: null };
 
     while (Date.now() <= deadline) {
       try {
@@ -1072,16 +1132,15 @@ export const watchStationPublishRaceWindow = actionGeneric({
             })
           : Promise.resolve(null);
 
-        const [preflightHit, tgftpHit, statusResult] = await Promise.all([
-          fetchLatestPreflightRaceHit(stationIcao),
-          fetchLatestTgftpRaceHit(stationIcao),
+        const [raceResults, statusResult] = await Promise.all([
+          Promise.allSettled([
+            fetchLatestPreflightRaceHit(stationIcao),
+            fetchLatestAerowebMessage(stationIcao, aerowebSessionRef),
+            fetchLatestTgftpRaceHit(stationIcao),
+          ]),
           statusPromise,
         ]);
-
-        lastPreflight = preflightHit;
-        lastTgftp = tgftpHit;
-
-        const currentReportTs = preflightHit.row.obsTimeUtc;
+        const [preflightResult, aerowebResult, tgftpResult] = raceResults;
 
         // Detect status fingerprint changes.
         if (statusResult !== null && statusShape === null) {
@@ -1103,65 +1162,104 @@ export const watchStationPublishRaceWindow = actionGeneric({
           }
         }
 
-        // Associate pending status change with the current report.
-        // Because we poll status every ~5s, the typical case is that
-        // aerodromesv3 already shows the new report by the time we
-        // detect the fingerprint change.  We associate when:
-        //   (a) the current report is newer than the one at the previous
-        //       status poll (status changed while old report was showing,
-        //       now the new one appeared), OR
-        //   (b) the fingerprint just changed this iteration and the
-        //       current report is already the new one (both updated
-        //       between the previous and current status polls).
-        const isNewSincePreviousStatusPoll =
-          reportTsAtPreviousStatusPoll !== null &&
-          currentReportTs > reportTsAtPreviousStatusPoll;
-        const justDetectedChange =
-          shouldPollStatus && statusFingerprintChangeCount > 0 && pendingStatusSeenAt !== null;
-        const statusSeenAtForThisReport =
-          pendingStatusSeenAt !== null && (isNewSincePreviousStatusPoll || justDetectedChange)
-            ? pendingStatusSeenAt
-            : undefined;
+        const mutationCalls = [];
+        let isNewSincePreviousStatusPoll = false;
+        let statusSeenAtForThisReport;
 
-        // Update the previous-poll baseline after computing association.
-        if (shouldPollStatus) {
-          reportTsAtPreviousStatusPoll = currentReportTs;
+        if (preflightResult.status === "fulfilled") {
+          const preflightHit = preflightResult.value;
+          lastPreflight = preflightHit;
+
+          const currentReportTs = preflightHit.row.obsTimeUtc;
+          isNewSincePreviousStatusPoll =
+            reportTsAtPreviousStatusPoll !== null &&
+            currentReportTs > reportTsAtPreviousStatusPoll;
+          const justDetectedChange =
+            shouldPollStatus &&
+            statusFingerprintChangeCount > 0 &&
+            pendingStatusSeenAt !== null;
+          statusSeenAtForThisReport =
+            pendingStatusSeenAt !== null && (isNewSincePreviousStatusPoll || justDetectedChange)
+              ? pendingStatusSeenAt
+              : undefined;
+
+          if (shouldPollStatus) {
+            reportTsAtPreviousStatusPoll = currentReportTs;
+          }
+
+          mutationCalls.push(
+            ctx.runMutation("preflight:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: currentReportTs,
+              reportType: preflightHit.row.reportType,
+              source: RACE_SOURCE.PREFLIGHT,
+              rawMetar: preflightHit.row.rawMetar,
+              seenAt: preflightHit.seenAt,
+              ...(statusSeenAtForThisReport !== undefined
+                ? { statusSeenAt: statusSeenAtForThisReport }
+                : {}),
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            preflightResult.reason instanceof Error
+              ? preflightResult.reason.message
+              : String(preflightResult.reason);
         }
 
-        const [preflightRaceRow, tgftpRaceRow] = await Promise.all([
-          ctx.runMutation("preflight:recordPublishRaceHit", {
-            stationIcao,
-            reportTsUtc: currentReportTs,
-            reportType: preflightHit.row.reportType,
-            source: RACE_SOURCE.PREFLIGHT,
-            rawMetar: preflightHit.row.rawMetar,
-            seenAt: preflightHit.seenAt,
-            ...(statusSeenAtForThisReport !== undefined
-              ? { statusSeenAt: statusSeenAtForThisReport }
-              : {}),
-          }),
-          ctx.runMutation("preflight:recordPublishRaceHit", {
-            stationIcao,
-            reportTsUtc: tgftpHit.reportTsUtc,
-            source: RACE_SOURCE.TGFTP,
-            rawMetar: tgftpHit.rawMetar,
-            seenAt: tgftpHit.seenAt,
-            ...(Number.isFinite(tgftpHit.lastModifiedAt)
-              ? { sourceLastModifiedAt: tgftpHit.lastModifiedAt }
-              : {}),
-          }),
-        ]);
+        if (aerowebResult.status === "fulfilled") {
+          lastAeroweb = aerowebResult.value;
+          mutationCalls.push(
+            ctx.runMutation("preflight:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: aerowebResult.value.reportTsUtc,
+              reportType: aerowebResult.value.reportType,
+              source: RACE_SOURCE.AEROWEB,
+              rawMetar: aerowebResult.value.rawMetar,
+              seenAt: aerowebResult.value.seenAt,
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            aerowebResult.reason instanceof Error
+              ? aerowebResult.reason.message
+              : String(aerowebResult.reason);
+        }
 
-        // Clear once associated with a new report.
+        if (tgftpResult.status === "fulfilled") {
+          lastTgftp = tgftpResult.value;
+          mutationCalls.push(
+            ctx.runMutation("preflight:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: tgftpResult.value.reportTsUtc,
+              source: RACE_SOURCE.TGFTP,
+              rawMetar: tgftpResult.value.rawMetar,
+              seenAt: tgftpResult.value.seenAt,
+              ...(Number.isFinite(tgftpResult.value.lastModifiedAt)
+                ? { sourceLastModifiedAt: tgftpResult.value.lastModifiedAt }
+                : {}),
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            tgftpResult.reason instanceof Error
+              ? tgftpResult.reason.message
+              : String(tgftpResult.reason);
+        }
+
+        const raceRows = await Promise.all(mutationCalls);
+
         if (statusSeenAtForThisReport !== undefined && isNewSincePreviousStatusPoll) {
           pendingStatusSeenAt = null;
         }
 
-        if (preflightRaceRow?.reportTsUtc) {
-          touchedReportTimestamps.add(preflightRaceRow.reportTsUtc);
-        }
-        if (tgftpRaceRow?.reportTsUtc) {
-          touchedReportTimestamps.add(tgftpRaceRow.reportTsUtc);
+        for (const raceRow of raceRows) {
+          if (raceRow?.reportTsUtc) {
+            touchedReportTimestamps.add(raceRow.reportTsUtc);
+          }
         }
       } catch (error) {
         errorCount += 1;
@@ -1192,6 +1290,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
       statusFingerprintChangeCount,
       lastError,
       touchedReportCount: touchedReportTimestamps.size,
+      latestAerowebReportTsUtc: lastAeroweb?.reportTsUtc ?? null,
       latestPreflightReportTsUtc: lastPreflight?.row?.obsTimeUtc ?? null,
       latestTgftpReportTsUtc: lastTgftp?.reportTsUtc ?? null,
     };

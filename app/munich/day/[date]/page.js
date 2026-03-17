@@ -17,9 +17,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
 
-const STATION_ICAO = "SBGR";
-const STATION_NAME = "Guarulhos / Sao Paulo";
-const SAO_PAULO_TIMEZONE = "America/Sao_Paulo";
+const STATION_ICAO = "EDDM";
+const STATION_NAME = "Munich Airport";
+const MUNICH_TIMEZONE = "Europe/Berlin";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -38,9 +38,9 @@ function getDateParts(formatter, date) {
   return values;
 }
 
-function saoPauloTodayKey() {
+function munichTodayKey() {
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: SAO_PAULO_TIMEZONE,
+    timeZone: MUNICH_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -139,12 +139,12 @@ function formatStoredLocalDateTime(tsLocal) {
   return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
-function formatSaoPauloDateTimeSeconds(epochMs) {
+function formatMunichDateTimeSeconds(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: SAO_PAULO_TIMEZONE,
+    timeZone: MUNICH_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -179,9 +179,6 @@ function formatRaceWinner(winner) {
   if (winner === "aeroweb") {
     return "AEROWEB";
   }
-  if (winner === "redemet") {
-    return "REDEMET";
-  }
   if (winner === "tgftp") {
     return "NOAA tgftp";
   }
@@ -195,32 +192,28 @@ function formatLeadMs(leadMs) {
   if (!Number.isFinite(leadMs)) {
     return "—";
   }
+  if (leadMs > 0 && leadMs < 1000) {
+    return "<1s";
+  }
   if (leadMs < 120000) {
-    return `${Math.round(leadMs / 1000)}s`;
+    return `${(leadMs / 1000).toFixed(1)}s`;
   }
   return `${(leadMs / 60000).toFixed(1)} min`;
 }
 
-function formatBackfillMessage(result) {
-  if (!result?.ok) {
-    return "History backfill skipped.";
-  }
-  return `History backfill: saved ${result.insertedCount} new rows from ${result.rowCount} official messages.`;
-}
-
 function formatLivePollMessage(result) {
   if (!result?.ok) {
-    return "Latest official poll skipped.";
+    return "Latest AEROWEB poll skipped.";
   }
 
-  const firstSeenText = Number.isFinite(result.row?.redemetFirstSeenAt)
-    ? formatSaoPauloDateTimeSeconds(result.row.redemetFirstSeenAt)
+  const firstSeenText = Number.isFinite(result.row?.aerowebFirstSeenAt)
+    ? formatMunichDateTimeSeconds(result.row.aerowebFirstSeenAt)
     : null;
   const lagText = Number.isFinite(result.availabilityLagMs)
     ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
     : null;
 
-  return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
+  return `Latest AEROWEB poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
 }
 
 function buildLineDataset(rows, unit) {
@@ -243,7 +236,7 @@ function buildLineDataset(rows, unit) {
     .filter(Boolean);
 
   return {
-    label: "Official REDEMET",
+    label: "AEROWEB",
     data: points,
     borderColor: "#0f4c81",
     backgroundColor: "#0f4c81",
@@ -263,7 +256,7 @@ function buildLineDataset(rows, unit) {
   };
 }
 
-export default function SbgrDayPage() {
+export default function MunichDayPage() {
   const params = useParams();
   const router = useRouter();
   const date = String(params?.date ?? "");
@@ -272,18 +265,16 @@ export default function SbgrDayPage() {
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const inFlightRef = useRef(false);
-  const backfilledDateRef = useRef("");
 
   const isDateValid = isValidDate(date);
-  const saoPauloTodayDate = saoPauloTodayKey();
-  const isToday = isDateValid && date === saoPauloTodayDate;
+  const munichTodayDate = munichTodayKey();
+  const isToday = isDateValid && date === munichTodayDate;
   const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
-  const backfillDay = useAction("redemet:backfillDayStationMessages");
-  const pollLatest = useAction("redemet:pollLatestStationMetar");
+  const pollLatest = useAction("aeroweb:pollLatestStationMetar");
 
   const dayData = useQuery(
-    "redemet:getDayStationRows",
+    "aeroweb:getDayStationRows",
     isDateValid
       ? {
           stationIcao: STATION_ICAO,
@@ -291,7 +282,7 @@ export default function SbgrDayPage() {
         }
       : "skip",
   );
-  const raceData = useQuery("redemet:getRecentPublishRaceReports", {
+  const raceData = useQuery("aeroweb:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
     routineOnly: true,
@@ -313,6 +304,12 @@ export default function SbgrDayPage() {
       setLiveMessage("");
       return;
     }
+    if (!isToday) {
+      setLiveMessage(
+        "Historical EDDM dates depend on rows captured live from authenticated AEROWEB polling. No authenticated day-history backfill endpoint is wired yet.",
+      );
+      return;
+    }
 
     let cancelled = false;
 
@@ -322,30 +319,15 @@ export default function SbgrDayPage() {
       }
       inFlightRef.current = true;
       try {
-        const messages = [];
-
-        if (backfilledDateRef.current !== date) {
-          const backfillResult = await backfillDay({
-            stationIcao: STATION_ICAO,
-            date,
-          });
-          messages.push(formatBackfillMessage(backfillResult));
-          backfilledDateRef.current = date;
-        }
-
-        if (isToday) {
-          const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-          messages.push(formatLivePollMessage(pollResult));
-        }
-
+        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
         if (!cancelled) {
-          setLiveMessage(messages.join(" "));
+          setLiveMessage(formatLivePollMessage(pollResult));
         }
       } catch (error) {
         console.error(error);
         if (!cancelled) {
           const message = error instanceof Error ? error.message : String(error);
-          setLiveMessage(`SBGR sync failed: ${message}`);
+          setLiveMessage(`EDDM sync failed: ${message}`);
         }
       } finally {
         inFlightRef.current = false;
@@ -357,30 +339,18 @@ export default function SbgrDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, backfillDay, pollLatest]);
+  }, [date, isDateValid, isToday, pollLatest]);
 
   async function handleRefreshNow() {
-    if (!isDateValid || inFlightRef.current) {
+    if (!isDateValid || !isToday || inFlightRef.current) {
       return;
     }
 
     setIsRefreshing(true);
     inFlightRef.current = true;
     try {
-      const messages = [];
-      const backfillResult = await backfillDay({
-        stationIcao: STATION_ICAO,
-        date,
-      });
-      backfilledDateRef.current = date;
-      messages.push(formatBackfillMessage(backfillResult));
-
-      if (isToday) {
-        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-        messages.push(formatLivePollMessage(pollResult));
-      }
-
-      setLiveMessage(messages.join(" "));
+      const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
+      setLiveMessage(formatLivePollMessage(pollResult));
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -396,7 +366,7 @@ export default function SbgrDayPage() {
     if (!isValidDate(inputDate)) {
       return;
     }
-    router.push(`/sbgr/day/${inputDate}`);
+    router.push(`/munich/day/${inputDate}`);
   }
 
   const chartData = useMemo(
@@ -441,7 +411,7 @@ export default function SbgrDayPage() {
           type: "linear",
           min: 0,
           max: 1439,
-          title: { display: true, text: "Local Time (America/Sao_Paulo)" },
+          title: { display: true, text: "Local Time (Europe/Berlin)" },
           ticks: {
             stepSize: 60,
             callback(value) {
@@ -461,16 +431,16 @@ export default function SbgrDayPage() {
     return (
       <main className="min-h-screen px-4 py-8 md:px-8">
         <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-6">
-          <h1 className="text-2xl font-semibold text-red-800">Invalid SBGR date</h1>
+          <h1 className="text-2xl font-semibold text-red-800">Invalid Munich date</h1>
           <p className="mt-2 text-sm text-red-700">
             Use a `YYYY-MM-DD` date in the route.
           </p>
           <div className="mt-4">
             <Link
-              href="/sbgr/today"
+              href="/munich/today"
               className="inline-flex rounded-full border border-red-300 px-4 py-2 text-sm font-semibold text-red-800"
             >
-              Open SBGR today
+              Open Munich today
             </Link>
           </div>
         </div>
@@ -486,12 +456,14 @@ export default function SbgrDayPage() {
             STATION {STATION_ICAO}
           </p>
           <h1 className="mt-3 text-2xl font-semibold text-foreground">
-            {STATION_NAME} Official METAR Day Chart
+            {STATION_NAME} METAR Day Chart
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
-            Official SBGR hourly METAR and off-hour SPECI from REDEMET. Today is
-            kept live from the official latest endpoint; selected days are backfilled
-            from REDEMET&apos;s message-history form.
+            Authenticated AEROWEB `showmessage.php` polling for EDDM, with a
+            recent publish-race table against NOAA `tgftp`. Today is kept live
+            from the authenticated AEROWEB page; older dates can only show rows
+            we already captured live because a day-history endpoint is not
+            confirmed yet.
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -502,15 +474,15 @@ export default function SbgrDayPage() {
               Home
             </Link>
             <Link
-              href="/sbgr/today"
+              href="/munich/today"
               className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 hover:border-sky-400"
             >
-              Current Date {saoPauloTodayDate}
+              Current Date {munichTodayDate}
             </Link>
             {quickPreviousDates.map((previousDate) => (
               <Link
                 key={previousDate}
-                href={`/sbgr/day/${previousDate}`}
+                href={`/munich/day/${previousDate}`}
                 className="inline-flex rounded-full border border-black/15 bg-white/70 px-4 py-2 text-sm font-semibold text-black hover:border-black"
               >
                 {previousDate}
@@ -519,11 +491,11 @@ export default function SbgrDayPage() {
           </div>
 
           <form onSubmit={handleGoToDate} className="mt-4 flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium text-black/70" htmlFor="sbgr-day-picker">
+            <label className="text-sm font-medium text-black/70" htmlFor="munich-day-picker">
               Pick Date
             </label>
             <input
-              id="sbgr-day-picker"
+              id="munich-day-picker"
               type="date"
               value={inputDate}
               onChange={(event) => setInputDate(event.target.value)}
@@ -557,20 +529,27 @@ export default function SbgrDayPage() {
             <button
               type="button"
               onClick={handleRefreshNow}
-              disabled={isRefreshing}
+              disabled={isRefreshing || !isToday}
               className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isRefreshing ? "Refreshing..." : "Refresh from REDEMET"}
+              {isRefreshing ? "Refreshing..." : "Refresh Current AEROWEB"}
             </button>
             {isToday ? (
               <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
-                Live official ingest enabled
+                Live authenticated ingest enabled
               </span>
-            ) : null}
+            ) : (
+              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-amber-900">
+                Historical capture only
+              </span>
+            )}
           </div>
 
           <p className="mt-4 text-sm text-black/70">
-            {liveMessage || "Waiting for REDEMET sync..."}
+            {liveMessage ||
+              (isToday
+                ? "Waiting for AEROWEB sync..."
+                : "Historical EDDM dates depend on previously captured live AEROWEB rows.")}
           </p>
         </header>
 
@@ -620,8 +599,8 @@ export default function SbgrDayPage() {
               {summary?.obsCount ?? 0}
             </p>
             <p className="mt-2 text-sm text-black/65">
-              Hourly METAR with off-hour SPECI mixed into the same official day
-              series.
+              AEROWEB routine METAR with any captured off-cycle SPECI in the same
+              stored day series.
             </p>
           </div>
         </section>
@@ -643,7 +622,7 @@ export default function SbgrDayPage() {
               <Line data={chartData} options={chartOptions} />
             ) : (
               <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No SBGR observations stored for this date yet.
+                No EDDM observations stored for this date yet.
               </div>
             )}
           </div>
@@ -661,16 +640,10 @@ export default function SbgrDayPage() {
             <div>
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
-                Recent routine hourly SBGR METAR first-seen timing across the
-                official REDEMET `mensagens/metar` endpoint, authenticated
-                AEROWEB, and NOAA `tgftp`. Times in this table are shown in
-                America/Chicago. Winner and lead are computed from the earliest
-                two public first-seen timestamps. `REDEMET Received` is the
-                message endpoint&apos;s own `recebimento` timestamp, which should
-                sit closer to Banco OPMET than the slower summary-style public
-                layers. Off-hour REDEMET `SPECI` stay in the day chart and raw
-                table, but are excluded here because this watcher is centered
-                on the top-of-hour publication window.
+                Recent routine half-hour EDDM METAR first-seen timing across the
+                authenticated AEROWEB `showmessage.php` endpoint and NOAA `tgftp`.
+                Times in this table are shown in America/Chicago. Winner and lead
+                are computed from the earlier of the two first-seen timestamps.
               </p>
             </div>
           </div>
@@ -681,8 +654,6 @@ export default function SbgrDayPage() {
                   <th className="px-3 py-2 font-semibold">Report Time</th>
                   <th className="px-3 py-2 font-semibold">Winner</th>
                   <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">REDEMET Seen</th>
-                  <th className="px-3 py-2 font-semibold">REDEMET Received</th>
                   <th className="px-3 py-2 font-semibold">AEROWEB Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
@@ -703,8 +674,6 @@ export default function SbgrDayPage() {
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
                             row.winner === "aeroweb"
-                              ? "bg-cyan-50 text-cyan-900"
-                              : row.winner === "redemet"
                               ? "bg-emerald-50 text-emerald-800"
                               : row.winner === "tgftp"
                                 ? "bg-amber-50 text-amber-900"
@@ -720,12 +689,6 @@ export default function SbgrDayPage() {
                         {formatLeadMs(row.leadMs)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.redemetFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.redemetReceivedAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
                         {formatChicagoDateTimeSeconds(row.aerowebFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
@@ -735,17 +698,13 @@ export default function SbgrDayPage() {
                         {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ??
-                          row.aerowebRawMetar ??
-                          row.redemetRawMetar ??
-                          row.tgftpRawMetar ??
-                          "—"}
+                        {row.rawMetar ?? row.aerowebRawMetar ?? row.tgftpRawMetar ?? "—"}
                       </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={9} className="px-3 py-6 text-center text-black/55">
+                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
                       No publish-race rows stored yet.
                     </td>
                   </tr>
@@ -796,8 +755,8 @@ export default function SbgrDayPage() {
                           : formatTemp(row.tempF, "F")}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.redemetFirstSeenAt
-                          ? formatSaoPauloDateTimeSeconds(row.redemetFirstSeenAt)
+                        {row.aerowebFirstSeenAt
+                          ? formatMunichDateTimeSeconds(row.aerowebFirstSeenAt)
                           : "—"}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">

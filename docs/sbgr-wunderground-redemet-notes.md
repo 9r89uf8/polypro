@@ -1953,3 +1953,21 @@ Current best practical strategy:
   - self-operated VDL2/ACARS receiver near SBGR capturing D-ATIS responses
     (bypasses the entire OPMET chain, potentially `3-8 minutes` ahead of any
     web source, but intermittent and hardware-dependent)
+
+## AEROWEB Cross-Check
+
+Verified on `2026-03-17` with a normal authenticated `aviation.meteo.fr`
+session:
+
+- `https://aviation.meteo.fr/showmessage.php?code=SBGR`
+
+Sample response:
+
+- `METAR SBGR 170000Z 09004KT CAVOK 23/19 Q1017=`
+
+Practical read:
+
+- `Meteo-France` `AEROWEB` also exposes `SBGR`, not just French stations.
+- That makes `AEROWEB` another public-ish authenticated web contender worth
+  racing against `REDEMET mensagens/metar` and `NOAA tgftp`.
+- It is still a normal logged-in web endpoint, not a no-credential public API.

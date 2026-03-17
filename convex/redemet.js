@@ -4,6 +4,7 @@ import {
   queryGeneric,
 } from "convex/server";
 import { v } from "convex/values";
+import { fetchLatestAerowebMessage } from "./aerowebShared.js";
 
 const SAO_PAULO_TIMEZONE = "America/Sao_Paulo";
 const REDEMET_HISTORY_FORM_URL =
@@ -13,6 +14,7 @@ const NOAA_LATEST_METAR_BASE_URL =
 const REDEMET_FETCH_TIMEOUT_MS = 25000;
 const REDEMET_EARLY_UTC_HOURS_FOR_LOCAL_DAY = 3;
 const RACE_SOURCE = {
+  AEROWEB: "aeroweb",
   AISWEB_CANONICAL: "aiswebCanonical",
   AISWEB: "aisweb",
   PWA: "pwa",
@@ -20,6 +22,7 @@ const RACE_SOURCE = {
   TGFTP: "tgftp",
 };
 const PUBLISH_RACE_WINNER = {
+  AEROWEB: "aeroweb",
   AISWEB_CANONICAL: "aiswebCanonical",
   AISWEB: "aisweb",
   PWA: "pwa",
@@ -1094,6 +1097,7 @@ export const recordPublishRaceHit = internalMutationGeneric({
     reportTsUtc: v.number(),
     reportType: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
     source: v.union(
+      v.literal(RACE_SOURCE.AEROWEB),
       v.literal(RACE_SOURCE.AISWEB_CANONICAL),
       v.literal(RACE_SOURCE.AISWEB),
       v.literal(RACE_SOURCE.PWA),
@@ -1123,7 +1127,12 @@ export const recordPublishRaceHit = internalMutationGeneric({
         reportTsUtc: args.reportTsUtc,
         rawMetar: args.rawMetar,
         ...(args.reportType ? { reportType: args.reportType } : {}),
-        ...(args.source === RACE_SOURCE.AISWEB
+        ...(args.source === RACE_SOURCE.AEROWEB
+          ? {
+              aerowebRawMetar: args.rawMetar,
+              aerowebFirstSeenAt: args.seenAt,
+            }
+          : args.source === RACE_SOURCE.AISWEB
           ? {
               aiswebRawMetar: args.rawMetar,
               aiswebFirstSeenAt: args.seenAt,
@@ -1175,7 +1184,17 @@ export const recordPublishRaceHit = internalMutationGeneric({
       patch.rawMetar = canonicalRawMetar;
     }
 
-    if (args.source === RACE_SOURCE.AISWEB_CANONICAL) {
+    if (args.source === RACE_SOURCE.AEROWEB) {
+      if (!existing.aerowebRawMetar) {
+        patch.aerowebRawMetar = args.rawMetar;
+      }
+      if (
+        !Number.isFinite(existing.aerowebFirstSeenAt) ||
+        args.seenAt < existing.aerowebFirstSeenAt
+      ) {
+        patch.aerowebFirstSeenAt = args.seenAt;
+      }
+    } else if (args.source === RACE_SOURCE.AISWEB_CANONICAL) {
       if (!existing.aiswebCanonicalRawMetar) {
         patch.aiswebCanonicalRawMetar = args.rawMetar;
       }
@@ -1241,6 +1260,8 @@ export const recordPublishRaceHit = internalMutationGeneric({
     }
 
     const winnerState = computePublishRaceWinner({
+      [PUBLISH_RACE_WINNER.AEROWEB]:
+        patch.aerowebFirstSeenAt ?? existing.aerowebFirstSeenAt,
       [PUBLISH_RACE_WINNER.AISWEB_CANONICAL]:
         patch.aiswebCanonicalFirstSeenAt ?? existing.aiswebCanonicalFirstSeenAt,
       [PUBLISH_RACE_WINNER.AISWEB]:
@@ -1466,17 +1487,20 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let errorCount = 0;
     let lastError = null;
     let lastRedemet = null;
+    let lastAeroweb = null;
     let lastTgftp = null;
     const touchedReportTimestamps = new Set();
+    const aerowebSessionRef = { cookieHeader: null };
 
     while (Date.now() <= deadline) {
       try {
         const results = await Promise.allSettled([
           fetchLatestRedemetMessageRaceHit(stationIcao),
+          fetchLatestAerowebMessage(stationIcao, aerowebSessionRef),
           fetchLatestTgftpRaceHit(stationIcao),
         ]);
 
-        const [redemetResult, tgftpResult] = results;
+        const [redemetResult, aerowebResult, tgftpResult] = results;
         const mutationCalls = [];
 
         if (redemetResult.status === "fulfilled") {
@@ -1500,6 +1524,26 @@ export const watchStationPublishRaceWindow = actionGeneric({
             redemetResult.reason instanceof Error
               ? redemetResult.reason.message
               : String(redemetResult.reason);
+        }
+
+        if (aerowebResult.status === "fulfilled") {
+          lastAeroweb = aerowebResult.value;
+          mutationCalls.push(
+            ctx.runMutation("redemet:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: aerowebResult.value.reportTsUtc,
+              reportType: aerowebResult.value.reportType,
+              source: RACE_SOURCE.AEROWEB,
+              rawMetar: aerowebResult.value.rawMetar,
+              seenAt: aerowebResult.value.seenAt,
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            aerowebResult.reason instanceof Error
+              ? aerowebResult.reason.message
+              : String(aerowebResult.reason);
         }
 
         if (tgftpResult.status === "fulfilled") {
@@ -1554,6 +1598,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
       errorCount,
       lastError,
       touchedReportCount: touchedReportTimestamps.size,
+      latestAerowebReportTsUtc: lastAeroweb?.reportTsUtc ?? null,
       latestRedemetReportTsUtc: lastRedemet?.reportTsUtc ?? null,
       latestTgftpReportTsUtc: lastTgftp?.reportTsUtc ?? null,
     };

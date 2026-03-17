@@ -40,7 +40,7 @@ What this page displays:
   - x-axis is `America/Sao_Paulo` local time
 - `Latest Raw METAR` panel
 - `Publish Race` table showing recent first-seen timing across the official
-  REDEMET `mensagens/metar` endpoint and NOAA `tgftp`
+  REDEMET `mensagens/metar` endpoint, authenticated AEROWEB, and NOAA `tgftp`
   - routine hourly `METAR` rows only
   - off-hour `SPECI` remain in the chart and raw observations table
   - publish-race timestamps are displayed in `America/Chicago`
@@ -48,6 +48,8 @@ What this page displays:
     - `REDEMET Seen` from the app's own short-interval watcher
     - `REDEMET Received` from the message endpoint's official `recebimento`
       field
+    - `AEROWEB Seen` from the authenticated Meteo-France AEROWEB `showmessage`
+      page
 - Raw observations table:
   - `Local Time`
   - `Type`
@@ -74,6 +76,7 @@ Behavior details:
 - The publish-race logger is separate from the day chart ingest:
   - REDEMET first-seen times come from the `mensagens/metar` race watcher, not
     from the slower `aerodromos/info` summary poll
+  - AEROWEB first-seen times come from the same 1-second publish-race watcher
   - REDEMET `recebimento` is also stored for each message row
   - NOAA `tgftp` first-seen times are written by the race logger
   - winner/lead are computed from the earliest two sources seen for the same
@@ -89,7 +92,7 @@ Behavior details:
       alias, and REDEMET `pwa` route all lagged the closer
       `REDEMET mensagens/metar` path
     - the live race logger is now intentionally narrowed to
-      `mensagens/metar` vs `tgftp`
+      `mensagens/metar` vs authenticated AEROWEB vs `tgftp`
     - `mensagens/metar` is still the only one exposing `recebimento`
     - as of March 15, 2026 the live watcher now samples this race every `1s`
       by default so near-ties are less likely to be artifacts of the older
@@ -104,6 +107,10 @@ Latest official SBGR JSON:
 Latest official SBGR METAR messages:
 
 - `https://api-redemet.decea.mil.br/mensagens/metar/SBGR?api_key=...&data_ini=YYYYMMDDHH&data_fim=YYYYMMDDHH&page_tam=24`
+
+Authenticated AEROWEB SBGR message page used in the publish-race logger:
+
+- `https://aviation.meteo.fr/showmessage.php?code=SBGR`
 
 Historical official message search:
 
@@ -128,8 +135,8 @@ Rows are then filtered back down to the selected `America/Sao_Paulo` local date.
 - `redemetPublishRaceReports`
   - one row per station/report timestamp
   - stores REDEMET `mensagens/metar` first-seen time, REDEMET `recebimento`,
-    NOAA `tgftp` first-seen time, optional `tgftp` `Last-Modified`, winner,
-    and lead
+    authenticated AEROWEB first-seen time, NOAA `tgftp` first-seen time,
+    optional `tgftp` `Last-Modified`, winner, and lead
   - may also contain off-hour `SPECI` rows captured by REDEMET, but the day
     page race table hides those by default
 
@@ -145,8 +152,8 @@ Convex cron:
   - station argument is `SBGR`
   - starts at minute `54`
   - passes `durationMs=600000`, so the watch runs for 10 minutes
-  - polls REDEMET `mensagens/metar` and NOAA `tgftp` every `1s` by default from
-    `:54` through just after the top of the hour so first-seen timing is more
-    precise than a once-per-minute cron
+  - polls REDEMET `mensagens/metar`, authenticated AEROWEB, and NOAA `tgftp`
+    every `1s` by default from `:54` through just after the top of the hour so
+    first-seen timing is more precise than a once-per-minute cron
 
 This keeps the current local day updated even if no browser is open.

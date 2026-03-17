@@ -15,7 +15,7 @@ export default function Home() {
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-black/70">
           Compare KORD monthly manual vs METAR highs, open live airport day charts,
-          track forecast snapshots, review official SBGR, NZWN, and Paris METAR
+          track forecast snapshots, review SBGR, NZWN, Paris, and Munich METAR
           history, and keep notes in one place.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
@@ -60,6 +60,12 @@ export default function Home() {
             className="inline-flex items-center rounded-full border border-cyan-200 bg-cyan-50 px-5 py-2.5 text-sm font-semibold text-cyan-900 transition hover:-translate-y-0.5 hover:border-cyan-400"
           >
             Open Paris Official Day Chart
+          </Link>
+          <Link
+            href="/munich/today"
+            className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-5 py-2.5 text-sm font-semibold text-orange-900 transition hover:-translate-y-0.5 hover:border-orange-400"
+          >
+            Open Munich METAR Day Chart
           </Link>
           <Link
             href="/polymarket/chicago-weather"
