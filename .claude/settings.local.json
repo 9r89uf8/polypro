@@ -185,7 +185,8 @@
       "Bash(bunzip2)",
       "WebFetch(domain:dwd.api.bund.dev)",
       "WebFetch(domain:wis2box.dwd.de)",
-      "WebFetch(domain:global.amo.go.kr)"
+      "WebFetch(domain:global.amo.go.kr)",
+      "WebFetch(domain:www.jma-net.go.jp)"
     ]
   }
 }

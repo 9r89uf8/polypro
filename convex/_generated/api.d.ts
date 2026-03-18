@@ -16,6 +16,7 @@ import type * as http from "../http.js";
 import type * as kordPhone from "../kordPhone.js";
 import type * as kordPhoneNode from "../kordPhoneNode.js";
 import type * as madis from "../madis.js";
+import type * as madrid from "../madrid.js";
 import type * as notes from "../notes.js";
 import type * as nzwnWeather from "../nzwnWeather.js";
 import type * as parisWeather from "../parisWeather.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   kordPhone: typeof kordPhone;
   kordPhoneNode: typeof kordPhoneNode;
   madis: typeof madis;
+  madrid: typeof madrid;
   notes: typeof notes;
   nzwnWeather: typeof nzwnWeather;
   parisWeather: typeof parisWeather;

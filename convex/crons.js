@@ -104,6 +104,26 @@ crons.cron(
     { stationIcao: "LFPG" },
 );
 
+// Runs only around the expected LEMD routine publication windows so the
+// authenticated AEMET AMA latest-METAR flow stays fresh without polling all
+// day.
+crons.cron(
+    "madrid_aemet_latest_window_minutes",
+    "0-1,29-31,58-59 * * * *",
+    api.madrid.pollLatestStationMetar,
+    { stationIcao: "LEMD" },
+);
+
+// Runs every minute so the NOAA side of the Madrid publish-race experiment is
+// always sampled, even when mirrored publication drifts past the nominal
+// half-hour boundaries.
+crons.cron(
+    "madrid_tgftp_publish_race_every_minute",
+    "* * * * *",
+    api.madrid.pollLatestNoaaPublishRace,
+    { stationIcao: "LEMD" },
+);
+
 // Runs only around the expected RKSI routine publication windows so the
 // official AMO latest METAR endpoint stays fresh without minute-by-minute
 // background polling all day.
