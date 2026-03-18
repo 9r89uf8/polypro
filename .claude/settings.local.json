@@ -170,7 +170,21 @@
       "WebFetch(domain:gopreflight.co.nz)",
       "Bash(grep:*)",
       "WebFetch(domain:aviation.meteo.fr)",
-      "WebFetch(domain:metar.vatsim.net)"
+      "WebFetch(domain:metar.vatsim.net)",
+      "WebFetch(domain:opendata.dwd.de)",
+      "WebFetch(domain:w1.weather.gov)",
+      "WebFetch(domain:weather.noaa.gov)",
+      "WebFetch(domain:www.faa.gov)",
+      "WebFetch(domain:www.dwd.de)",
+      "WebFetch(domain:brightsky.dev)",
+      "WebFetch(domain:open-meteo.com)",
+      "WebFetch(domain:checkwx.com)",
+      "WebFetch(domain:checkwxapi.com)",
+      "WebFetch(domain:dataservice.accuweather.com)",
+      "WebFetch(domain:api.brightsky.dev)",
+      "Bash(bunzip2)",
+      "WebFetch(domain:dwd.api.bund.dev)",
+      "WebFetch(domain:wis2box.dwd.de)"
     ]
   }
 }

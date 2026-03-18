@@ -195,6 +195,91 @@ Practical read:
 - `AEROWEB` is a real pollable authenticated HTTPS surface for Munich right now
 - it is not the German official origin, but it is operationally useful
 
+## Public WIS2 surface-observation monitor
+
+I also verified a real public `WIS2` discovery record for the DWD surface
+observation dataset.
+
+Public discovery record:
+
+- `https://wis2-gdc.weather.gc.ca/collections/wis2-discovery-metadata/items/urn%3Awmo%3Amd%3Ade-dwd%3Aweather.observations?f=json`
+
+What it publishes:
+
+- dataset title:
+  - `Surface Weather Observations`
+- topic:
+  - `cache/a/wis2/de-dwd/data/core/weather/surface-based-observations/synop`
+- public broker example:
+  - `mqtts://everyone:everyone@globalbroker.meteo.fr:8883`
+- public raw-data link:
+  - `https://wis2.dwd.de/de-dwd/observations/`
+
+Important caveat:
+
+- this is a public DWD `surface-based-observations/synop` feed, not a confirmed
+  public raw `METAR` feed
+- it is still useful because it is official, push-based, and may show Munich
+  surface data before downstream METAR dissemination layers
+
+Munich station identifier:
+
+- OSCAR station lookup for the airport coordinates returns:
+  - station name: `MUENCHEN`
+  - WIGOS station identifier: `0-20000-0-10870`
+  - latitude / longitude: `48.347741`, `11.813385`
+
+In-repo watcher:
+
+- `scripts/watch-eddm-wis2.mjs`
+
+What it does:
+
+- subscribes to the public DWD `WIS2` topic above
+- filters notifications for `MUENCHEN` / `0-20000-0-10870`
+- logs the notification `datetime`, `pubtime`, station identifier, and canonical
+  BUFR URL
+- fetches a current `tgftp` snapshot at match time for context
+
+How to run it:
+
+- `npm run watch:eddm-wis2`
+
+Useful env overrides:
+
+- `WIS2_EXIT_ON_MATCH=1`
+  - stop after the first matching Munich notification
+- `WIS2_TIMEOUT_MS=3600000`
+  - keep watching for one hour
+- `WIS2_BROKER_URL=mqtts://everyone:everyone@wis2globalbroker.nws.noaa.gov:8883`
+  - switch to the NOAA global broker mirror if the default broker times out
+- `WIS2_BROKER_URL=mqtts://everyone:everyone@gb.wis.cma.cn:8883`
+  - switch to the CMA global broker mirror if needed
+- `WIS2_PRINT_ALL=1`
+  - print every notification on the subscribed topic
+- `WIS2_TOPIC=cache/a/wis2/+/data/core/weather/surface-based-observations/synop`
+  - widen to a cross-provider wildcard for payload/debug work
+
+Live broker verification:
+
+- on `2026-03-17 03:37 UTC`, an unrestricted test run successfully connected to
+  `mqtts://everyone:everyone@globalbroker.meteo.fr:8883`
+- the watcher subscribed successfully and immediately received a real wildcard
+  notification on:
+  - `cache/a/wis2/ng-nimet/data/core/weather/surface-based-observations/synop`
+- that confirms the public broker and the in-repo watcher are operational
+- it does not yet prove that `MUENCHEN` / `0-20000-0-10870` is present on the
+  public DWD topic, because that run exited on the first non-Munich wildcard
+  message for payload validation
+
+Practical read:
+
+- this gives us a real public push subscriber for official DWD surface
+  observations near Munich
+- it does not yet prove a faster public `EDDM` `METAR` source
+- it is the best current public DWD-side monitoring tool I found that is
+  closer to origin than `tgftp`
+
 ## Measured AEROWEB vs NOAA tgftp race
 
 I ran a live race around the next `EDDM` update after the previous
@@ -267,6 +352,8 @@ If the goal is "find the earliest official Munich source", the next steps are:
 - `https://www.dwd.de/luftfahrt`
 - `https://www.dwd.de/EN/ourservices/aviation_lf_10_free_aeronautical_meteorological_products/free_aeronautical_meteorological_products_node.html`
 - `https://www.dwd.de/EN/ourservices/aviation_lf_11_aviation_weather_operations_services/weather_%20observation%20_node_20.html`
+- `https://wis2-gdc.weather.gc.ca/collections/wis2-discovery-metadata/items/urn%3Awmo%3Amd%3Ade-dwd%3Aweather.observations?f=json`
+- `https://oscar.wmo.int/surface/rest/api/search/station/?latitudeMin=48.30&latitudeMax=48.40&longitudeMin=11.70&longitudeMax=11.90`
 - `https://flugwetter.de`
 - `https://www.flugwetter.de/`
 - `https://www.flugwetter.de/fw/warn/sitemap.htm`

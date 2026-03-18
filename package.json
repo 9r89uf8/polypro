@@ -5,13 +5,15 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "watch:eddm-wis2": "node scripts/watch-eddm-wis2.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.76",
     "chart.js": "^4.5.1",
     "chartjs-plugin-annotation": "^3.1.0",
     "convex": "^1.32.0",
+    "mqtt": "^5.15.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-chartjs-2": "^5.3.0",
