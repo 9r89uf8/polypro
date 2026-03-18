@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-const SAO_PAULO_TIMEZONE = "America/Sao_Paulo";
+const SEOUL_TIMEZONE = "Asia/Seoul";
 
 function getDateParts(formatter, date) {
   const parts = formatter.formatToParts(date);
@@ -15,9 +15,9 @@ function getDateParts(formatter, date) {
   return values;
 }
 
-function saoPauloTodayKey() {
+function seoulTodayKey() {
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: SAO_PAULO_TIMEZONE,
+    timeZone: SEOUL_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -26,6 +26,6 @@ function saoPauloTodayKey() {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-export default function SbgrTodayRedirectPage() {
-  redirect(`/sbgr/day/${saoPauloTodayKey()}`);
+export default function SeoulTodayRedirectPage() {
+  redirect(`/seoul/day/${seoulTodayKey()}`);
 }

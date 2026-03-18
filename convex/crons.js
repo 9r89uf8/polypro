@@ -45,25 +45,6 @@ crons.cron(
     { stationIcao: "KORD" },
 );
 
-// Runs every minute so the official REDEMET latest SBGR METAR/SPECI feed is
-// captured continuously even without an open browser tab.
-crons.cron(
-    "sbgr_redemet_latest_every_minute",
-    "* * * * *",
-    api.redemet.pollLatestStationMetar,
-    { stationIcao: "SBGR" },
-);
-
-// Starts before the hour and keeps watching through shortly after it so the
-// REDEMET mensagens/metar, authenticated AEROWEB, and NOAA tgftp first-seen
-// times are measured with finer resolution than the minute cron.
-crons.cron(
-    "sbgr_publish_race_watch_minute_54",
-    "54 * * * *",
-    api.redemet.watchStationPublishRaceWindow,
-    { stationIcao: "SBGR", durationMs: 10 * 60 * 1000 },
-);
-
 // Runs every minute so the official NZWN PreFlight latest METAR feed is
 // captured continuously even without an open browser tab.
 crons.cron(
@@ -103,11 +84,12 @@ crons.cron(
     { stationIcao: "NZWN", durationMs: 15 * 60 * 1000 },
 );
 
-// Runs every minute so the authenticated AEROWEB latest LFPG METAR feed is
-// captured continuously even without an open browser tab.
+// Runs only around the expected LFPG routine publication windows so the
+// authenticated AEROWEB latest METAR feed stays fresh without second-by-second
+// background polling.
 crons.cron(
-    "paris_aeroweb_latest_every_minute",
-    "* * * * *",
+    "paris_aeroweb_latest_window_minutes",
+    "0-1,29-31,58-59 * * * *",
     api.aeroweb.pollLatestStationMetar,
     { stationIcao: "LFPG" },
 );
@@ -122,44 +104,24 @@ crons.cron(
     { stationIcao: "LFPG" },
 );
 
-// Starts one minute before both routine LFPG boundaries and keeps watching
-// through the usual post-publication window so AEROWEB and NOAA tgftp
-// first-seen times are measured more precisely than the minute fallback polls.
+// Runs only around the expected RKSI routine publication windows so the
+// official AMO latest METAR endpoint stays fresh without minute-by-minute
+// background polling all day.
 crons.cron(
-    "paris_publish_race_watch_minute_29_59",
-    "29,59 * * * *",
-    api.aeroweb.watchStationPublishRaceWindow,
-    { stationIcao: "LFPG", durationMs: 10 * 60 * 1000 },
+    "seoul_amo_latest_window_minutes",
+    "0-1,29-31,58-59 * * * *",
+    api.seoul.pollLatestStationMetar,
+    { stationIcao: "RKSI" },
 );
 
-// Runs every minute so the authenticated AEROWEB latest EDDM METAR feed is
-// captured continuously even without an open browser tab.
+// Runs every minute so the NOAA side of the RKSI publish-race experiment is
+// always sampled, even when mirrored publication drifts past the nominal
+// half-hour boundaries.
 crons.cron(
-    "munich_aeroweb_latest_every_minute",
+    "seoul_tgftp_publish_race_every_minute",
     "* * * * *",
-    api.aeroweb.pollLatestStationMetar,
-    { stationIcao: "EDDM" },
-);
-
-// Runs every minute so the NOAA side of the Munich publish-race experiment is
-// always sampled, even when routine publication drifts a little past the
-// expected half-hour marks.
-crons.cron(
-    "munich_tgftp_publish_race_every_minute",
-    "* * * * *",
-    api.aeroweb.pollLatestNoaaPublishRace,
-    { stationIcao: "EDDM" },
-);
-
-// Starts one minute before the observed EDDM :20 and :50 routine boundaries
-// and keeps watching through the usual post-publication window so AEROWEB and
-// NOAA tgftp first-seen times are measured more precisely than the minute
-// fallback polls.
-crons.cron(
-    "munich_publish_race_watch_minute_19_49",
-    "19,49 * * * *",
-    api.aeroweb.watchStationPublishRaceWindow,
-    { stationIcao: "EDDM", durationMs: 10 * 60 * 1000 },
+    api.seoul.pollLatestNoaaPublishRace,
+    { stationIcao: "RKSI" },
 );
 
 // Runs every hour and stores a new KORD snapshot:

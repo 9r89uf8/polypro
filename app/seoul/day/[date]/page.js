@@ -17,9 +17,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
 
-const STATION_ICAO = "EDDM";
-const STATION_NAME = "Munich Airport";
-const MUNICH_TIMEZONE = "Europe/Berlin";
+const STATION_ICAO = "RKSI";
+const STATION_NAME = "Incheon International";
+const SEOUL_TIMEZONE = "Asia/Seoul";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -38,9 +38,9 @@ function getDateParts(formatter, date) {
   return values;
 }
 
-function munichTodayKey() {
+function seoulTodayKey() {
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: MUNICH_TIMEZONE,
+    timeZone: SEOUL_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -139,12 +139,12 @@ function formatStoredLocalDateTime(tsLocal) {
   return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
-function formatMunichDateTimeSeconds(epochMs) {
+function formatSeoulDateTimeSeconds(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
   const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: MUNICH_TIMEZONE,
+    timeZone: SEOUL_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -176,8 +176,8 @@ function formatChicagoDateTimeSeconds(epochMs) {
 }
 
 function formatRaceWinner(winner) {
-  if (winner === "aeroweb") {
-    return "AEROWEB";
+  if (winner === "amo") {
+    return "AMO/KMA";
   }
   if (winner === "tgftp") {
     return "NOAA tgftp";
@@ -203,17 +203,17 @@ function formatLeadMs(leadMs) {
 
 function formatLivePollMessage(result) {
   if (!result?.ok) {
-    return "Latest AEROWEB poll skipped.";
+    return "Latest official poll skipped.";
   }
 
-  const firstSeenText = Number.isFinite(result.row?.aerowebFirstSeenAt)
-    ? formatMunichDateTimeSeconds(result.row.aerowebFirstSeenAt)
+  const firstSeenText = Number.isFinite(result.row?.amoFirstSeenAt)
+    ? formatSeoulDateTimeSeconds(result.row.amoFirstSeenAt)
     : null;
   const lagText = Number.isFinite(result.availabilityLagMs)
     ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
     : null;
 
-  return `Latest AEROWEB poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
+  return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
 }
 
 function buildLineDataset(rows, unit) {
@@ -236,27 +236,17 @@ function buildLineDataset(rows, unit) {
     .filter(Boolean);
 
   return {
-    label: "AEROWEB",
+    label: "Official AMO/KMA",
     data: points,
     borderColor: "#0f4c81",
     backgroundColor: "#0f4c81",
     pointRadius: points.map((point) => (point.reportType === "SPECI" ? 4.5 : 2.5)),
     pointHoverRadius: points.map((point) => (point.reportType === "SPECI" ? 6 : 4)),
-    pointHitRadius: 18,
-    pointBackgroundColor: points.map((point) =>
-      point.reportType === "SPECI" ? "#b91c1c" : "#0f4c81",
-    ),
-    pointBorderColor: points.map((point) =>
-      point.reportType === "SPECI" ? "#7f1d1d" : "#0b365d",
-    ),
-    pointBorderWidth: 1.5,
-    borderWidth: 2,
-    tension: 0.22,
-    showLine: true,
+    tension: 0.2,
   };
 }
 
-export default function MunichDayPage() {
+export default function SeoulDayPage() {
   const params = useParams();
   const router = useRouter();
   const date = String(params?.date ?? "");
@@ -267,14 +257,14 @@ export default function MunichDayPage() {
   const inFlightRef = useRef(false);
 
   const isDateValid = isValidDate(date);
-  const munichTodayDate = munichTodayKey();
-  const isToday = isDateValid && date === munichTodayDate;
+  const seoulTodayDate = seoulTodayKey();
+  const isToday = isDateValid && date === seoulTodayDate;
   const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
-  const pollLatest = useAction("aeroweb:pollLatestStationMetar");
+  const pollLatest = useAction("seoul:pollLatestStationMetar");
 
   const dayData = useQuery(
-    "aeroweb:getDayStationRows",
+    "seoul:getDayStationRows",
     isDateValid
       ? {
           stationIcao: STATION_ICAO,
@@ -282,7 +272,7 @@ export default function MunichDayPage() {
         }
       : "skip",
   );
-  const raceData = useQuery("aeroweb:getRecentPublishRaceReports", {
+  const raceData = useQuery("seoul:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
     routineOnly: true,
@@ -306,7 +296,7 @@ export default function MunichDayPage() {
     }
     if (!isToday) {
       setLiveMessage(
-        "Historical EDDM dates depend on rows captured live from authenticated AEROWEB polling. No authenticated day-history backfill endpoint is wired yet.",
+        "Historical RKSI dates depend on rows captured live from the official AMO latest-METAR endpoint. No official day-history endpoint is wired yet.",
       );
       return;
     }
@@ -327,7 +317,7 @@ export default function MunichDayPage() {
         console.error(error);
         if (!cancelled) {
           const message = error instanceof Error ? error.message : String(error);
-          setLiveMessage(`EDDM sync failed: ${message}`);
+          setLiveMessage(`RKSI sync failed: ${message}`);
         }
       } finally {
         inFlightRef.current = false;
@@ -366,7 +356,7 @@ export default function MunichDayPage() {
     if (!isValidDate(inputDate)) {
       return;
     }
-    router.push(`/munich/day/${inputDate}`);
+    router.push(`/seoul/day/${inputDate}`);
   }
 
   const chartData = useMemo(
@@ -411,7 +401,7 @@ export default function MunichDayPage() {
           type: "linear",
           min: 0,
           max: 1439,
-          title: { display: true, text: "Local Time (Europe/Berlin)" },
+          title: { display: true, text: "Local Time (Asia/Seoul)" },
           ticks: {
             stepSize: 60,
             callback(value) {
@@ -431,16 +421,16 @@ export default function MunichDayPage() {
     return (
       <main className="min-h-screen px-4 py-8 md:px-8">
         <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-6">
-          <h1 className="text-2xl font-semibold text-red-800">Invalid Munich date</h1>
+          <h1 className="text-2xl font-semibold text-red-800">Invalid Seoul date</h1>
           <p className="mt-2 text-sm text-red-700">
             Use a `YYYY-MM-DD` date in the route.
           </p>
           <div className="mt-4">
             <Link
-              href="/munich/today"
+              href="/seoul/today"
               className="inline-flex rounded-full border border-red-300 px-4 py-2 text-sm font-semibold text-red-800"
             >
-              Open Munich today
+              Open Seoul today
             </Link>
           </div>
         </div>
@@ -456,14 +446,13 @@ export default function MunichDayPage() {
             STATION {STATION_ICAO}
           </p>
           <h1 className="mt-3 text-2xl font-semibold text-foreground">
-            {STATION_NAME} METAR Day Chart
+            {STATION_NAME} Official METAR Day Chart
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
-            Authenticated AEROWEB `showmessage.php` polling for EDDM, with a
-            recent publish-race table against NOAA `tgftp`. Today is kept live
-            from the authenticated AEROWEB page; older dates can only show rows
-            we already captured live because a day-history endpoint is not
-            confirmed yet.
+            Official RKSI METAR from Korea&apos;s Aviation Meteorological Office
+            (AMO/KMA) latest-METAR API. Today is kept live from that official
+            endpoint; older dates can only show rows we already captured live
+            because a date-bounded history endpoint is not wired yet.
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -474,15 +463,15 @@ export default function MunichDayPage() {
               Home
             </Link>
             <Link
-              href="/munich/today"
+              href="/seoul/today"
               className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 hover:border-sky-400"
             >
-              Current Date {munichTodayDate}
+              Current Date {seoulTodayDate}
             </Link>
             {quickPreviousDates.map((previousDate) => (
               <Link
                 key={previousDate}
-                href={`/munich/day/${previousDate}`}
+                href={`/seoul/day/${previousDate}`}
                 className="inline-flex rounded-full border border-black/15 bg-white/70 px-4 py-2 text-sm font-semibold text-black hover:border-black"
               >
                 {previousDate}
@@ -491,11 +480,11 @@ export default function MunichDayPage() {
           </div>
 
           <form onSubmit={handleGoToDate} className="mt-4 flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium text-black/70" htmlFor="munich-day-picker">
+            <label className="text-sm font-medium text-black/70" htmlFor="seoul-day-picker">
               Pick Date
             </label>
             <input
-              id="munich-day-picker"
+              id="seoul-day-picker"
               type="date"
               value={inputDate}
               onChange={(event) => setInputDate(event.target.value)}
@@ -532,11 +521,11 @@ export default function MunichDayPage() {
               disabled={isRefreshing || !isToday}
               className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isRefreshing ? "Refreshing..." : "Refresh Current AEROWEB"}
+              {isRefreshing ? "Refreshing..." : "Refresh Current Data"}
             </button>
             {isToday ? (
               <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
-                Live authenticated ingest enabled
+                Live official ingest enabled
               </span>
             ) : (
               <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-amber-900">
@@ -548,8 +537,8 @@ export default function MunichDayPage() {
           <p className="mt-4 text-sm text-black/70">
             {liveMessage ||
               (isToday
-                ? "Waiting for AEROWEB sync..."
-                : "Historical EDDM dates depend on previously captured live AEROWEB rows.")}
+                ? "Waiting for AMO sync..."
+                : "Historical RKSI dates depend on previously captured live AMO rows.")}
           </p>
         </header>
 
@@ -599,8 +588,9 @@ export default function MunichDayPage() {
               {summary?.obsCount ?? 0}
             </p>
             <p className="mt-2 text-sm text-black/65">
-              AEROWEB routine METAR with any captured off-cycle SPECI in the same
-              stored day series.
+              Routine RKSI METAR is normally half-hourly. Full-day coverage
+              depends on rows being captured live because this page stores the
+              latest official AMO feed rather than a confirmed history endpoint.
             </p>
           </div>
         </section>
@@ -622,7 +612,7 @@ export default function MunichDayPage() {
               <Line data={chartData} options={chartOptions} />
             ) : (
               <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No EDDM observations stored for this date yet.
+                No RKSI observations stored for this date yet.
               </div>
             )}
           </div>
@@ -640,10 +630,11 @@ export default function MunichDayPage() {
             <div>
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
-                Recent routine half-hour EDDM METAR first-seen timing across the
-                authenticated AEROWEB `showmessage.php` endpoint and NOAA `tgftp`.
-                Times in this table are shown in America/Chicago. Winner and lead
-                are computed from the earlier of the two first-seen timestamps.
+                Recent routine half-hour RKSI METAR first-seen timing across the
+                official AMO/KMA latest-METAR API and NOAA `tgftp`. Times in this
+                table are shown in America/Chicago. Official RKSI polling is only
+                scheduled at the `:29` to `:31` and `:58` to `:01` routine
+                windows so the race stays useful without excessive AMO calls.
               </p>
             </div>
           </div>
@@ -654,7 +645,7 @@ export default function MunichDayPage() {
                   <th className="px-3 py-2 font-semibold">Report Time</th>
                   <th className="px-3 py-2 font-semibold">Winner</th>
                   <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">AEROWEB Seen</th>
+                  <th className="px-3 py-2 font-semibold">AMO Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
                   <th className="px-3 py-2 font-semibold">Raw METAR</th>
@@ -673,7 +664,7 @@ export default function MunichDayPage() {
                       <td className="px-3 py-3 whitespace-nowrap">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "aeroweb"
+                            row.winner === "amo"
                               ? "bg-emerald-50 text-emerald-800"
                               : row.winner === "tgftp"
                                 ? "bg-amber-50 text-amber-900"
@@ -689,7 +680,7 @@ export default function MunichDayPage() {
                         {formatLeadMs(row.leadMs)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.aerowebFirstSeenAt)}
+                        {formatChicagoDateTimeSeconds(row.amoFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
                         {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
@@ -698,7 +689,7 @@ export default function MunichDayPage() {
                         {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ?? row.aerowebRawMetar ?? row.tgftpRawMetar ?? "—"}
+                        {row.rawMetar ?? row.amoRawMetar ?? row.tgftpRawMetar ?? "—"}
                       </td>
                     </tr>
                   ))
@@ -755,8 +746,8 @@ export default function MunichDayPage() {
                           : formatTemp(row.tempF, "F")}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.aerowebFirstSeenAt
-                          ? formatMunichDateTimeSeconds(row.aerowebFirstSeenAt)
+                        {row.amoFirstSeenAt
+                          ? formatSeoulDateTimeSeconds(row.amoFirstSeenAt)
                           : "—"}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">

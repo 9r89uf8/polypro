@@ -82,8 +82,6 @@ Convex functions:
 - `aeroweb:pollLatestNoaaPublishRace`
   - samples `tgftp` for LFPG
   - records the NOAA side of the publish-race row
-- `aeroweb:watchStationPublishRaceWindow`
-  - performs 1-second watch-window polling for AEROWEB vs `tgftp`
 - `aeroweb:getDayStationRows`
   - returns stored LFPG rows plus the daily summary for the selected date
 - `aeroweb:getRecentPublishRaceReports`
@@ -110,10 +108,11 @@ On-demand external endpoints used by `parisWeather:getDayPageWeather`:
 
 Crons:
 
-- `paris_aeroweb_latest_every_minute`
+- `paris_aeroweb_latest_window_minutes`
   - calls `aeroweb:pollLatestStationMetar`
+  - runs at minute `29`, `30`, `31`, `58`, `59`, `00`, and `01`
+  - this is the only scheduled AEROWEB poll path for Paris now, so the
+    publish-race table reflects minute-window sampling rather than the older
+    1-second watch
 - `paris_tgftp_publish_race_every_minute`
   - calls `aeroweb:pollLatestNoaaPublishRace`
-- `paris_publish_race_watch_minute_29_59`
-  - calls `aeroweb:watchStationPublishRaceWindow`
-  - starts before the expected LFPG `:00` and `:30` routine boundaries
