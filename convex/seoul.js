@@ -8,6 +8,7 @@ import { v } from "convex/values";
 const SEOUL_TIMEZONE = "Asia/Seoul";
 const AMO_FETCH_TIMEOUT_MS = 25000;
 const DEFAULT_AMO_API_BASE_URL = "http://amoapi.kma.go.kr";
+const GLOBAL_AMO_API_BASE_URL = "https://global.amo.go.kr/mobileApi/global_api/v1";
 const NOAA_LATEST_METAR_BASE_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
 const RACE_SOURCE = {
@@ -85,6 +86,18 @@ function toFahrenheit(celsius) {
 function toNonEmptyString(value) {
   const trimmed = String(value ?? "").trim();
   return trimmed ? trimmed : null;
+}
+
+function parseNumber(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const trimmed = String(value).trim();
+  if (!trimmed || trimmed === "-") {
+    return null;
+  }
+  const parsed = Number(trimmed.replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function parseSignedMetarTemp(tempToken) {
@@ -231,6 +244,25 @@ function parseHttpTimestamp(value) {
   return Number.isFinite(epochMs) ? epochMs : null;
 }
 
+function parseSeoulLocalTimestamp(value) {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
+      String(value ?? "").trim(),
+    );
+  if (!match) {
+    return null;
+  }
+  return Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]) - 9,
+    Number(match[5]),
+    match[6] ? Number(match[6]) : 0,
+    0,
+  );
+}
+
 function decodeXmlEntities(value) {
   return String(value ?? "").replace(
     /&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g,
@@ -350,6 +382,34 @@ function inferPublishRaceReportType(row) {
       row?.rawMetar ?? row?.amoRawMetar ?? row?.tgftpRawMetar ?? "",
     )
   );
+}
+
+function amosObservationChanged(existing, candidate) {
+  const fields = [
+    "obsTimeLocal",
+    "rwyUse",
+    "rwyMain",
+    "tempC",
+    "tempF",
+    "dewpointC",
+    "dewpointF",
+    "qnhHpa",
+    "qnhInHg",
+    "windDirAvg",
+    "windDirMin",
+    "windDirMax",
+    "windSpeedAvg",
+    "windSpeedMin",
+    "windSpeedMax",
+    "crosswind",
+    "headtail",
+    "morMeters",
+    "rvrMeters",
+    "precipMm",
+    "source",
+    "rawJson",
+  ];
+  return fields.some((field) => existing[field] !== candidate[field]);
 }
 
 function observationChanged(existing, candidate) {
@@ -492,6 +552,12 @@ function buildAmoMetarUrl(stationIcao) {
   return url.toString();
 }
 
+function buildGlobalAmoAmosInfoUrl(stationIcao) {
+  const url = new URL(`${GLOBAL_AMO_API_BASE_URL}/amos_info.do`);
+  url.searchParams.set("air_code", stationIcao);
+  return url.toString();
+}
+
 async function fetchWithTimeout(url, init = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), AMO_FETCH_TIMEOUT_MS);
@@ -524,6 +590,95 @@ async function fetchLatestAmoRaceHit(stationIcao) {
     seenAt: Date.now(),
     row,
   };
+}
+
+function parseAmoRunwayRow(item, stationIcao) {
+  if (String(item?.air_code ?? "").trim().toUpperCase() !== stationIcao) {
+    return null;
+  }
+
+  const obsTimeLocalBase = toNonEmptyString(item?.tm_fc);
+  const obsTimeUtc = parseSeoulLocalTimestamp(obsTimeLocalBase);
+  if (!Number.isFinite(obsTimeUtc)) {
+    return null;
+  }
+
+  const obsTimeLocal =
+    /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/.test(obsTimeLocalBase)
+      ? `${obsTimeLocalBase}:00`
+      : formatSeoulDateTime(obsTimeUtc);
+
+  const tempC = parseNumber(item?.temp);
+  const dewpointC = parseNumber(item?.dewpoint);
+
+  return {
+    stationIcao,
+    date: formatSeoulDate(obsTimeUtc),
+    obsTimeUtc,
+    obsTimeLocal,
+    rwyNo: toNonEmptyString(item?.rwy_no) ?? "?",
+    rwyDir: toNonEmptyString(item?.rwy_dir) ?? "?",
+    ...(toNonEmptyString(item?.rwy_use) ? { rwyUse: toNonEmptyString(item?.rwy_use) } : {}),
+    ...(toNonEmptyString(item?.rwy_main)
+      ? { rwyMain: toNonEmptyString(item?.rwy_main) }
+      : {}),
+    ...(tempC !== null ? { tempC: roundToTenth(tempC), tempF: toFahrenheit(tempC) } : {}),
+    ...(dewpointC !== null
+      ? { dewpointC: roundToTenth(dewpointC), dewpointF: toFahrenheit(dewpointC) }
+      : {}),
+    ...(parseNumber(item?.qnh_hpa) !== null ? { qnhHpa: parseNumber(item?.qnh_hpa) } : {}),
+    ...(parseNumber(item?.qnh_inhg) !== null
+      ? { qnhInHg: parseNumber(item?.qnh_inhg) }
+      : {}),
+    ...(parseNumber(item?.wd_avg) !== null ? { windDirAvg: parseNumber(item?.wd_avg) } : {}),
+    ...(parseNumber(item?.wd_min) !== null ? { windDirMin: parseNumber(item?.wd_min) } : {}),
+    ...(parseNumber(item?.wd_max) !== null ? { windDirMax: parseNumber(item?.wd_max) } : {}),
+    ...(parseNumber(item?.ws_avg) !== null ? { windSpeedAvg: parseNumber(item?.ws_avg) } : {}),
+    ...(parseNumber(item?.ws_min) !== null ? { windSpeedMin: parseNumber(item?.ws_min) } : {}),
+    ...(parseNumber(item?.ws_max) !== null ? { windSpeedMax: parseNumber(item?.ws_max) } : {}),
+    ...(toNonEmptyString(item?.cross) ? { crosswind: toNonEmptyString(item?.cross) } : {}),
+    ...(toNonEmptyString(item?.headtail)
+      ? { headtail: toNonEmptyString(item?.headtail) }
+      : {}),
+    ...(parseNumber(item?.mor) !== null ? { morMeters: parseNumber(item?.mor) } : {}),
+    ...(toNonEmptyString(item?.rvr) ? { rvrMeters: toNonEmptyString(item?.rvr) } : {}),
+    ...(parseNumber(item?.rn) !== null ? { precipMm: parseNumber(item?.rn) } : {}),
+    source: "amos_info",
+    rawJson: JSON.stringify(item),
+  };
+}
+
+async function fetchLatestAmoRunwayRows(stationIcao) {
+  const response = await fetchWithTimeout(buildGlobalAmoAmosInfoUrl(stationIcao), {
+    headers: {
+      Accept: "application/json,*/*",
+      "Cache-Control": "no-cache",
+      "User-Agent": "Mozilla/5.0",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `AMO runway info fetch failed (${response.status}): ${text.slice(0, 200)}`,
+    );
+  }
+
+  const payload = await response.json();
+  const items = Array.isArray(payload?.results?.items) ? payload.results.items : [];
+  const rows = items
+    .map((item) => parseAmoRunwayRow(item, stationIcao))
+    .filter(Boolean)
+    .sort((a, b) =>
+      a.obsTimeUtc === b.obsTimeUtc
+        ? a.rwyNo.localeCompare(b.rwyNo) || a.rwyDir.localeCompare(b.rwyDir)
+        : a.obsTimeUtc - b.obsTimeUtc,
+    );
+
+  if (!rows.length) {
+    throw new Error("AMO runway info response did not include parseable RKSI rows.");
+  }
+
+  return rows;
 }
 
 async function fetchLatestTgftpRaceHit(stationIcao) {
@@ -636,6 +791,94 @@ export const upsertStationRowsBatch = internalMutationGeneric({
       patchedCount,
       unchangedCount,
       affectedDateCount: affectedDates.size,
+    };
+  },
+});
+
+export const upsertAmosRowsBatch = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    rows: v.array(
+      v.object({
+        stationIcao: v.string(),
+        date: v.string(),
+        obsTimeUtc: v.number(),
+        obsTimeLocal: v.string(),
+        rwyNo: v.string(),
+        rwyDir: v.string(),
+        rwyUse: v.optional(v.string()),
+        rwyMain: v.optional(v.string()),
+        tempC: v.optional(v.number()),
+        tempF: v.optional(v.number()),
+        dewpointC: v.optional(v.number()),
+        dewpointF: v.optional(v.number()),
+        qnhHpa: v.optional(v.number()),
+        qnhInHg: v.optional(v.number()),
+        windDirAvg: v.optional(v.number()),
+        windDirMin: v.optional(v.number()),
+        windDirMax: v.optional(v.number()),
+        windSpeedAvg: v.optional(v.number()),
+        windSpeedMin: v.optional(v.number()),
+        windSpeedMax: v.optional(v.number()),
+        crosswind: v.optional(v.string()),
+        headtail: v.optional(v.string()),
+        morMeters: v.optional(v.number()),
+        rvrMeters: v.optional(v.string()),
+        precipMm: v.optional(v.number()),
+        source: v.string(),
+        rawJson: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    let insertedCount = 0;
+    let patchedCount = 0;
+    let unchangedCount = 0;
+
+    for (const row of args.rows) {
+      if (!parseDateKey(row.date)) {
+        throw new Error(`Invalid date key: ${row.date}`);
+      }
+
+      const existing = await ctx.db
+        .query("seoulAmosObservations")
+        .withIndex("by_station_date_ts_rwy", (query) =>
+          query
+            .eq("stationIcao", row.stationIcao)
+            .eq("date", row.date)
+            .eq("obsTimeUtc", row.obsTimeUtc)
+            .eq("rwyNo", row.rwyNo)
+            .eq("rwyDir", row.rwyDir),
+        )
+        .first();
+
+      if (!existing) {
+        await ctx.db.insert("seoulAmosObservations", {
+          ...row,
+          updatedAt: now,
+        });
+        insertedCount += 1;
+        continue;
+      }
+
+      if (!amosObservationChanged(existing, row)) {
+        unchangedCount += 1;
+        continue;
+      }
+
+      await ctx.db.patch(existing._id, {
+        ...row,
+        updatedAt: now,
+      });
+      patchedCount += 1;
+    }
+
+    return {
+      insertedCount,
+      patchedCount,
+      unchangedCount,
+      rowCount: args.rows.length,
     };
   },
 });
@@ -821,6 +1064,36 @@ export const pollLatestNoaaPublishRace = actionGeneric({
   },
 });
 
+export const pollLatestAmosRunways = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const rows = await fetchLatestAmoRunwayRows(stationIcao);
+    const result = await ctx.runMutation("seoul:upsertAmosRowsBatch", {
+      stationIcao,
+      rows,
+    });
+    const latest15L =
+      rows.find((row) => row.rwyDir === "15L" && Number.isFinite(row.tempC)) ?? null;
+
+    return {
+      ok: true,
+      stationIcao,
+      rowCount: rows.length,
+      sampleTimeUtc: rows[0]?.obsTimeUtc ?? null,
+      sampleTimeLocal: rows[0]?.obsTimeLocal ?? null,
+      latest15L,
+      ...result,
+    };
+  },
+});
+
 export const getDayStationRows = queryGeneric({
   args: {
     stationIcao: v.string(),
@@ -846,7 +1119,19 @@ export const getDayStationRows = queryGeneric({
       )
       .first();
 
-    return { rows, summary };
+    const amosRows = await ctx.db
+      .query("seoulAmosObservations")
+      .withIndex("by_station_date_ts_rwy", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    amosRows.sort((a, b) =>
+      a.obsTimeUtc === b.obsTimeUtc
+        ? a.rwyNo.localeCompare(b.rwyNo) || a.rwyDir.localeCompare(b.rwyDir)
+        : a.obsTimeUtc - b.obsTimeUtc,
+    );
+
+    return { rows, summary, amosRows };
   },
 });
 

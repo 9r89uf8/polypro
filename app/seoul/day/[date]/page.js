@@ -216,7 +216,15 @@ function formatLivePollMessage(result) {
   return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
 }
 
-function buildLineDataset(rows, unit) {
+function formatAmosPollMessage(result) {
+  if (!result?.ok) {
+    return "AMOS runway sync skipped.";
+  }
+  const fifteenL = result.latest15L ?? null;
+  return `AMOS runway sync: ${result.insertedCount > 0 || result.patchedCount > 0 ? "saved" : "no new rows"} ${result.rowCount ?? 0} runway rows for ${result.sampleTimeLocal ?? "the latest sample"}.${Number.isFinite(fifteenL?.tempC) ? ` 15L ${fifteenL.tempC.toFixed(1)}°C.` : ""}`;
+}
+
+function buildOfficialLineDataset(rows, unit) {
   const points = rows
     .map((row) => {
       const x = parseMinute(row.obsTimeLocal);
@@ -246,6 +254,101 @@ function buildLineDataset(rows, unit) {
   };
 }
 
+function buildAmosRunwayDataset(rows, unit, runwayDir) {
+  const points = rows
+    .map((row) => {
+      if (row.rwyDir !== runwayDir) {
+        return null;
+      }
+      const x = parseMinute(row.obsTimeLocal);
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (x === null || !Number.isFinite(y)) {
+        return null;
+      }
+      return {
+        x,
+        y,
+        rwyDir: row.rwyDir,
+        qnhHpa: row.qnhHpa,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    label: `AMOS ${runwayDir} (5 min)`,
+    data: points,
+    borderColor: "#d97706",
+    backgroundColor: "#d97706",
+    borderDash: [8, 4],
+    pointRadius: 2,
+    pointHoverRadius: 4,
+    tension: 0.15,
+  };
+}
+
+function formatSignedGap(gapMs) {
+  if (!Number.isFinite(gapMs)) {
+    return "—";
+  }
+  if (Math.abs(gapMs) < 30000) {
+    return "same time";
+  }
+  const minutes = Math.abs(gapMs) / 60000;
+  const minutesText =
+    minutes < 10 ? `${minutes.toFixed(1)} min` : `${minutes.toFixed(0)} min`;
+  return gapMs < 0 ? `${minutesText} earlier` : `${minutesText} later`;
+}
+
+function buildNearestAmosComparisons(officialRows, amosRows, runwayDir) {
+  const runwayRows = amosRows.filter(
+    (row) => row.rwyDir === runwayDir && Number.isFinite(row.tempC),
+  );
+
+  return officialRows
+    .map((officialRow) => {
+      let bestRow = null;
+      let bestGapMs = Number.POSITIVE_INFINITY;
+
+      for (const amosRow of runwayRows) {
+        const gapMs = amosRow.obsTimeUtc - officialRow.obsTimeUtc;
+        const absGapMs = Math.abs(gapMs);
+        if (absGapMs > 10 * 60 * 1000) {
+          continue;
+        }
+        if (
+          absGapMs < bestGapMs ||
+          (absGapMs === bestGapMs && gapMs < 0)
+        ) {
+          bestGapMs = absGapMs;
+          bestRow = amosRow;
+        }
+      }
+
+      if (!bestRow) {
+        return {
+          officialRow,
+          amosRow: null,
+          gapMs: null,
+          deltaC: null,
+          deltaF: null,
+        };
+      }
+
+      const gapMs = bestRow.obsTimeUtc - officialRow.obsTimeUtc;
+      const deltaC = bestRow.tempC - officialRow.tempC;
+      const deltaF = bestRow.tempF - officialRow.tempF;
+
+      return {
+        officialRow,
+        amosRow: bestRow,
+        gapMs,
+        deltaC,
+        deltaF,
+      };
+    })
+    .filter((row) => row.amosRow);
+}
+
 export default function SeoulDayPage() {
   const params = useParams();
   const router = useRouter();
@@ -262,6 +365,7 @@ export default function SeoulDayPage() {
   const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
   const pollLatest = useAction("seoul:pollLatestStationMetar");
+  const pollLatestAmosRunways = useAction("seoul:pollLatestAmosRunways");
 
   const dayData = useQuery(
     "seoul:getDayStationRows",
@@ -280,10 +384,17 @@ export default function SeoulDayPage() {
 
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
+  const amosRows = dayData?.amosRows ?? [];
   const raceRows = raceData?.rows ?? [];
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
   const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
   const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
+  const amos15LRows = useMemo(
+    () =>
+      amosRows.filter((row) => row.rwyDir === "15L" && Number.isFinite(row.tempC)),
+    [amosRows],
+  );
+  const latest15LRow = amos15LRows.length ? amos15LRows[amos15LRows.length - 1] : null;
 
   useEffect(() => {
     setInputDate(date);
@@ -296,7 +407,7 @@ export default function SeoulDayPage() {
     }
     if (!isToday) {
       setLiveMessage(
-        "Historical RKSI dates depend on rows captured live from the official AMO latest-METAR endpoint. No official day-history endpoint is wired yet.",
+        "Historical RKSI dates depend on previously captured live official METAR rows and stored 5-minute AMOS runway rows. No date-bounded official history backfill is wired yet.",
       );
       return;
     }
@@ -309,9 +420,36 @@ export default function SeoulDayPage() {
       }
       inFlightRef.current = true;
       try {
-        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
+        const [officialResult, amosResult] = await Promise.allSettled([
+          pollLatest({ stationIcao: STATION_ICAO }),
+          pollLatestAmosRunways({ stationIcao: STATION_ICAO }),
+        ]);
+
         if (!cancelled) {
-          setLiveMessage(formatLivePollMessage(pollResult));
+          const messages = [];
+          if (officialResult.status === "fulfilled") {
+            messages.push(formatLivePollMessage(officialResult.value));
+          } else {
+            console.error(officialResult.reason);
+            const message =
+              officialResult.reason instanceof Error
+                ? officialResult.reason.message
+                : String(officialResult.reason);
+            messages.push(`Official sync failed: ${message}`);
+          }
+
+          if (amosResult.status === "fulfilled") {
+            messages.push(formatAmosPollMessage(amosResult.value));
+          } else {
+            console.error(amosResult.reason);
+            const message =
+              amosResult.reason instanceof Error
+                ? amosResult.reason.message
+                : String(amosResult.reason);
+            messages.push(`AMOS sync failed: ${message}`);
+          }
+
+          setLiveMessage(messages.join(" "));
         }
       } catch (error) {
         console.error(error);
@@ -329,7 +467,7 @@ export default function SeoulDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, pollLatest]);
+  }, [date, isDateValid, isToday, pollLatest, pollLatestAmosRunways]);
 
   async function handleRefreshNow() {
     if (!isDateValid || !isToday || inFlightRef.current) {
@@ -339,8 +477,35 @@ export default function SeoulDayPage() {
     setIsRefreshing(true);
     inFlightRef.current = true;
     try {
-      const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-      setLiveMessage(formatLivePollMessage(pollResult));
+      const [officialResult, amosResult] = await Promise.allSettled([
+        pollLatest({ stationIcao: STATION_ICAO }),
+        pollLatestAmosRunways({ stationIcao: STATION_ICAO }),
+      ]);
+      const messages = [];
+
+      if (officialResult.status === "fulfilled") {
+        messages.push(formatLivePollMessage(officialResult.value));
+      } else {
+        console.error(officialResult.reason);
+        const message =
+          officialResult.reason instanceof Error
+            ? officialResult.reason.message
+            : String(officialResult.reason);
+        messages.push(`Official sync failed: ${message}`);
+      }
+
+      if (amosResult.status === "fulfilled") {
+        messages.push(formatAmosPollMessage(amosResult.value));
+      } else {
+        console.error(amosResult.reason);
+        const message =
+          amosResult.reason instanceof Error
+            ? amosResult.reason.message
+            : String(amosResult.reason);
+        messages.push(`AMOS sync failed: ${message}`);
+      }
+
+      setLiveMessage(messages.join(" "));
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -360,10 +525,17 @@ export default function SeoulDayPage() {
   }
 
   const chartData = useMemo(
-    () => ({
-      datasets: rows.length ? [buildLineDataset(rows, displayUnit)] : [],
-    }),
-    [rows, displayUnit],
+    () => {
+      const datasets = [];
+      if (rows.length) {
+        datasets.push(buildOfficialLineDataset(rows, displayUnit));
+      }
+      if (amos15LRows.length) {
+        datasets.push(buildAmosRunwayDataset(amos15LRows, displayUnit, "15L"));
+      }
+      return { datasets };
+    },
+    [rows, amos15LRows, displayUnit],
   );
 
   const chartOptions = useMemo(
@@ -390,6 +562,10 @@ export default function SeoulDayPage() {
               return `Local ${minuteLabel(items[0].parsed.x)}`;
             },
             label(item) {
+              if (item.dataset?.label?.startsWith("AMOS")) {
+                const runwayLabel = item.raw?.rwyDir ? `${item.raw.rwyDir} ` : "";
+                return `${runwayLabel}${item.parsed.y.toFixed(1)}°${displayUnit}`;
+              }
               const reportType = item.raw?.reportType ? `${item.raw.reportType} ` : "";
               return `${reportType}${item.parsed.y.toFixed(1)}°${displayUnit}`;
             },
@@ -415,6 +591,11 @@ export default function SeoulDayPage() {
       },
     }),
     [displayUnit],
+  );
+
+  const amosComparisons = useMemo(
+    () => buildNearestAmosComparisons(rows, amos15LRows, "15L"),
+    [rows, amos15LRows],
   );
 
   if (!isDateValid) {
@@ -450,9 +631,9 @@ export default function SeoulDayPage() {
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
             Official RKSI METAR from Korea&apos;s Aviation Meteorological Office
-            (AMO/KMA) latest-METAR API. Today is kept live from that official
-            endpoint; older dates can only show rows we already captured live
-            because a date-bounded history endpoint is not wired yet.
+            (AMO/KMA) latest-METAR API, with a separate 5-minute AMOS runway
+            sensor capture stored alongside it. The chart overlays runway 15L so
+            we can see how closely it tracks the official reported temperature.
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -538,11 +719,11 @@ export default function SeoulDayPage() {
             {liveMessage ||
               (isToday
                 ? "Waiting for AMO sync..."
-                : "Historical RKSI dates depend on previously captured live AMO rows.")}
+                : "Historical RKSI dates depend on previously captured live official and AMOS rows.")}
           </p>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
               Latest
@@ -593,6 +774,29 @@ export default function SeoulDayPage() {
               latest official AMO feed rather than a confirmed history endpoint.
             </p>
           </div>
+
+          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
+              Latest AMOS 15L
+            </p>
+            <p className="mt-2 text-3xl font-semibold text-foreground">
+              {latest15LRow
+                ? formatTemp(
+                    displayUnit === "C" ? latest15LRow.tempC : latest15LRow.tempF,
+                    displayUnit,
+                  )
+                : "—"}
+            </p>
+            <p className="mt-2 text-sm text-black/65">
+              {latest15LRow?.obsTimeLocal
+                ? `15L at ${formatStoredLocalDateTime(latest15LRow.obsTimeLocal)}`
+                : "No stored 15L runway sample yet for this date."}
+            </p>
+            <p className="mt-2 text-xs text-black/55">
+              Stored every 5 minutes from `amos_info.do`. All runway rows are
+              kept, but the chart overlays 15L by default.
+            </p>
+          </div>
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
@@ -602,19 +806,96 @@ export default function SeoulDayPage() {
                 Temperature Line
               </h2>
               <p className="mt-1 text-sm text-black/60">
-                Blue markers are routine METAR. Red markers are SPECI.
+                Solid blue is official METAR/SPECI. Dashed orange is the stored
+                15L AMOS runway-temperature feed sampled every 5 minutes.
               </p>
             </div>
           </div>
 
           <div className="mt-6 h-[420px]">
-            {rows.length ? (
+            {chartData.datasets.length ? (
               <Line data={chartData} options={chartOptions} />
             ) : (
               <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No RKSI observations stored for this date yet.
+                No RKSI METAR or 15L AMOS observations stored for this date yet.
               </div>
             )}
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">
+                15L Correlation Check
+              </h2>
+              <p className="mt-1 text-sm text-black/60">
+                Nearest stored 15L AMOS sample against each official RKSI METAR
+                or SPECI point. Small deltas support the representative-runway
+                hypothesis, but they do not prove the official AMO processing
+                path.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-black/10 text-black/55">
+                  <th className="px-3 py-2 font-semibold">Official Time</th>
+                  <th className="px-3 py-2 font-semibold">Type</th>
+                  <th className="px-3 py-2 font-semibold">Official Temp</th>
+                  <th className="px-3 py-2 font-semibold">15L Sample</th>
+                  <th className="px-3 py-2 font-semibold">15L Temp</th>
+                  <th className="px-3 py-2 font-semibold">Gap</th>
+                  <th className="px-3 py-2 font-semibold">Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {amosComparisons.length ? (
+                  amosComparisons.map((comparison) => (
+                    <tr
+                      key={`${comparison.officialRow._id}-${comparison.amosRow._id}`}
+                      className="border-b border-black/5 align-top last:border-b-0"
+                    >
+                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                        {formatStoredLocalDateTime(comparison.officialRow.obsTimeLocal)}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                        {comparison.officialRow.reportType}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                        {displayUnit === "C"
+                          ? formatTemp(comparison.officialRow.tempC, "C")
+                          : formatTemp(comparison.officialRow.tempF, "F")}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                        {formatStoredLocalDateTime(comparison.amosRow.obsTimeLocal)}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                        {displayUnit === "C"
+                          ? formatTemp(comparison.amosRow.tempC, "C")
+                          : formatTemp(comparison.amosRow.tempF, "F")}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
+                        {formatSignedGap(comparison.gapMs)}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
+                        {displayUnit === "C"
+                          ? formatTemp(comparison.deltaC, "C")
+                          : formatTemp(comparison.deltaF, "F")}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
+                      No 15L AMOS samples were found within 10 minutes of the
+                      stored official rows.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </section>
 

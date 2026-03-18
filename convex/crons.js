@@ -124,6 +124,16 @@ crons.cron(
     { stationIcao: "RKSI" },
 );
 
+// Runs every 5 minutes so all RKSI AMOS runway-complex sensor rows are stored.
+// The Seoul page overlays 15L by default, but the full runway set is kept so
+// we can compare which complex best tracks the official METAR temperature.
+crons.cron(
+    "seoul_amos_runways_every_5_min",
+    "*/5 * * * *",
+    api.seoul.pollLatestAmosRunways,
+    { stationIcao: "RKSI" },
+);
+
 // Runs every hour and stores a new KORD snapshot:
 // - Microsoft + AccuWeather + Google + Weather.com 5-day forecasts
 // - Current temperature from Microsoft, AccuWeather, Google, Weather.com, NOAA, IEM, and Open-Meteo

@@ -17,7 +17,8 @@ What this route does:
 
 Example route: `/seoul/day/2026-03-18`
 
-Purpose: official RKSI METAR day chart plus a publish-race view.
+Purpose: official RKSI METAR day chart plus AMOS runway correlation data and a
+publish-race view.
 
 What this page displays:
 
@@ -33,11 +34,17 @@ What this page displays:
   - `Latest`
   - `Day Range`
   - `Messages`
+  - `Latest AMOS 15L`
 - One line chart:
   - official RKSI `METAR`
+  - stored RKSI AMOS runway temperature for `15L`
   - off-hour `SPECI` points if the official AMO feed exposes them
-  - blue points for `METAR`, red points for `SPECI`
+  - solid blue for official `METAR`/`SPECI`
+  - dashed orange for the stored 5-minute `15L` AMOS feed
   - x-axis is `Asia/Seoul` local time
+- `15L Correlation Check` table:
+  - nearest stored `15L` AMOS sample for each official `METAR`/`SPECI`
+  - shows official temp, AMOS temp, time gap, and delta
 - `Latest Raw METAR` panel
 - `Publish Race` table showing recent first-seen timing across the official
   AMO/KMA latest-METAR API and NOAA `tgftp`
@@ -57,14 +64,19 @@ Behavior details:
 - Page expects a `YYYY-MM-DD` date segment.
 - If viewing today in `Asia/Seoul`:
   - runs `seoul:pollLatestStationMetar` on first load
-  - manual refresh reruns that official poll
+  - also runs `seoul:pollLatestAmosRunways` on first load
+  - manual refresh reruns both the official poll and the AMOS runway pull
   - the page shows the stored AMO first-seen time for any row captured from the
     latest official endpoint
+  - the page also shows the latest stored `15L` runway temperature captured
+    from `amos_info.do`
 - If viewing a historical date:
-  - no official history backfill is attempted
+  - no official or AMOS history backfill is attempted
   - the page only shows rows already captured live and stored earlier
 - Observations are deduped by `(stationIcao, date, obsTimeUtc)` in
   `seoulMetarObservations`.
+- AMOS runway observations are deduped by `(stationIcao, date, obsTimeUtc,
+  rwyNo, rwyDir)` in `seoulAmosObservations`.
 - Recent publish-race rows are loaded from `seoulPublishRaceReports`.
 - The publish-race logger is separate from the day-chart ingest:
   - official first-seen times are written by `seoul:pollLatestStationMetar`
@@ -72,6 +84,11 @@ Behavior details:
     `seoul:pollLatestNoaaPublishRace`
   - winner/lead are computed from the earliest two sources seen for the same
     `reportTsUtc`
+- The AMOS runway collector is also separate from the official METAR ingest:
+  - `seoul:pollLatestAmosRunways` stores all RKSI runway rows from
+    `amos_info.do` every 5 minutes
+  - the UI overlays only `15L` by default, but the full runway set is kept in
+    storage so other complexes can be compared later
 - The publish-race table defaults to routine reports only, so captured `SPECI`
   rows do not crowd the comparison view.
 
@@ -84,6 +101,10 @@ Official latest RKSI METAR XML:
 NOAA comparison source:
 
 - `https://tgftp.nws.noaa.gov/data/observations/metar/stations/RKSI.TXT`
+
+Live AMOS runway-sensor source:
+
+- `https://global.amo.go.kr/mobileApi/global_api/v1/amos_info.do?air_code=RKSI`
 
 Research note used while choosing the Seoul source:
 
@@ -105,6 +126,10 @@ Known limitation:
 - `seoulDailySummaries`
   - one row per station/date
   - stores obs count, latest row fields, min/max temps, and min/max times
+- `seoulAmosObservations`
+  - one row per stored RKSI AMOS runway sample
+  - stores local date/time, runway identifiers, temp, dewpoint, QNH, wind
+    fields, visibility fields, and the raw JSON row
 - `seoulPublishRaceReports`
   - one row per station/report timestamp
   - stores AMO first-seen time, NOAA `tgftp` first-seen time, optional NOAA
@@ -121,6 +146,10 @@ Convex crons:
 - `seoul_tgftp_publish_race_every_minute`
   - calls `seoul:pollLatestNoaaPublishRace`
   - station argument is `RKSI`
+- `seoul_amos_runways_every_5_min`
+  - calls `seoul:pollLatestAmosRunways`
+  - station argument is `RKSI`
+  - stores all runway-complex AMOS rows every 5 minutes
 
 Seoul does not use a 1-second publish-race watch. The official AMO side is
 sampled only in the routine half-hour windows so the app avoids excessive RKSI
