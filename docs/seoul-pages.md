@@ -18,7 +18,7 @@ What this route does:
 Example route: `/seoul/day/2026-03-18`
 
 Purpose: official RKSI METAR day chart plus AMOS runway correlation data and a
-publish-race view.
+publish-race view, with a separate Weather.com 5-day forecast panel.
 
 What this page displays:
 
@@ -45,6 +45,11 @@ What this page displays:
 - `15L Correlation Check` table:
   - nearest stored `15L` AMOS sample for each official `METAR`/`SPECI`
   - shows official temp, AMOS temp, time gap, and delta
+- `Weather.com 5-Day Forecast` table:
+  - current 5-day forecast for RKSI/Incheon from Weather.com
+  - shows min/max temperature plus day/night narrative
+  - highlights the selected route date when it falls inside the current
+    5-day forecast window
 - `Latest Raw METAR` panel
 - `Publish Race` table showing recent first-seen timing across the official
   AMO/KMA latest-METAR API and NOAA `tgftp`
@@ -65,7 +70,9 @@ Behavior details:
 - If viewing today in `Asia/Seoul`:
   - runs `seoul:pollLatestStationMetar` on first load
   - also runs `seoul:pollLatestAmosRunways` on first load
-  - manual refresh reruns both the official poll and the AMOS runway pull
+  - also loads the Weather.com 5-day forecast on first load
+  - manual refresh reruns the official poll, the AMOS runway pull, and the
+    Weather.com forecast fetch
   - the page shows the stored AMO first-seen time for any row captured from the
     latest official endpoint
   - the page also shows the latest stored `15L` runway temperature captured
@@ -105,6 +112,10 @@ NOAA comparison source:
 Live AMOS runway-sensor source:
 
 - `https://global.amo.go.kr/mobileApi/global_api/v1/amos_info.do?air_code=RKSI`
+
+Weather.com forecast source:
+
+- `https://api.weather.com/v3/wx/forecast/daily/5day`
 
 Research note used while choosing the Seoul source:
 

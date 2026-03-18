@@ -357,7 +357,11 @@ export default function SeoulDayPage() {
   const [inputDate, setInputDate] = useState(date);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [weatherPanel, setWeatherPanel] = useState(null);
+  const [weatherPanelError, setWeatherPanelError] = useState("");
+  const [isWeatherLoading, setIsWeatherLoading] = useState(false);
   const inFlightRef = useRef(false);
+  const weatherRequestRef = useRef(0);
 
   const isDateValid = isValidDate(date);
   const seoulTodayDate = seoulTodayKey();
@@ -366,6 +370,7 @@ export default function SeoulDayPage() {
 
   const pollLatest = useAction("seoul:pollLatestStationMetar");
   const pollLatestAmosRunways = useAction("seoul:pollLatestAmosRunways");
+  const loadSeoulWeather = useAction("seoulWeather:getDayPageWeather");
 
   const dayData = useQuery(
     "seoul:getDayStationRows",
@@ -389,6 +394,8 @@ export default function SeoulDayPage() {
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
   const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
   const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
+  const weatherForecast = weatherPanel?.forecast ?? null;
+  const weatherForecastDays = weatherForecast?.days ?? [];
   const amos15LRows = useMemo(
     () =>
       amosRows.filter((row) => row.rwyDir === "15L" && Number.isFinite(row.tempC)),
@@ -399,6 +406,47 @@ export default function SeoulDayPage() {
   useEffect(() => {
     setInputDate(date);
   }, [date]);
+
+  useEffect(() => {
+    if (!isDateValid) {
+      setWeatherPanel(null);
+      setWeatherPanelError("");
+      setIsWeatherLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const requestId = weatherRequestRef.current + 1;
+    weatherRequestRef.current = requestId;
+    setIsWeatherLoading(true);
+
+    async function loadWeatherPanel() {
+      try {
+        const result = await loadSeoulWeather({ date });
+        if (!cancelled && weatherRequestRef.current === requestId) {
+          setWeatherPanel(result);
+          setWeatherPanelError("");
+        }
+      } catch (error) {
+        console.error(error);
+        if (!cancelled && weatherRequestRef.current === requestId) {
+          const message = error instanceof Error ? error.message : String(error);
+          setWeatherPanel(null);
+          setWeatherPanelError(message);
+        }
+      } finally {
+        if (!cancelled && weatherRequestRef.current === requestId) {
+          setIsWeatherLoading(false);
+        }
+      }
+    }
+
+    loadWeatherPanel();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [date, isDateValid, loadSeoulWeather]);
 
   useEffect(() => {
     if (!isDateValid) {
@@ -475,11 +523,15 @@ export default function SeoulDayPage() {
     }
 
     setIsRefreshing(true);
+    const weatherRequestId = weatherRequestRef.current + 1;
+    weatherRequestRef.current = weatherRequestId;
+    setIsWeatherLoading(true);
     inFlightRef.current = true;
     try {
-      const [officialResult, amosResult] = await Promise.allSettled([
+      const [officialResult, amosResult, weatherResult] = await Promise.allSettled([
         pollLatest({ stationIcao: STATION_ICAO }),
         pollLatestAmosRunways({ stationIcao: STATION_ICAO }),
+        loadSeoulWeather({ date }),
       ]);
       const messages = [];
 
@@ -506,6 +558,22 @@ export default function SeoulDayPage() {
       }
 
       setLiveMessage(messages.join(" "));
+
+      if (weatherResult.status === "fulfilled") {
+        if (weatherRequestRef.current === weatherRequestId) {
+          setWeatherPanel(weatherResult.value);
+          setWeatherPanelError("");
+        }
+      } else {
+        console.error(weatherResult.reason);
+        if (weatherRequestRef.current === weatherRequestId) {
+          const message =
+            weatherResult.reason instanceof Error
+              ? weatherResult.reason.message
+              : String(weatherResult.reason);
+          setWeatherPanelError(message);
+        }
+      }
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -513,6 +581,9 @@ export default function SeoulDayPage() {
     } finally {
       inFlightRef.current = false;
       setIsRefreshing(false);
+      if (weatherRequestRef.current === weatherRequestId) {
+        setIsWeatherLoading(false);
+      }
     }
   }
 
@@ -891,6 +962,76 @@ export default function SeoulDayPage() {
                     <td colSpan={7} className="px-3 py-6 text-center text-black/55">
                       No 15L AMOS samples were found within 10 minutes of the
                       stored official rows.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">
+                Weather.com 5-Day Forecast
+              </h2>
+              <p className="mt-1 text-sm text-black/60">
+                Daily rows come from Weather.com&apos;s 5-day forecast endpoint
+                for RKSI/Incheon. The selected route date is highlighted when it
+                falls inside the current Weather.com forecast window.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-black/10 text-black/55">
+                  <th className="px-3 py-2 font-semibold">Date</th>
+                  <th className="px-3 py-2 font-semibold">Min</th>
+                  <th className="px-3 py-2 font-semibold">Max</th>
+                  <th className="px-3 py-2 font-semibold">Day</th>
+                  <th className="px-3 py-2 font-semibold">Night</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weatherForecastDays.length ? (
+                  weatherForecastDays.map((day) => (
+                    <tr
+                      key={day.date}
+                      className={`border-b border-black/5 align-top last:border-b-0 ${
+                        day.date === date ? "bg-amber-50/60" : ""
+                      }`}
+                    >
+                      <td className="px-3 py-3 whitespace-nowrap font-semibold text-black">
+                        {day.date}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                        {formatTemp(
+                          displayUnit === "C" ? day.minTempC : day.minTempF,
+                          displayUnit,
+                        )}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                        {formatTemp(
+                          displayUnit === "C" ? day.maxTempC : day.maxTempF,
+                          displayUnit,
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-black/70">{day.dayPhrase || "—"}</td>
+                      <td className="px-3 py-3 text-black/70">{day.nightPhrase || "—"}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-black/55">
+                      {weatherPanelError
+                        ? `Weather panel failed: ${weatherPanelError}`
+                        : weatherForecast?.status === "error"
+                          ? weatherForecast.error || "Weather.com forecast unavailable."
+                          : isWeatherLoading
+                            ? "Loading Weather.com forecast..."
+                            : "No Weather.com forecast rows available."}
                     </td>
                   </tr>
                 )}
