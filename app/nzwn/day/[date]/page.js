@@ -139,6 +139,22 @@ function formatStoredLocalDateTime(tsLocal) {
   return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
+function formatStoredLocalTime(tsLocal) {
+  const match =
+    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(tsLocal || "");
+  if (!match) {
+    return tsLocal || "—";
+  }
+  const hour24 = Number(match[2]);
+  const minute = Number(match[3]);
+  if (!Number.isFinite(hour24) || !Number.isFinite(minute)) {
+    return tsLocal;
+  }
+  const period = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+}
+
 function formatAucklandDateTimeSeconds(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
@@ -226,16 +242,6 @@ function formatLivePollMessage(result) {
   return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
 }
 
-function formatNearLiveCurrentMessage(result) {
-  if (!result?.ok) {
-    return "Near-live Weather.com airport current unavailable.";
-  }
-  const observedText = result.observedAtLocal
-    ? formatStoredLocalDateTime(result.observedAtLocal)
-    : "—";
-  return `Near-live Weather.com airport current: ${result.tempC?.toFixed(1) ?? "—"}°C at ${observedText}.`;
-}
-
 function buildLineDataset(rows, unit) {
   const points = rows
     .map((row) => {
@@ -276,6 +282,83 @@ function buildLineDataset(rows, unit) {
   };
 }
 
+function buildForecastPeakByDate(rows) {
+  const rowsByDate = new Map();
+  for (const row of rows) {
+    if (!row?.date || !Number.isFinite(row?.tempC) || !Number.isFinite(row?.validTimeUtc)) {
+      continue;
+    }
+    if (!rowsByDate.has(row.date)) {
+      rowsByDate.set(row.date, []);
+    }
+    rowsByDate.get(row.date).push(row);
+  }
+
+  const peaks = new Map();
+  for (const [dayDate, dayRows] of rowsByDate.entries()) {
+    const sortedRows = [...dayRows].sort((a, b) => a.validTimeUtc - b.validTimeUtc);
+    let maxTempC = Number.NEGATIVE_INFINITY;
+    for (const row of sortedRows) {
+      if (row.tempC > maxTempC) {
+        maxTempC = row.tempC;
+      }
+    }
+    if (!Number.isFinite(maxTempC)) {
+      continue;
+    }
+
+    let peakWindow = null;
+    for (const row of sortedRows) {
+      if (row.tempC !== maxTempC) {
+        if (peakWindow) {
+          break;
+        }
+        continue;
+      }
+
+      if (!peakWindow) {
+        peakWindow = {
+          date: dayDate,
+          startValidTimeUtc: row.validTimeUtc,
+          endValidTimeUtc: row.validTimeUtc,
+          startValidTimeLocal: row.validTimeLocal,
+          endValidTimeLocal: row.validTimeLocal,
+          tempC: row.tempC,
+          tempF: row.tempF,
+          phrase: row.phrase ?? null,
+        };
+        continue;
+      }
+
+      if (row.validTimeUtc - peakWindow.endValidTimeUtc <= 90 * 60 * 1000) {
+        peakWindow.endValidTimeUtc = row.validTimeUtc;
+        peakWindow.endValidTimeLocal = row.validTimeLocal;
+        continue;
+      }
+
+      break;
+    }
+
+    if (peakWindow) {
+      peaks.set(dayDate, peakWindow);
+    }
+  }
+
+  return peaks;
+}
+
+function formatPeakWindow(peak) {
+  if (!peak?.startValidTimeLocal) {
+    return "—";
+  }
+  const startLabel = formatStoredLocalTime(peak.startValidTimeLocal);
+  const endLabel =
+    peak.endValidTimeLocal && peak.endValidTimeLocal !== peak.startValidTimeLocal
+      ? formatStoredLocalTime(peak.endValidTimeLocal)
+      : null;
+  return endLabel ? `${startLabel} to ${endLabel}` : startLabel;
+}
+
 export default function NzwnDayPage() {
   const params = useParams();
   const router = useRouter();
@@ -284,10 +367,12 @@ export default function NzwnDayPage() {
   const [inputDate, setInputDate] = useState(date);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [nearLiveCurrent, setNearLiveCurrent] = useState(null);
-  const [nearLiveError, setNearLiveError] = useState("");
+  const [weatherPanel, setWeatherPanel] = useState(null);
+  const [weatherPanelError, setWeatherPanelError] = useState("");
+  const [isWeatherLoading, setIsWeatherLoading] = useState(false);
   const inFlightRef = useRef(false);
   const backfilledDateRef = useRef("");
+  const weatherRequestRef = useRef(0);
 
   const isDateValid = isValidDate(date);
   const aucklandTodayDate = aucklandTodayKey();
@@ -296,9 +381,7 @@ export default function NzwnDayPage() {
 
   const backfillDay = useAction("preflight:backfillDayStationMessages");
   const pollLatest = useAction("preflight:pollLatestStationMetar");
-  const fetchNearLiveCurrent = useAction(
-    "preflight:fetchLatestWeatherComAirportCurrent",
-  );
+  const loadNzwnWeather = useAction("nzwnWeather:getDayPageWeather");
 
   const dayData = useQuery(
     "preflight:getDayStationRows",
@@ -320,10 +403,57 @@ export default function NzwnDayPage() {
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
   const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
   const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
+  const currentReading = weatherPanel?.currentReading ?? null;
+  const weatherForecast = weatherPanel?.forecast ?? null;
+  const weatherForecastDays = weatherForecast?.days ?? [];
+  const weatherHourly = weatherPanel?.hourly ?? null;
+  const weatherHourlyRows = weatherHourly?.rows ?? [];
+  const selectedDateForecast = weatherPanel?.selectedDateForecast ?? null;
 
   useEffect(() => {
     setInputDate(date);
   }, [date]);
+
+  useEffect(() => {
+    if (!isDateValid) {
+      setWeatherPanel(null);
+      setWeatherPanelError("");
+      setIsWeatherLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const requestId = weatherRequestRef.current + 1;
+    weatherRequestRef.current = requestId;
+    setIsWeatherLoading(true);
+
+    async function loadWeatherPanel() {
+      try {
+        const result = await loadNzwnWeather({ date });
+        if (!cancelled && weatherRequestRef.current === requestId) {
+          setWeatherPanel(result);
+          setWeatherPanelError("");
+        }
+      } catch (error) {
+        console.error(error);
+        if (!cancelled && weatherRequestRef.current === requestId) {
+          const message = error instanceof Error ? error.message : String(error);
+          setWeatherPanel(null);
+          setWeatherPanelError(message);
+        }
+      } finally {
+        if (!cancelled && weatherRequestRef.current === requestId) {
+          setIsWeatherLoading(false);
+        }
+      }
+    }
+
+    loadWeatherPanel();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [date, isDateValid, loadNzwnWeather]);
 
   useEffect(() => {
     if (!isDateValid) {
@@ -355,22 +485,6 @@ export default function NzwnDayPage() {
           messages.push(formatLivePollMessage(pollResult));
         }
 
-        try {
-          const unofficialResult = await fetchNearLiveCurrent({
-            stationIcao: STATION_ICAO,
-          });
-          messages.push(formatNearLiveCurrentMessage(unofficialResult));
-          if (!cancelled) {
-            setNearLiveCurrent(unofficialResult);
-            setNearLiveError("");
-          }
-        } catch (error) {
-          if (!cancelled) {
-            const message = error instanceof Error ? error.message : String(error);
-            setNearLiveError(message);
-          }
-        }
-
         if (!cancelled) {
           setLiveMessage(messages.join(" "));
         }
@@ -390,7 +504,7 @@ export default function NzwnDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, backfillDay, pollLatest, fetchNearLiveCurrent]);
+  }, [date, isDateValid, isToday, backfillDay, pollLatest]);
 
   async function handleRefreshNow() {
     if (!isDateValid || inFlightRef.current) {
@@ -399,33 +513,56 @@ export default function NzwnDayPage() {
 
     setIsRefreshing(true);
     inFlightRef.current = true;
+    const weatherRequestId = weatherRequestRef.current + 1;
+    weatherRequestRef.current = weatherRequestId;
+    setIsWeatherLoading(true);
     try {
-      const messages = [];
-      const backfillResult = await backfillDay({
-        stationIcao: STATION_ICAO,
-        date,
-      });
-      backfilledDateRef.current = date;
-      messages.push(formatBackfillMessage(backfillResult));
+      const [officialResult, weatherResult] = await Promise.allSettled([
+        (async () => {
+          const messages = [];
+          const backfillResult = await backfillDay({
+            stationIcao: STATION_ICAO,
+            date,
+          });
+          backfilledDateRef.current = date;
+          messages.push(formatBackfillMessage(backfillResult));
 
-      if (isToday) {
-        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-        messages.push(formatLivePollMessage(pollResult));
+          if (isToday) {
+            const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
+            messages.push(formatLivePollMessage(pollResult));
+          }
+
+          return messages.join(" ");
+        })(),
+        loadNzwnWeather({ date }),
+      ]);
+
+      if (officialResult.status === "fulfilled") {
+        setLiveMessage(officialResult.value);
+      } else {
+        console.error(officialResult.reason);
+        const message =
+          officialResult.reason instanceof Error
+            ? officialResult.reason.message
+            : String(officialResult.reason);
+        setLiveMessage(`Manual refresh failed: ${message}`);
       }
 
-      try {
-        const unofficialResult = await fetchNearLiveCurrent({
-          stationIcao: STATION_ICAO,
-        });
-        messages.push(formatNearLiveCurrentMessage(unofficialResult));
-        setNearLiveCurrent(unofficialResult);
-        setNearLiveError("");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setNearLiveError(message);
+      if (weatherResult.status === "fulfilled") {
+        if (weatherRequestRef.current === weatherRequestId) {
+          setWeatherPanel(weatherResult.value);
+          setWeatherPanelError("");
+        }
+      } else {
+        console.error(weatherResult.reason);
+        if (weatherRequestRef.current === weatherRequestId) {
+          const message =
+            weatherResult.reason instanceof Error
+              ? weatherResult.reason.message
+              : String(weatherResult.reason);
+          setWeatherPanelError(message);
+        }
       }
-
-      setLiveMessage(messages.join(" "));
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -433,6 +570,9 @@ export default function NzwnDayPage() {
     } finally {
       inFlightRef.current = false;
       setIsRefreshing(false);
+      if (weatherRequestRef.current === weatherRequestId) {
+        setIsWeatherLoading(false);
+      }
     }
   }
 
@@ -501,6 +641,15 @@ export default function NzwnDayPage() {
     }),
     [displayUnit],
   );
+
+  const forecastPeakByDate = useMemo(
+    () => buildForecastPeakByDate(weatherHourlyRows),
+    [weatherHourlyRows],
+  );
+  const selectedForecastPeak = forecastPeakByDate.get(date) ?? null;
+  const todayForecastPeak =
+    forecastPeakByDate.get(weatherPanel?.todayDate ?? aucklandTodayDate) ?? null;
+  const forecastPeak = selectedForecastPeak ?? todayForecastPeak;
 
   if (!isDateValid) {
     return (
@@ -606,7 +755,7 @@ export default function NzwnDayPage() {
               disabled={isRefreshing}
               className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isRefreshing ? "Refreshing..." : "Refresh from PreFlight"}
+              {isRefreshing ? "Refreshing..." : "Refresh Current Data"}
             </button>
             {isToday ? (
               <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
@@ -677,17 +826,17 @@ export default function NzwnDayPage() {
               Near-Live Now
             </p>
             <p className="mt-2 text-3xl font-semibold text-foreground">
-              {nearLiveCurrent
+              {currentReading?.status === "ok"
                 ? formatTemp(
-                    displayUnit === "C" ? nearLiveCurrent.tempC : nearLiveCurrent.tempF,
+                    displayUnit === "C" ? currentReading.tempC : currentReading.tempF,
                     displayUnit,
                   )
                 : "—"}
             </p>
             <p className="mt-2 text-sm text-black/65">
-              {nearLiveCurrent?.observedAtLocal
+              {currentReading?.observedAtLocal
                 ? `Weather.com airport current at ${formatStoredLocalDateTime(
-                    nearLiveCurrent.observedAtLocal,
+                    currentReading.observedAtLocal,
                   )}`
                 : "Unofficial airport-current feed not loaded yet."}
             </p>
@@ -728,75 +877,226 @@ export default function NzwnDayPage() {
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">
-            Near-Live Airport Current
-          </h2>
-          <p className="mt-1 text-sm text-black/60">
-            Unofficial Weather.com/Wunderground airport-current observation for
-            NZWN. This can be newer than the latest official METAR.
-          </p>
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-                Current Reading
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">
+                Weather.com + Google
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm text-black/60">
+                Weather.com airport current for NZWN, Weather.com&apos;s 5-day
+                forecast for Wellington, and Google hourly timing for forecast
+                peak windows. Peak-window cells only fill when the hourly window
+                covers that date.
               </p>
-              <p className="mt-2 text-2xl font-semibold text-foreground">
-                {nearLiveCurrent
+            </div>
+            {isWeatherLoading ? (
+              <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-sky-800">
+                Loading live forecast data
+              </span>
+            ) : null}
+          </div>
+
+          {weatherPanelError ? (
+            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              Weather panel load failed: {weatherPanelError}
+            </div>
+          ) : null}
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                Weather.com Current Temperature
+              </p>
+              <p className="mt-2 text-3xl font-semibold text-black">
+                {currentReading?.status === "ok"
                   ? formatTemp(
-                      displayUnit === "C" ? nearLiveCurrent.tempC : nearLiveCurrent.tempF,
+                      displayUnit === "C" ? currentReading.tempC : currentReading.tempF,
                       displayUnit,
                     )
                   : "—"}
               </p>
-              <p className="mt-2 text-sm text-black/65">
-                {nearLiveCurrent?.observedAtLocal
-                  ? `Observed ${formatStoredLocalDateTime(
-                      nearLiveCurrent.observedAtLocal,
-                    )}`
-                  : "No near-live current reading loaded yet."}
+              <p className="mt-2 text-sm text-black/60">
+                Observed{" "}
+                {currentReading?.observedAtLocal
+                  ? formatStoredLocalDateTime(currentReading.observedAtLocal)
+                  : "—"}
               </p>
-              <p className="mt-2 text-sm text-black/65">
-                {nearLiveCurrent?.phrase ?? "—"}
+              <p className="mt-1 text-xs text-black/55">
+                {currentReading?.status === "error"
+                  ? currentReading.error || "Weather.com current conditions unavailable."
+                  : currentReading?.phrase ||
+                    "Wellington airport current conditions from Weather.com."}
               </p>
             </div>
 
-            <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-                Extra Fields
+            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                Forecast Peak Time
+              </p>
+              <p className="mt-2 text-3xl font-semibold text-black">
+                {formatPeakWindow(forecastPeak)}
+              </p>
+              <p className="mt-2 text-sm text-black/60">
+                {forecastPeak?.date
+                  ? `Google hourly peak for ${forecastPeak.date}`
+                  : "Hourly peak time is only available inside the current Google forecast window."}
+              </p>
+              <p className="mt-1 text-xs text-black/55">
+                {weatherHourly?.status === "error"
+                  ? weatherHourly.error || "Hourly forecast unavailable."
+                  : forecastPeak
+                    ? `${formatTemp(
+                        displayUnit === "C" ? forecastPeak.tempC : forecastPeak.tempF,
+                        displayUnit,
+                      )}${forecastPeak.phrase ? ` | ${forecastPeak.phrase}` : ""}`
+                    : "Selected date peak timing is not available from the current hourly forecast window."}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                Weather.com Forecast
+              </p>
+              <p className="mt-2 text-3xl font-semibold text-black">
+                {selectedDateForecast
+                  ? formatTemp(
+                      displayUnit === "C"
+                        ? selectedDateForecast.maxTempC
+                        : selectedDateForecast.maxTempF,
+                      displayUnit,
+                    )
+                  : "—"}
+              </p>
+              <p className="mt-2 text-sm text-black/60">Selected Date {date}</p>
+              <p className="mt-1 text-xs text-black/55">
+                {weatherForecast?.status === "error"
+                  ? weatherForecast.error || "5-day forecast unavailable."
+                  : selectedDateForecast
+                    ? `Min ${formatTemp(
+                        displayUnit === "C"
+                          ? selectedDateForecast.minTempC
+                          : selectedDateForecast.minTempF,
+                        displayUnit,
+                      )}${selectedDateForecast.dayPhrase ? ` | ${selectedDateForecast.dayPhrase}` : ""}`
+                    : "Selected date is outside the current 5-day Weather.com window."}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                Current Details
               </p>
               <div className="mt-3 space-y-2 text-sm text-black/70">
                 <p>
                   Humidity:{" "}
-                  {Number.isFinite(nearLiveCurrent?.relativeHumidity)
-                    ? `${nearLiveCurrent.relativeHumidity}%`
+                  {Number.isFinite(currentReading?.relativeHumidity)
+                    ? `${currentReading.relativeHumidity}%`
                     : "—"}
                 </p>
                 <p>
                   Wind:{" "}
-                  {Number.isFinite(nearLiveCurrent?.windSpeedKph)
-                    ? `${nearLiveCurrent.windSpeedKph} km/h`
+                  {Number.isFinite(currentReading?.windSpeedKph)
+                    ? `${currentReading.windSpeedKph} km/h`
                     : "—"}
                 </p>
                 <p>
                   Gust:{" "}
-                  {Number.isFinite(nearLiveCurrent?.windGustKph)
-                    ? `${nearLiveCurrent.windGustKph} km/h`
+                  {Number.isFinite(currentReading?.windGustKph)
+                    ? `${currentReading.windGustKph} km/h`
                     : "—"}
                 </p>
                 <p>
                   Pressure:{" "}
-                  {Number.isFinite(nearLiveCurrent?.pressureHpa)
-                    ? `${nearLiveCurrent.pressureHpa} hPa`
+                  {Number.isFinite(currentReading?.pressureHpa)
+                    ? `${currentReading.pressureHpa} hPa`
                     : "—"}
                 </p>
                 <p>
                   Status:{" "}
-                  {nearLiveError
-                    ? `Unavailable (${nearLiveError})`
-                    : nearLiveCurrent?.sourceLabel ?? "Loaded"}
+                  {currentReading?.status === "error"
+                    ? `Unavailable (${currentReading.error || "request failed"})`
+                    : currentReading?.sourceLabel ?? "Loaded"}
                 </p>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">
+                Weather.com 5-Day Forecast
+              </h2>
+              <p className="mt-1 text-sm text-black/60">
+                Daily rows come from Weather.com&apos;s 5-day forecast endpoint.
+                Peak Window comes from Google&apos;s hourly forecast API, so only
+                days inside that hourly window will show a hit time.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="border-b border-black/10 text-black/55">
+                  <th className="px-3 py-2 font-semibold">Date</th>
+                  <th className="px-3 py-2 font-semibold">Min</th>
+                  <th className="px-3 py-2 font-semibold">Max</th>
+                  <th className="px-3 py-2 font-semibold">Peak Window</th>
+                  <th className="px-3 py-2 font-semibold">Day</th>
+                  <th className="px-3 py-2 font-semibold">Night</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weatherForecastDays.length ? (
+                  weatherForecastDays.map((day) => {
+                    const peak = forecastPeakByDate.get(day.date) ?? null;
+                    const isSelectedForecastDay = day.date === date;
+
+                    return (
+                      <tr
+                        key={day.date}
+                        className={`border-b border-black/5 align-top last:border-b-0 ${
+                          isSelectedForecastDay ? "bg-amber-50/60" : ""
+                        }`}
+                      >
+                        <td className="px-3 py-3 whitespace-nowrap font-semibold text-black">
+                          {day.date}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {formatTemp(
+                            displayUnit === "C" ? day.minTempC : day.minTempF,
+                            displayUnit,
+                          )}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {formatTemp(
+                            displayUnit === "C" ? day.maxTempC : day.maxTempF,
+                            displayUnit,
+                          )}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {formatPeakWindow(peak)}
+                        </td>
+                        <td className="px-3 py-3 text-black/70">{day.dayPhrase || "—"}</td>
+                        <td className="px-3 py-3 text-black/70">{day.nightPhrase || "—"}</td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-6 text-center text-black/55">
+                      {weatherForecast?.status === "error"
+                        ? weatherForecast.error || "Weather.com forecast unavailable."
+                        : isWeatherLoading
+                          ? "Loading Weather.com forecast..."
+                          : "No Weather.com forecast rows available."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </section>
 

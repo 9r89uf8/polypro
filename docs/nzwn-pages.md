@@ -27,22 +27,32 @@ What this page displays:
   - two quick previous-day links
   - date picker + `Go`
 - Unit toggle (`C` / `F`)
-- `Refresh from PreFlight` button
+- `Refresh Current Data` button
 - Live badge when viewing the current Wellington local date
 - Summary cards:
   - `Latest`
   - `Day Range`
   - `Messages`
   - `Near-Live Now`
+- `Weather.com + Google` panel:
+  - unofficial Weather.com airport current for `NZWN`
+  - current-condition details such as humidity, wind, gust, and pressure when
+    present
+  - selected-date Weather.com forecast summary
+  - Google hourly forecast-derived peak time window
+- `Weather.com 5-Day Forecast` table:
+  - `Date`
+  - `Min`
+  - `Max`
+  - `Peak Window`
+  - `Day`
+  - `Night`
 - One line chart:
   - official NZWN `METAR`
   - off-hour `SPECI` points if the official feed exposes them
   - blue points for `METAR`, red points for `SPECI`
   - x-axis is `Pacific/Auckland` local time
 - `Latest Raw METAR` panel
-- `Near-Live Airport Current` panel
-  - unofficial Weather.com/Wunderground airport-current observation for `NZWN`
-  - separate from the official METAR history series
 - `Publish Race` table showing recent first-seen timing across official
   PreFlight, authenticated AEROWEB, and NOAA `tgftp`
   - publish-race timestamps are displayed in `America/Chicago`
@@ -66,11 +76,15 @@ Behavior details:
   - also runs `preflight:pollLatestStationMetar`
   - the page shows the stored first-seen time for any row captured from the
     latest official endpoint
-- Manual refresh reruns the same rolling sync, and reruns the latest poll when
-  the route date is today.
-- Each page load and manual refresh also fetches a live unofficial
-  `Weather.com/Wunderground` airport-current reading for `NZWN`.
-- The unofficial card is independent of the selected historical date.
+- Each page load also loads a live unofficial weather sidecar:
+  - Weather.com airport current for `NZWN`
+  - Weather.com 5-day daily forecast for Wellington
+  - Google hourly forecast used to derive peak-time windows
+- Manual refresh reruns the same rolling sync, reruns the latest poll when the
+  route date is today, and reloads that weather sidecar.
+- The unofficial current card is independent of the selected historical date.
+- The 5-day forecast and hourly peak windows are limited to the current live
+  provider window, so older selected dates usually show no forecast row.
 - Observations are deduped by `(stationIcao, date, obsTimeUtc)` in
   `preflightMetarObservations`.
 - Recent publish-race rows are loaded from `preflightPublishRaceReports`.
@@ -97,13 +111,22 @@ Near-live unofficial NZWN airport current JSON:
 
 - `https://api.weather.com/v3/wx/observations/current?apiKey=...&language=en-US&units=m&format=json&icaoCode=NZWN`
 
+Near-live unofficial NZWN/Wellington forecast JSON:
+
+- `https://api.weather.com/v3/wx/forecast/daily/5day?apiKey=...&language=en-US&units=m&format=json&geocode=-41.286,174.777`
+
+Google hourly forecast used for peak-window timing:
+
+- `https://weather.googleapis.com/v1/forecast/hours:lookup?key=...&location.latitude=-41.286&location.longitude=174.777`
+
 Requirements:
 
 - Requests must send `Authorization: Bearer <token>`
 - The token is a logged-in user access token captured from PreFlight, stored in
   `PREFLIGHT_AUTH_BEARER_TOKEN`
-- The unofficial Weather.com current endpoint uses the public key embedded in
-  Wunderground airport pages.
+- The unofficial Weather.com current and 5-day endpoints use the public key
+  embedded in Wunderground airport pages.
+- The Google hourly endpoint uses `GOOGLE_WEATHER_API_KEY`.
 
 Known limitation:
 
