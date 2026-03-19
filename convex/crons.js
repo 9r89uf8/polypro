@@ -84,23 +84,13 @@ crons.cron(
     { stationIcao: "NZWN", durationMs: 15 * 60 * 1000 },
 );
 
-// Runs only around the expected LFPG routine publication windows so the
-// authenticated AEROWEB latest METAR feed stays fresh without second-by-second
-// background polling.
+// Runs every minute so the default LFPG background source is NOAA tgftp.
+// AEROWEB is now reserved for manual on-demand official fetches on the page
+// instead of continuous background race tracking.
 crons.cron(
-    "paris_aeroweb_latest_window_minutes",
-    "0-1,29-31,58-59 * * * *",
-    api.aeroweb.pollLatestStationMetar,
-    { stationIcao: "LFPG" },
-);
-
-// Runs every minute so the NOAA side of the Paris publish-race experiment is
-// always sampled, even when routine publication drifts a little past the
-// expected half-hour marks.
-crons.cron(
-    "paris_tgftp_publish_race_every_minute",
+    "paris_noaa_latest_every_minute",
     "* * * * *",
-    api.aeroweb.pollLatestNoaaPublishRace,
+    api.aeroweb.pollLatestNoaaStationMetar,
     { stationIcao: "LFPG" },
 );
 

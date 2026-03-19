@@ -204,20 +204,7 @@ function formatRaceWinner(winner) {
   return "Pending";
 }
 
-function formatLeadMs(leadMs) {
-  if (!Number.isFinite(leadMs)) {
-    return "—";
-  }
-  if (leadMs > 0 && leadMs < 1000) {
-    return "<1s";
-  }
-  if (leadMs < 120000) {
-    return `${(leadMs / 1000).toFixed(1)}s`;
-  }
-  return `${(leadMs / 60000).toFixed(1)} min`;
-}
-
-function formatLivePollMessage(result) {
+function formatOfficialPollMessage(result) {
   if (!result?.ok) {
     return "Latest official poll skipped.";
   }
@@ -229,7 +216,21 @@ function formatLivePollMessage(result) {
     ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
     : null;
 
-  return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
+  const didSave = (result.insertedCount ?? 0) > 0 || (result.patchedCount ?? 0) > 0;
+  return `Latest official poll: ${didSave ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
+}
+
+function formatNoaaPollMessage(result) {
+  if (!result?.ok) {
+    return "Default NOAA sync skipped.";
+  }
+
+  const lastModifiedText = Number.isFinite(result.tgftpLastModifiedAt)
+    ? formatChicagoDateTimeSeconds(result.tgftpLastModifiedAt)
+    : null;
+
+  const didSave = (result.insertedCount ?? 0) > 0 || (result.patchedCount ?? 0) > 0;
+  return `Default NOAA sync: ${didSave ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${lastModifiedText ? ` tgftp Last-Modified ${lastModifiedText}.` : ""}`;
 }
 
 function buildLineDataset(rows, unit) {
@@ -252,7 +253,7 @@ function buildLineDataset(rows, unit) {
     .filter(Boolean);
 
   return {
-    label: "Official AEROWEB",
+    label: "Stored LFPG METAR",
     data: points,
     borderColor: "#0f4c81",
     backgroundColor: "#0f4c81",
@@ -357,6 +358,7 @@ export default function ParisDayPage() {
   const [inputDate, setInputDate] = useState(date);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isOfficialRefreshing, setIsOfficialRefreshing] = useState(false);
   const [weatherPanel, setWeatherPanel] = useState(null);
   const [weatherPanelError, setWeatherPanelError] = useState("");
   const [isWeatherLoading, setIsWeatherLoading] = useState(false);
@@ -368,7 +370,8 @@ export default function ParisDayPage() {
   const isToday = isDateValid && date === parisTodayDate;
   const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
-  const pollLatest = useAction("aeroweb:pollLatestStationMetar");
+  const pollLatestOfficial = useAction("aeroweb:pollLatestStationMetar");
+  const pollLatestNoaa = useAction("aeroweb:pollLatestNoaaStationMetar");
   const loadParisWeather = useAction("parisWeather:getDayPageWeather");
 
   const dayData = useQuery(
@@ -380,15 +383,8 @@ export default function ParisDayPage() {
         }
       : "skip",
   );
-  const raceData = useQuery("aeroweb:getRecentPublishRaceReports", {
-    stationIcao: STATION_ICAO,
-    limit: 12,
-    routineOnly: true,
-  });
-
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
-  const raceRows = raceData?.rows ?? [];
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
   const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
   const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
@@ -452,7 +448,7 @@ export default function ParisDayPage() {
     }
     if (!isToday) {
       setLiveMessage(
-        "Historical LFPG dates depend on rows captured live from authenticated AEROWEB polling. No authenticated day-history backfill endpoint is wired yet.",
+        "Historical LFPG dates depend on rows captured from default NOAA polling plus any manual AEROWEB official fetches. No authenticated day-history backfill endpoint is wired yet.",
       );
       return;
     }
@@ -465,9 +461,9 @@ export default function ParisDayPage() {
       }
       inFlightRef.current = true;
       try {
-        const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
+        const pollResult = await pollLatestNoaa({ stationIcao: STATION_ICAO });
         if (!cancelled) {
-          setLiveMessage(formatLivePollMessage(pollResult));
+          setLiveMessage(formatNoaaPollMessage(pollResult));
         }
       } catch (error) {
         console.error(error);
@@ -485,7 +481,7 @@ export default function ParisDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, pollLatest]);
+  }, [date, isDateValid, isToday, pollLatestNoaa]);
 
   async function handleRefreshNow() {
     if (!isDateValid || !isToday || inFlightRef.current) {
@@ -499,12 +495,12 @@ export default function ParisDayPage() {
     setIsWeatherLoading(true);
     try {
       const [pollResult, weatherResult] = await Promise.allSettled([
-        pollLatest({ stationIcao: STATION_ICAO }),
+        pollLatestNoaa({ stationIcao: STATION_ICAO }),
         loadParisWeather({ date }),
       ]);
 
       if (pollResult.status === "fulfilled") {
-        setLiveMessage(formatLivePollMessage(pollResult.value));
+        setLiveMessage(formatNoaaPollMessage(pollResult.value));
       } else {
         console.error(pollResult.reason);
         const message =
@@ -539,6 +535,29 @@ export default function ParisDayPage() {
       if (weatherRequestRef.current === weatherRequestId) {
         setIsWeatherLoading(false);
       }
+    }
+  }
+
+  async function handleFetchOfficialNow() {
+    if (!isDateValid || !isToday || inFlightRef.current) {
+      return;
+    }
+
+    setIsOfficialRefreshing(true);
+    inFlightRef.current = true;
+    try {
+      const pollResult = await pollLatestOfficial({
+        stationIcao: STATION_ICAO,
+        recordPublishRace: false,
+      });
+      setLiveMessage(formatOfficialPollMessage(pollResult));
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : String(error);
+      setLiveMessage(`Official fetch failed: ${message}`);
+    } finally {
+      inFlightRef.current = false;
+      setIsOfficialRefreshing(false);
     }
   }
 
@@ -649,10 +668,10 @@ export default function ParisDayPage() {
             {STATION_NAME} Official METAR Day Chart
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
-            Official LFPG METAR from Meteo-France&apos;s authenticated AEROWEB
-            `showmessage.php` endpoint. Today is kept live from the authenticated
-            official page; older dates can only show rows we already captured live
-            because a day-history endpoint is not confirmed yet.
+            LFPG now uses NOAA `tgftp` as the default background source and keeps
+            AEROWEB as an on-demand official fetch when you want the new METAR a
+            few minutes earlier. Older dates can only show rows we already
+            captured live because a day-history endpoint is not confirmed yet.
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -721,11 +740,19 @@ export default function ParisDayPage() {
               disabled={isRefreshing || !isToday}
               className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isRefreshing ? "Refreshing..." : "Refresh Current Data"}
+              {isRefreshing ? "Refreshing..." : "Refresh Default Data"}
+            </button>
+            <button
+              type="button"
+              onClick={handleFetchOfficialNow}
+              disabled={isOfficialRefreshing || !isToday}
+              className="rounded-full border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-900 transition hover:border-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isOfficialRefreshing ? "Fetching Official..." : "Fetch Official Now"}
             </button>
             {isToday ? (
               <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
-                Live authenticated ingest enabled
+                Default NOAA ingest enabled
               </span>
             ) : (
               <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-amber-900">
@@ -737,12 +764,12 @@ export default function ParisDayPage() {
           <p className="mt-4 text-sm text-black/70">
             {liveMessage ||
               (isToday
-                ? "Waiting for AEROWEB sync..."
-                : "Historical LFPG dates depend on previously captured live AEROWEB rows.")}
+                ? "Waiting for default NOAA sync..."
+                : "Historical LFPG dates depend on previously captured NOAA and manual AEROWEB rows.")}
           </p>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
               Latest
@@ -788,8 +815,26 @@ export default function ParisDayPage() {
               {summary?.obsCount ?? 0}
             </p>
             <p className="mt-2 text-sm text-black/65">
-              Official AEROWEB routine METAR with any captured off-cycle SPECI in
-              the same stored day series.
+              Stored LFPG METAR with any captured off-cycle SPECI in the same
+              series. Default rows come from NOAA; manual official fetches can
+              upgrade the same observation with AEROWEB timing.
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
+              Typical Availability
+            </p>
+            <p className="mt-2 text-xl font-semibold text-foreground">
+              AEROWEB ~:58 / :29
+            </p>
+            <p className="mt-1 text-sm text-black/65">
+              NOAA `tgftp` ~:03 / :33
+            </p>
+            <p className="mt-2 text-xs text-black/55">
+              Recent LFPG publish-race results show AEROWEB leading NOAA by
+              roughly 4 to 5 minutes, so use `Fetch Official Now` near those
+              routine windows when you need the earliest official copy.
             </p>
           </div>
         </section>
@@ -1012,7 +1057,8 @@ export default function ParisDayPage() {
                 Temperature Line
               </h2>
               <p className="mt-1 text-sm text-black/60">
-                Blue markers are routine METAR. Red markers are SPECI.
+                Stored LFPG METAR rows. Blue markers are routine METAR. Red
+                markers are SPECI.
               </p>
             </div>
           </div>
@@ -1036,85 +1082,6 @@ export default function ParisDayPage() {
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
-              <p className="mt-1 text-sm text-black/60">
-                Recent routine half-hour LFPG METAR first-seen timing across the
-                authenticated AEROWEB `showmessage.php` endpoint and NOAA `tgftp`.
-                Times in this table are shown in America/Chicago. Winner and lead
-                are computed from the earliest two public first-seen timestamps.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Report Time</th>
-                  <th className="px-3 py-2 font-semibold">Winner</th>
-                  <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">AEROWEB Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
-                  <th className="px-3 py-2 font-semibold">Raw METAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {raceRows.length ? (
-                  raceRows.map((row) => (
-                    <tr
-                      key={row._id}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatChicagoDateTimeSeconds(row.reportTsUtc)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "aeroweb"
-                              ? "bg-emerald-50 text-emerald-800"
-                              : row.winner === "tgftp"
-                                ? "bg-amber-50 text-amber-900"
-                                : row.winner === "tie"
-                                  ? "bg-slate-100 text-slate-800"
-                                  : "bg-black/[0.05] text-black/65"
-                          }`}
-                        >
-                          {formatRaceWinner(row.winner)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatLeadMs(row.leadMs)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.aerowebFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
-                      </td>
-                      <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ?? row.aerowebRawMetar ?? row.tgftpRawMetar ?? "—"}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
-                      No publish-race rows stored yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
           <h2 className="text-xl font-semibold text-foreground">Raw Observations</h2>
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full border-collapse text-left text-sm">
@@ -1123,7 +1090,7 @@ export default function ParisDayPage() {
                   <th className="px-3 py-2 font-semibold">Local Time</th>
                   <th className="px-3 py-2 font-semibold">Type</th>
                   <th className="px-3 py-2 font-semibold">Temp</th>
-                  <th className="px-3 py-2 font-semibold">First Seen</th>
+                  <th className="px-3 py-2 font-semibold">Official First Seen</th>
                   <th className="px-3 py-2 font-semibold">Source</th>
                   <th className="px-3 py-2 font-semibold">Raw METAR</th>
                 </tr>

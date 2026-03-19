@@ -13,9 +13,8 @@ Example route: `/paris/day/2026-03-16`
 
 Purpose:
 
-- show the official LFPG METAR day chart backed by authenticated
-  `aviation.meteo.fr` polling
-- compare recent AEROWEB first-seen timing against NOAA `tgftp`
+- show the LFPG METAR day chart with NOAA `tgftp` as the default background
+  source and manual AEROWEB official fetches when needed sooner
 - show current Paris-airport temperature and 5-day forecast context from
   Weather.com
 - show today's NOAA METAR max for LFPG from AviationWeather raw METAR history
@@ -24,8 +23,6 @@ Main page behavior:
 
 - Uses `aeroweb:getDayStationRows` to load stored LFPG rows and the daily
   summary.
-- Uses `aeroweb:getRecentPublishRaceReports` with `routineOnly: true` to load
-  recent routine publish-race rows.
 - Uses `parisWeather:getDayPageWeather` to load on-demand sidecar data for the
   page:
   - Weather.com current temperature for the LFPG airport geocode
@@ -34,12 +31,21 @@ Main page behavior:
     where available
   - today's NOAA/AviationWeather LFPG METAR max from a raw METAR pull
 - If the selected date equals the current `Europe/Paris` date:
-  - runs `aeroweb:pollLatestStationMetar` on first load
-  - manual refresh re-runs both the authenticated AEROWEB poll and the
-    on-demand Weather.com / NOAA sidecar fetch
+  - runs `aeroweb:pollLatestNoaaStationMetar` on first load
+  - `Refresh Default Data` re-runs the NOAA latest ingest and the on-demand
+    Weather.com / NOAA sidecar fetch
+  - `Fetch Official Now` runs `aeroweb:pollLatestStationMetar` on demand to
+    upgrade the current LFPG observation from authenticated AEROWEB
 - If the selected date is not today:
   - no authenticated history backfill is attempted
   - the page only shows rows already captured live and stored earlier
+- the page no longer shows the Paris publish-race table because the observed
+  LFPG result was stable and decisive: AEROWEB was consistently about 4 to 5
+  minutes earlier than NOAA
+- instead, the page shows a `Typical Availability` card with the usual LFPG
+  routine timing:
+  - AEROWEB around `:58` and `:29`
+  - NOAA around `:03` and `:33`
 - peak-time cells are only populated when the selected forecast day is inside
   the current Google hourly forecast window; later 5-day rows keep the
   Weather.com daily max/min forecast but show no hit time
@@ -67,25 +73,30 @@ Convex tables:
   - one row per stored LFPG METAR/SPECI observation
   - includes parsed temperature, canonical raw METAR, source, and optional
     `aerowebFirstSeenAt`
+  - default routine rows are normally inserted from NOAA `tgftp`
+  - a manual official AEROWEB fetch can later patch the same timestamped row
+    with authenticated-source metadata
 - `aerowebDailySummaries`
   - one LFPG summary row per local `Europe/Paris` date
 - `aerowebPublishRaceReports`
-  - first-seen timing rows for authenticated AEROWEB vs NOAA `tgftp`
+  - older first-seen timing rows for authenticated AEROWEB vs NOAA `tgftp`
+  - retained so Paris race logic can be re-enabled later if needed
 
 Convex functions:
 
 - `aeroweb:pollLatestStationMetar`
   - logs in to `aviation.meteo.fr`
   - fetches `showmessage.php?code=LFPG`
-  - stores the latest official METAR/SPECI row
-  - records the AEROWEB side of the publish-race row
-- `aeroweb:pollLatestNoaaPublishRace`
+  - stores the latest official METAR/SPECI row on demand
+  - the Paris page now calls it with `recordPublishRace: false`, so the manual
+    official button upgrades the stored LFPG row without appending new dormant
+    race rows
+- `aeroweb:pollLatestNoaaStationMetar`
   - samples `tgftp` for LFPG
-  - records the NOAA side of the publish-race row
+  - stores the latest LFPG METAR/SPECI row as the default background source
+  - does not write Paris publish-race rows
 - `aeroweb:getDayStationRows`
   - returns stored LFPG rows plus the daily summary for the selected date
-- `aeroweb:getRecentPublishRaceReports`
-  - returns recent LFPG publish-race rows
 - `parisWeather:getDayPageWeather`
   - on-demand page helper, does not write tables
   - calls Weather.com current conditions for LFPG
@@ -108,11 +119,13 @@ On-demand external endpoints used by `parisWeather:getDayPageWeather`:
 
 Crons:
 
-- `paris_aeroweb_latest_window_minutes`
-  - calls `aeroweb:pollLatestStationMetar`
-  - runs at minute `29`, `30`, `31`, `58`, `59`, `00`, and `01`
-  - this is the only scheduled AEROWEB poll path for Paris now, so the
-    publish-race table reflects minute-window sampling rather than the older
-    1-second watch
-- `paris_tgftp_publish_race_every_minute`
-  - calls `aeroweb:pollLatestNoaaPublishRace`
+- `paris_noaa_latest_every_minute`
+  - calls `aeroweb:pollLatestNoaaStationMetar`
+  - runs every minute
+  - this is the normal LFPG background ingest path now
+
+Current dormant code:
+
+- the Paris AEROWEB vs NOAA publish-race tables and helper functions still
+  exist in `convex/aeroweb.js`, but they are no longer part of the default page
+  or scheduled LFPG background flow

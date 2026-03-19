@@ -333,6 +333,25 @@ function buildObservationRow({
   };
 }
 
+function parseNoaaLatestRow(stationIcao, hit) {
+  const reportType = extractReportType(hit?.rawMetar);
+  if (!reportType) {
+    throw new Error("NOAA latest response did not include a METAR/SPECI prefix.");
+  }
+
+  const row = buildObservationRow({
+    stationIcao,
+    rawMetar: hit.rawMetar,
+    obsTimeUtc: hit.reportTsUtc,
+    sourcePrefix: "tgftp_latest",
+    fallbackReportType: reportType,
+  });
+  if (!row) {
+    throw new Error("NOAA latest response did not include a parseable observation row.");
+  }
+  return row;
+}
+
 function parseAerowebCurrentHtml(htmlText, stationIcao) {
   const html = String(htmlText ?? "");
   const match =
@@ -929,7 +948,11 @@ export const upsertStationRowsBatch = internalMutationGeneric({
       ) {
         patch.aerowebFirstSeenAt = seenAt;
       }
-      if (observationChanged(existing, row)) {
+      const shouldPreserveOfficialSource =
+        seenAt === null &&
+        (Number.isFinite(existing.aerowebFirstSeenAt) ||
+          String(existing.source ?? "").startsWith("aeroweb_"));
+      if (observationChanged(existing, row) && !shouldPreserveOfficialSource) {
         patch.obsTimeLocal = row.obsTimeLocal;
         patch.reportType = row.reportType;
         patch.tempC = row.tempC;
@@ -1073,12 +1096,14 @@ export const recordPublishRaceHit = internalMutationGeneric({
 export const pollLatestStationMetar = actionGeneric({
   args: {
     stationIcao: v.string(),
+    recordPublishRace: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
     if (!stationIcao) {
       throw new Error("stationIcao is required.");
     }
+    const recordPublishRace = args.recordPublishRace !== false;
 
     const sessionRef = { cookieHeader: null };
     const { seenAt, row } = await fetchLatestAerowebRaceHitWithSession(
@@ -1090,14 +1115,16 @@ export const pollLatestStationMetar = actionGeneric({
       seenAt,
       rows: [row],
     });
-    const raceRow = await ctx.runMutation("aeroweb:recordPublishRaceHit", {
-      stationIcao,
-      reportTsUtc: row.obsTimeUtc,
-      reportType: row.reportType,
-      source: RACE_SOURCE.AEROWEB,
-      rawMetar: row.rawMetar,
-      seenAt,
-    });
+    const raceRow = recordPublishRace
+      ? await ctx.runMutation("aeroweb:recordPublishRaceHit", {
+          stationIcao,
+          reportTsUtc: row.obsTimeUtc,
+          reportType: row.reportType,
+          source: RACE_SOURCE.AEROWEB,
+          rawMetar: row.rawMetar,
+          seenAt,
+        })
+      : null;
 
     return {
       ok: true,
@@ -1107,6 +1134,34 @@ export const pollLatestStationMetar = actionGeneric({
         aerowebFirstSeenAt: raceRow?.aerowebFirstSeenAt ?? seenAt,
       },
       availabilityLagMs: Math.max(0, seenAt - row.obsTimeUtc),
+      ...result,
+    };
+  },
+});
+
+export const pollLatestNoaaStationMetar = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const hit = await fetchLatestTgftpRaceHit(stationIcao);
+    const row = parseNoaaLatestRow(stationIcao, hit);
+    const result = await ctx.runMutation("aeroweb:upsertStationRowsBatch", {
+      stationIcao,
+      rows: [row],
+    });
+
+    return {
+      ok: true,
+      stationIcao,
+      row,
+      tgftpSeenAt: hit.seenAt,
+      tgftpLastModifiedAt: hit.lastModifiedAt,
       ...result,
     };
   },
