@@ -38,10 +38,11 @@ across:
 - AEMET AMA
 - NOAA `tgftp`
 
-Official AEMET polling is intentionally limited to the expected routine windows:
+Official AEMET polling uses a short publish-race watch:
 
-- `:29`, `:30`, `:31`
-- `:58`, `:59`, `:00`, `:01`
+- start at `:03` and `:33`
+- poll every `10s`
+- run for `6m`
 
 NOAA `tgftp` is sampled every minute so delayed mirrors are still recorded.
 

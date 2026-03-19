@@ -21,6 +21,8 @@ const PUBLISH_RACE_WINNER = {
 };
 const DEFAULT_RACE_QUERY_LIMIT = 12;
 const MAX_RACE_QUERY_LIMIT = 48;
+const DEFAULT_RACE_WATCH_INTERVAL_MS = 10 * 1000;
+const DEFAULT_RACE_WATCH_DURATION_MS = 6 * 60 * 1000;
 const DEFAULT_BROWSER_USER_AGENT = "Mozilla/5.0";
 const aemetSessionRef = {};
 
@@ -877,6 +879,12 @@ function inferPublishRaceReportType(row) {
   );
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function recomputeDailySummary(ctx, stationIcao, date) {
   const rows = await ctx.db
     .query("madridMetarObservations")
@@ -1214,6 +1222,130 @@ export const pollLatestNoaaPublishRace = actionGeneric({
       tgftpLastModifiedAt: hit.lastModifiedAt,
       winner: raceRow?.winner ?? null,
       leadMs: raceRow?.leadMs ?? null,
+    };
+  },
+});
+
+export const watchStationPublishRaceWindow = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+    intervalMs: v.optional(v.number()),
+    durationMs: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    const intervalMs = Math.max(
+      1000,
+      Math.min(30000, Math.round(args.intervalMs ?? DEFAULT_RACE_WATCH_INTERVAL_MS)),
+    );
+    const durationMs = Math.max(
+      intervalMs,
+      Math.min(20 * 60 * 1000, Math.round(args.durationMs ?? DEFAULT_RACE_WATCH_DURATION_MS)),
+    );
+
+    const startedAt = Date.now();
+    const deadline = startedAt + durationMs;
+    let iterations = 0;
+    let errorCount = 0;
+    let lastError = null;
+    let lastAemet = null;
+    let lastTgftp = null;
+    const touchedReportTimestamps = new Set();
+    const sessionRef = { cookieHeader: null };
+
+    while (Date.now() <= deadline) {
+      try {
+        const [aemetResult, tgftpResult] = await Promise.allSettled([
+          fetchLatestAemetRaceHit(stationIcao, sessionRef),
+          fetchLatestTgftpRaceHit(stationIcao),
+        ]);
+
+        const mutationCalls = [];
+
+        if (aemetResult.status === "fulfilled") {
+          lastAemet = aemetResult.value;
+          mutationCalls.push(
+            ctx.runMutation("madrid:upsertStationRowsBatch", {
+              stationIcao,
+              seenAt: aemetResult.value.seenAt,
+              rows: [aemetResult.value.row],
+            }),
+          );
+          mutationCalls.push(
+            ctx.runMutation("madrid:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: aemetResult.value.row.obsTimeUtc,
+              reportType: aemetResult.value.row.reportType,
+              source: RACE_SOURCE.AEMET,
+              rawMetar: aemetResult.value.row.rawMetar,
+              seenAt: aemetResult.value.seenAt,
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            aemetResult.reason instanceof Error
+              ? aemetResult.reason.message
+              : String(aemetResult.reason);
+        }
+
+        if (tgftpResult.status === "fulfilled") {
+          lastTgftp = tgftpResult.value;
+          mutationCalls.push(
+            ctx.runMutation("madrid:recordPublishRaceHit", {
+              stationIcao,
+              reportTsUtc: tgftpResult.value.reportTsUtc,
+              source: RACE_SOURCE.TGFTP,
+              rawMetar: tgftpResult.value.rawMetar,
+              seenAt: tgftpResult.value.seenAt,
+              ...(Number.isFinite(tgftpResult.value.lastModifiedAt)
+                ? { sourceLastModifiedAt: tgftpResult.value.lastModifiedAt }
+                : {}),
+            }),
+          );
+        } else {
+          errorCount += 1;
+          lastError =
+            tgftpResult.reason instanceof Error
+              ? tgftpResult.reason.message
+              : String(tgftpResult.reason);
+        }
+
+        const mutationResults = await Promise.all(mutationCalls);
+        for (const result of mutationResults) {
+          if (result?.reportTsUtc) {
+            touchedReportTimestamps.add(result.reportTsUtc);
+          }
+        }
+      } catch (error) {
+        errorCount += 1;
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+
+      iterations += 1;
+      if (Date.now() + intervalMs > deadline) {
+        break;
+      }
+      await sleep(intervalMs);
+    }
+
+    return {
+      ok: errorCount === 0,
+      stationIcao,
+      startedAt,
+      finishedAt: Date.now(),
+      durationMs,
+      intervalMs,
+      iterations,
+      errorCount,
+      lastError,
+      touchedReportCount: touchedReportTimestamps.size,
+      latestAemetReportTsUtc: lastAemet?.row?.obsTimeUtc ?? null,
+      latestTgftpReportTsUtc: lastTgftp?.reportTsUtc ?? null,
     };
   },
 });
