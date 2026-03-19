@@ -1,0 +1,112 @@
+name: Refresh PreFlight Token
+
+on:
+  workflow_dispatch:
+    inputs:
+      convex_target:
+        description: Convex target for this manual run
+        required: false
+        type: choice
+        default: prod
+        options:
+          - prod
+          - preview
+          - deployment
+      preview_name:
+        description: Preview deployment name when convex_target=preview
+        required: false
+        type: string
+      deployment_name:
+        description: Deployment name when convex_target=deployment
+        required: false
+        type: string
+  schedule:
+    - cron: "17 */12 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-preflight-token
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Refresh token in Convex
+        env:
+          PREFLIGHT_USERNAME: ${{ secrets.PREFLIGHT_USERNAME }}
+          PREFLIGHT_PASSWORD: ${{ secrets.PREFLIGHT_PASSWORD }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          MANUAL_CONVEX_TARGET: ${{ github.event.inputs.convex_target }}
+          MANUAL_PREVIEW_NAME: ${{ github.event.inputs.preview_name }}
+          MANUAL_DEPLOYMENT_NAME: ${{ github.event.inputs.deployment_name }}
+          DEFAULT_CONVEX_TARGET: ${{ vars.PREFLIGHT_CONVEX_TARGET }}
+          DEFAULT_PREVIEW_NAME: ${{ vars.PREFLIGHT_CONVEX_PREVIEW_NAME }}
+          DEFAULT_DEPLOYMENT_NAME: ${{ vars.PREFLIGHT_CONVEX_DEPLOYMENT_NAME }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${PREFLIGHT_USERNAME:-}" || -z "${PREFLIGHT_PASSWORD:-}" ]]; then
+            echo "Missing PREFLIGHT_USERNAME or PREFLIGHT_PASSWORD GitHub secret." >&2
+            exit 1
+          fi
+
+          if [[ -z "${CONVEX_DEPLOY_KEY:-}" ]]; then
+            echo "Missing CONVEX_DEPLOY_KEY GitHub secret." >&2
+            exit 1
+          fi
+
+          convex_args=(--set-convex)
+          target="${MANUAL_CONVEX_TARGET:-}"
+          preview_name="${MANUAL_PREVIEW_NAME:-}"
+          deployment_name="${MANUAL_DEPLOYMENT_NAME:-}"
+
+          if [[ -z "$target" ]]; then
+            target="${DEFAULT_CONVEX_TARGET:-prod}"
+            preview_name="${DEFAULT_PREVIEW_NAME:-}"
+            deployment_name="${DEFAULT_DEPLOYMENT_NAME:-}"
+          fi
+
+          case "$target" in
+            prod)
+              convex_args+=(--convex-prod)
+              ;;
+            preview)
+              if [[ -z "$preview_name" ]]; then
+                echo "preview target requires PREFLIGHT_CONVEX_PREVIEW_NAME or workflow input preview_name." >&2
+                exit 1
+              fi
+              convex_args+=(--convex-preview-name "$preview_name")
+              ;;
+            deployment)
+              if [[ -z "$deployment_name" ]]; then
+                echo "deployment target requires PREFLIGHT_CONVEX_DEPLOYMENT_NAME or workflow input deployment_name." >&2
+                exit 1
+              fi
+              convex_args+=(--convex-deployment-name "$deployment_name")
+              ;;
+            *)
+              echo "Unsupported convex target: $target" >&2
+              exit 1
+              ;;
+          esac
+
+          npm run refresh:preflight-token -- "${convex_args[@]}"

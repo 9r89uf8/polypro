@@ -99,8 +99,52 @@ Interpretation:
   - Auth0 domain: `preflight.au.auth0.com`
   - Audience host: `auth.gopreflight.co.nz`
   - Client ID: `ccdyGGCSWd3IIjuxU1RonZxyTZNGEfKe`
+- The sampled bearer token used in this repo is a 24-hour Auth0 access token.
+- The current SPA config requests:
+  - audience `https://auth.gopreflight.co.nz`
+  - scope `openid profile email read:current_user update:current_user_metadata`
+- The current SPA config does not visibly request `offline_access`, so token
+  rotation should not assume a reusable refresh token exists.
 - The bundle also still contains public PubNub keys, but those do not unlock the
   aerodrome weather endpoints by themselves.
+
+### In-repo token refresh helper
+
+- The repo now includes `scripts/refresh-preflight-token.mjs`.
+- It automates the normal browser login flow with Playwright, waits for the app
+  to issue an authenticated `/data/...` or `/source/...` request, and extracts
+  the bearer token from that request header.
+- Required env vars for that helper:
+  - `PREFLIGHT_USERNAME`
+  - `PREFLIGHT_PASSWORD`
+- The helper auto-loads `.env.local` and `.env`, so local credentials do not
+  need to be manually exported before running it.
+- Optional helper modes:
+  - `--write-env-file .env.local`
+  - `--set-convex`
+  - `--set-convex --convex-prod`
+- The script does not change the NZWN runtime contract. The page code still
+  reads `PREFLIGHT_AUTH_BEARER_TOKEN`; the helper only rotates that value.
+
+### GitHub Action automation
+
+- The repo now includes `.github/workflows/refresh-preflight-token.yml`.
+- Scheduled cadence:
+  - every 12 hours at minute `17`
+- Manual run:
+  - `workflow_dispatch` supports `prod`, `preview`, or `deployment` targets
+- Required GitHub secrets:
+  - `PREFLIGHT_USERNAME`
+  - `PREFLIGHT_PASSWORD`
+  - `CONVEX_DEPLOY_KEY`
+- Optional GitHub repository variables for scheduled non-prod targets:
+  - `PREFLIGHT_CONVEX_TARGET`
+    - `prod` is the default if unset
+    - allowed values: `prod`, `preview`, `deployment`
+  - `PREFLIGHT_CONVEX_PREVIEW_NAME`
+  - `PREFLIGHT_CONVEX_DEPLOYMENT_NAME`
+- The action installs Chromium, runs the refresh helper, and pushes the new
+  bearer token into Convex via `npx convex env set`.
 
 ## Interesting confirmed endpoints
 

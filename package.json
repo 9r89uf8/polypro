@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "watch:eddm-wis2": "node scripts/watch-eddm-wis2.mjs"
+    "watch:eddm-wis2": "node scripts/watch-eddm-wis2.mjs",
+    "refresh:preflight-token": "node scripts/refresh-preflight-token.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.76",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "playwright": "^1.58.2",
     "tailwindcss": "^4"
   }
 }

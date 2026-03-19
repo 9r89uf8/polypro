@@ -129,6 +129,13 @@ Requirements:
 - Requests must send `Authorization: Bearer <token>`
 - The token is a logged-in user access token captured from PreFlight, stored in
   `PREFLIGHT_AUTH_BEARER_TOKEN`
+- The repo includes `scripts/refresh-preflight-token.mjs` to refresh that
+  bearer token from `PREFLIGHT_USERNAME` and `PREFLIGHT_PASSWORD` using the
+  normal browser login flow. It can update `.env.local` and/or `npx convex env
+  set PREFLIGHT_AUTH_BEARER_TOKEN`.
+- Package entrypoint:
+  - `npm run refresh:preflight-token -- --write-env-file .env.local`
+  - add `--set-convex` or `--convex-prod` as needed
 - The unofficial Weather.com current and 5-day endpoints use the public key
   embedded in Wunderground airport pages.
 - The Google hourly endpoint uses `GOOGLE_WEATHER_API_KEY`.
