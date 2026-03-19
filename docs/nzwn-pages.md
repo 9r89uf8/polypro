@@ -96,6 +96,11 @@ Behavior details:
     `preflight:pollLatestNoaaPublishRace`
   - winner/lead are computed from the earliest two sources seen for the same
     `reportTsUtc`
+- During the 1-second publish-race watch window, a newly seen official
+  PreFlight report is also upserted immediately into
+  `preflightMetarObservations`, so the `Latest` card, chart, and raw METAR
+  panel can update as soon as PreFlight wins instead of waiting for the
+  separate minute poll.
 
 ## Official Source
 

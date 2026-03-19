@@ -1118,6 +1118,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let statusShape = null;
     let statusMetarRowFound = false;
     let statusFingerprintChangeCount = 0;
+    let lastPersistedPreflightReportTs = null;
     const aerowebSessionRef = { cookieHeader: null };
 
     while (Date.now() <= deadline) {
@@ -1165,6 +1166,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
         const mutationCalls = [];
         let isNewSincePreviousStatusPoll = false;
         let statusSeenAtForThisReport;
+        let persistedPreflightReportTs = null;
 
         if (preflightResult.status === "fulfilled") {
           const preflightHit = preflightResult.value;
@@ -1185,6 +1187,17 @@ export const watchStationPublishRaceWindow = actionGeneric({
 
           if (shouldPollStatus) {
             reportTsAtPreviousStatusPoll = currentReportTs;
+          }
+
+          if (currentReportTs !== lastPersistedPreflightReportTs) {
+            mutationCalls.push(
+              ctx.runMutation("preflight:upsertStationRowsBatch", {
+                stationIcao,
+                seenAt: preflightHit.seenAt,
+                rows: [preflightHit.row],
+              }),
+            );
+            persistedPreflightReportTs = currentReportTs;
           }
 
           mutationCalls.push(
@@ -1254,6 +1267,10 @@ export const watchStationPublishRaceWindow = actionGeneric({
 
         if (statusSeenAtForThisReport !== undefined && isNewSincePreviousStatusPoll) {
           pendingStatusSeenAt = null;
+        }
+
+        if (persistedPreflightReportTs !== null) {
+          lastPersistedPreflightReportTs = persistedPreflightReportTs;
         }
 
         for (const raceRow of raceRows) {

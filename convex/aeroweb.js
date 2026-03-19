@@ -334,14 +334,15 @@ function buildObservationRow({
 }
 
 function parseNoaaLatestRow(stationIcao, hit) {
-  const reportType = extractReportType(hit?.rawMetar);
-  if (!reportType) {
-    throw new Error("NOAA latest response did not include a METAR/SPECI prefix.");
+  const reportType = extractReportType(hit?.rawMetar) ?? "METAR";
+  const rawMetar = canonicalizeLabeledRawMetar(reportType, hit?.rawMetar);
+  if (!rawMetar) {
+    throw new Error("NOAA latest response did not include a usable METAR line.");
   }
 
   const row = buildObservationRow({
     stationIcao,
-    rawMetar: hit.rawMetar,
+    rawMetar,
     obsTimeUtc: hit.reportTsUtc,
     sourcePrefix: "tgftp_latest",
     fallbackReportType: reportType,
