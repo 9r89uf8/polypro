@@ -29,6 +29,8 @@ What this page displays:
 - Unit toggle (`C` / `F`)
 - `Refresh Current Data` button
 - Live badge when viewing the current Wellington local date
+- live `Wellington Time` clock in the header so Chicago-side viewing does not
+  require a separate timezone lookup
 - Summary cards:
   - `Latest`
   - `Day Range`
