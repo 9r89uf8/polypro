@@ -10,6 +10,14 @@ function normalizeOptionalText(value) {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function normalizeOptionalStationIcao(value) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const trimmed = value.trim().toUpperCase();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function assertValidDateRange(startTs, endTs) {
   if (startTs !== undefined && !Number.isFinite(startTs)) {
     throw new Error("Invalid start timestamp.");
@@ -69,11 +77,13 @@ export const generateImageUploadUrl = mutationGeneric({
 
 export const createNote = mutationGeneric({
   args: {
+    stationIcao: v.optional(v.string()),
     title: v.optional(v.string()),
     body: v.optional(v.string()),
     imageIds: v.array(v.id("_storage")),
   },
   handler: async (ctx, args) => {
+    const stationIcao = normalizeOptionalStationIcao(args.stationIcao);
     const title = normalizeOptionalText(args.title);
     const body = normalizeOptionalText(args.body);
 
@@ -83,6 +93,7 @@ export const createNote = mutationGeneric({
 
     const now = Date.now();
     const noteId = await ctx.db.insert("notes", {
+      stationIcao,
       title,
       body,
       imageIds: args.imageIds,
@@ -94,17 +105,37 @@ export const createNote = mutationGeneric({
   },
 });
 
+export const deleteNote = mutationGeneric({
+  args: {
+    noteId: v.id("notes"),
+  },
+  handler: async (ctx, args) => {
+    const note = await ctx.db.get(args.noteId);
+    if (!note) {
+      throw new Error("Note not found.");
+    }
+
+    await ctx.db.delete(args.noteId);
+    return { ok: true };
+  },
+});
+
 export const listNotes = queryGeneric({
   args: {
+    stationIcao: v.optional(v.string()),
     startTs: v.optional(v.number()),
     endTs: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const stationIcao = normalizeOptionalStationIcao(args.stationIcao);
     assertValidDateRange(args.startTs, args.endTs);
     const rows = await listRowsByRange(ctx, args.startTs, args.endTs);
+    const filteredRows = stationIcao
+      ? rows.filter((row) => row.stationIcao === stationIcao)
+      : rows;
 
     return await Promise.all(
-      rows.map(async (row) => {
+      filteredRows.map(async (row) => {
         const images = await Promise.all(
           row.imageIds.map(async (storageId) => ({
             storageId,

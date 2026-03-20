@@ -4,6 +4,7 @@ import { v } from "convex/values";
 
 export default defineSchema({
   notes: defineTable({
+    stationIcao: v.optional(v.string()),
     title: v.optional(v.string()),
     body: v.optional(v.string()),
     imageIds: v.array(v.id("_storage")),

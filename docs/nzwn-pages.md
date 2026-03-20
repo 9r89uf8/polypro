@@ -34,13 +34,18 @@ What this page displays:
   - `Day Range`
   - `Messages`
   - `Near-Live Now`
-- `Weather.com + Google` panel:
-  - unofficial Weather.com airport current for `NZWN`
+- `NZWN Notes` section:
+  - collapsed behind a button by default
+  - loads only notes tagged with `stationIcao=NZWN`
+  - links to the shared `/notes` workspace with `stationIcao=NZWN` prefilled
+  - displayed NZWN notes can be deleted from the page
+- `MetService + Google` panel:
+  - unofficial MetService airport current for `NZWN`
   - current-condition details such as humidity, wind, gust, and pressure when
     present
-  - selected-date Weather.com forecast summary
+  - selected-date MetService forecast summary
   - Google hourly forecast-derived peak time window
-- `Weather.com 5-Day Forecast` table:
+- `MetService 10-Day Forecast` table:
   - `Date`
   - `Min`
   - `Max`
@@ -79,11 +84,17 @@ Behavior details:
   - the page shows the stored first-seen time for any row captured from the
     latest official endpoint
 - Each page load also loads a live unofficial weather sidecar:
-  - Weather.com airport current for `NZWN`
-  - Weather.com 5-day daily forecast for Wellington
+  - MetService airport current for `NZWN`
+  - MetService daily forecast for Lyall Bay / Wellington
   - Google hourly forecast used to derive peak-time windows
 - Manual refresh reruns the same rolling sync, reruns the latest poll when the
   route date is today, and reloads that weather sidecar.
+- The NZWN notes panel is lazy-loaded:
+  - it only queries station-tagged notes after `Show NZWN Notes` is clicked
+  - notes come from the shared `notes` table and must be saved with
+    `stationIcao=NZWN`
+  - the `Open Notes Workspace` link opens `/notes?stationIcao=NZWN`, which
+    prefills both the new-note station field and the note filter
 - The unofficial current card is independent of the selected historical date.
 - The 5-day forecast and hourly peak windows are limited to the current live
   provider window, so older selected dates usually show no forecast row.
@@ -110,11 +121,11 @@ Latest official NZWN JSON:
 
 Near-live unofficial NZWN airport current JSON:
 
-- `https://api.weather.com/v3/wx/observations/current?apiKey=...&language=en-US&units=m&format=json&icaoCode=NZWN`
+- `https://www.metservice.com/publicData/webdata/module/currentConditions/93439/93439?pagetype=48hr`
 
 Near-live unofficial NZWN/Wellington forecast JSON:
 
-- `https://api.weather.com/v3/wx/forecast/daily/5day?apiKey=...&language=en-US&units=m&format=json&geocode=-41.286,174.777`
+- `https://www.metservice.com/publicData/localForecastlyall-bay`
 
 Google hourly forecast used for peak-window timing:
 
@@ -132,8 +143,8 @@ Requirements:
 - Package entrypoint:
   - `npm run refresh:preflight-token -- --write-env-file .env.local`
   - add `--set-convex` or `--convex-prod` as needed
-- The unofficial Weather.com current and 5-day endpoints use the public key
-  embedded in Wunderground airport pages.
+- The unofficial MetService airport current and daily forecast endpoints are
+  public `metservice.com/publicData` JSON feeds.
 - The Google hourly endpoint uses `GOOGLE_WEATHER_API_KEY`.
 
 Known limitation:

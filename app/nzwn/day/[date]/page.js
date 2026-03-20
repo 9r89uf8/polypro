@@ -12,7 +12,7 @@ import {
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
@@ -189,6 +189,13 @@ function formatChicagoDateTimeSeconds(epochMs) {
   });
   const parts = getDateParts(formatter, new Date(epochMs));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
+}
+
+function formatNoteCreatedAt(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return "—";
+  }
+  return new Date(epochMs).toLocaleString();
 }
 
 function formatRaceWinner(winner) {
@@ -436,6 +443,8 @@ export default function NzwnDayPage() {
   const [inputDate, setInputDate] = useState(date);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isNotesOpen, setIsNotesOpen] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState(null);
   const [weatherPanel, setWeatherPanel] = useState(null);
   const [weatherPanelError, setWeatherPanelError] = useState("");
   const [isWeatherLoading, setIsWeatherLoading] = useState(false);
@@ -451,6 +460,7 @@ export default function NzwnDayPage() {
   const backfillDay = useAction("preflight:backfillDayStationMessages");
   const pollLatest = useAction("preflight:pollLatestStationMetar");
   const loadNzwnWeather = useAction("nzwnWeather:getDayPageWeather");
+  const deleteNote = useMutation("notes:deleteNote");
 
   const dayData = useQuery(
     "preflight:getDayStationRows",
@@ -474,6 +484,14 @@ export default function NzwnDayPage() {
     stationIcao: STATION_ICAO,
     limit: 12,
   });
+  const stationNotes = useQuery(
+    "notes:listNotes",
+    isNotesOpen
+      ? {
+          stationIcao: STATION_ICAO,
+        }
+      : "skip",
+  );
 
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
@@ -660,6 +678,25 @@ export default function NzwnDayPage() {
       if (weatherRequestRef.current === weatherRequestId) {
         setIsWeatherLoading(false);
       }
+    }
+  }
+
+  async function handleDeleteNote(note) {
+    const label = note.title || note.body?.slice(0, 60) || "this note";
+    const confirmed = window.confirm(`Delete ${label}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingNoteId(note._id);
+    try {
+      await deleteNote({ noteId: note._id });
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : String(error);
+      window.alert(`Delete failed: ${message}`);
+    } finally {
+      setDeletingNoteId(null);
     }
   }
 
@@ -950,7 +987,7 @@ export default function NzwnDayPage() {
             </p>
             <p className="mt-2 text-sm text-black/65">
               {currentReading?.observedAtLocal
-                ? `Weather.com airport current at ${formatStoredLocalDateTime(
+                ? `MetService airport current at ${formatStoredLocalDateTime(
                     currentReading.observedAtLocal,
                   )}`
                 : "Unofficial airport-current feed not loaded yet."}
@@ -959,6 +996,103 @@ export default function NzwnDayPage() {
               Unofficial. Independent of the selected historical date.
             </p>
           </div>
+        </section>
+
+        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold text-foreground">NZWN Notes</h2>
+              <p className="mt-1 text-sm text-black/60">
+                Station-scoped notes tagged `{STATION_ICAO}` from the shared notes
+                workspace.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsNotesOpen((current) => !current)}
+                className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent"
+              >
+                {isNotesOpen ? "Hide NZWN Notes" : "Show NZWN Notes"}
+              </button>
+              <Link
+                href={`/notes?stationIcao=${STATION_ICAO}`}
+                className="rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black transition hover:border-black"
+              >
+                Open Notes Workspace
+              </Link>
+            </div>
+          </div>
+
+          {isNotesOpen ? (
+            <div className="mt-4">
+              {stationNotes === undefined ? (
+                <p className="text-sm text-black/65">Loading NZWN notes...</p>
+              ) : stationNotes.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-black/15 bg-black/[0.02] px-4 py-5 text-sm text-black/55">
+                  No notes tagged `{STATION_ICAO}` yet. Save one from the notes
+                  workspace with station `{STATION_ICAO}`.
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  {stationNotes.map((note) => (
+                    <article
+                      key={note._id}
+                      className="rounded-2xl border border-black/10 bg-white/75 p-4"
+                    >
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-black/55">
+                        <span>{formatNoteCreatedAt(note.createdAt)}</span>
+                        <span className="inline-flex rounded-full bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
+                          {STATION_ICAO}
+                        </span>
+                      </div>
+                      {note.title ? (
+                        <h3 className="mt-2 text-lg font-semibold text-black">
+                          {note.title}
+                        </h3>
+                      ) : null}
+                      {note.body ? (
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-black/80">
+                          {note.body}
+                        </p>
+                      ) : null}
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteNote(note)}
+                          disabled={deletingNoteId === note._id}
+                          className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 transition hover:border-red-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {deletingNoteId === note._id ? "Deleting..." : "Delete Note"}
+                        </button>
+                      </div>
+                      {note.images.length > 0 ? (
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          {note.images.map((image, imageIndex) =>
+                            image.url ? (
+                              <a
+                                key={`${note._id}-${image.storageId}`}
+                                href={image.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="overflow-hidden rounded-xl border border-black/10 bg-white"
+                              >
+                                <img
+                                  src={image.url}
+                                  alt={`NZWN note image ${imageIndex + 1}`}
+                                  className="h-40 w-full object-cover transition hover:scale-[1.02]"
+                                />
+                              </a>
+                            ) : null,
+                          )}
+                        </div>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">

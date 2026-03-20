@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -37,6 +38,10 @@ function toLocalDayEndExclusiveMs(value) {
 
 function formatCreatedAt(value) {
   return new Date(value).toLocaleString();
+}
+
+function normalizeStationInput(value) {
+  return value.trim().toUpperCase();
 }
 
 function extensionForMime(mimeType) {
@@ -95,19 +100,36 @@ function MissingConvexSetup() {
 }
 
 function NotesWorkspace() {
+  const searchParams = useSearchParams();
+  const prefilledStationIcao = normalizeStationInput(
+    searchParams?.get("stationIcao") ?? "",
+  );
+
+  const [stationIcao, setStationIcao] = useState(prefilledStationIcao);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [imageFiles, setImageFiles] = useState([]);
 
+  const [filterStationIcao, setFilterStationIcao] = useState(prefilledStationIcao);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState(null);
   const [feedback, setFeedback] = useState(null);
 
   const [previewImages, setPreviewImages] = useState([]);
 
   const generateImageUploadUrl = useMutation("notes:generateImageUploadUrl");
   const createNote = useMutation("notes:createNote");
+  const deleteNote = useMutation("notes:deleteNote");
+
+  useEffect(() => {
+    if (!prefilledStationIcao) {
+      return;
+    }
+    setStationIcao((current) => current || prefilledStationIcao);
+    setFilterStationIcao((current) => current || prefilledStationIcao);
+  }, [prefilledStationIcao]);
 
   useEffect(() => {
     const nextPreviews = imageFiles.map((file) => ({
@@ -133,6 +155,7 @@ function NotesWorkspace() {
     const args = {};
     const startTs = toLocalDayStartMs(fromDate);
     const endTs = toLocalDayEndExclusiveMs(toDate);
+    const normalizedStationIcao = normalizeStationInput(filterStationIcao);
 
     if (startTs !== null) {
       args.startTs = startTs;
@@ -140,9 +163,12 @@ function NotesWorkspace() {
     if (endTs !== null) {
       args.endTs = endTs;
     }
+    if (normalizedStationIcao) {
+      args.stationIcao = normalizedStationIcao;
+    }
 
     return args;
-  }, [fromDate, toDate]);
+  }, [filterStationIcao, fromDate, toDate]);
 
   const notes = useQuery("notes:listNotes", dateRangeError ? "skip" : noteFilterArgs);
 
@@ -233,6 +259,7 @@ function NotesWorkspace() {
 
   async function handleCreateNote(event) {
     event.preventDefault();
+    const normalizedStationIcao = normalizeStationInput(stationIcao);
     const trimmedTitle = title.trim();
     const trimmedBody = body.trim();
 
@@ -255,17 +282,19 @@ function NotesWorkspace() {
       }
 
       await createNote({
+        stationIcao: normalizedStationIcao || undefined,
         title: trimmedTitle || undefined,
         body: trimmedBody || undefined,
         imageIds,
       });
 
+      setStationIcao(prefilledStationIcao);
       setTitle("");
       setBody("");
       setImageFiles([]);
       setFeedback({
         type: "success",
-        message: `Note saved${imageIds.length ? ` with ${imageIds.length} image(s)` : ""}.`,
+        message: `Note saved${normalizedStationIcao ? ` for ${normalizedStationIcao}` : ""}${imageIds.length ? ` with ${imageIds.length} image(s)` : ""}.`,
       });
     } catch (error) {
       setFeedback({
@@ -274,6 +303,31 @@ function NotesWorkspace() {
       });
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleDeleteNote(note) {
+    const label = note.title || note.body?.slice(0, 60) || "this note";
+    const confirmed = window.confirm(`Delete ${label}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingNoteId(note._id);
+    setFeedback(null);
+    try {
+      await deleteNote({ noteId: note._id });
+      setFeedback({
+        type: "success",
+        message: "Note deleted.",
+      });
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setDeletingNoteId(null);
     }
   }
 
@@ -291,6 +345,11 @@ function NotesWorkspace() {
             Write notes, optionally add a title, and paste or upload images.
             Filter your note list by date when reviewing past entries.
           </p>
+          {prefilledStationIcao ? (
+            <p className="mt-3 inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-sky-800">
+              Prefilled station {prefilledStationIcao}
+            </p>
+          ) : null}
           <Link
             href="/"
             className="mt-5 inline-flex rounded-full border border-black/15 px-4 py-2 text-sm font-semibold text-black transition hover:border-black hover:text-black"
@@ -303,6 +362,19 @@ function NotesWorkspace() {
           <article className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
             <h2 className="text-lg font-semibold text-foreground">New Note</h2>
             <form onSubmit={handleCreateNote} onPaste={handlePaste} className="mt-4 space-y-4">
+              <label className="block text-sm">
+                <span className="font-medium text-black/70">
+                  Station / Airport (optional)
+                </span>
+                <input
+                  type="text"
+                  value={stationIcao}
+                  onChange={(event) => setStationIcao(normalizeStationInput(event.target.value))}
+                  placeholder="NZWN"
+                  className="mt-1.5 w-full rounded-xl border border-black/20 bg-white/80 px-3 py-2 text-sm uppercase outline-none ring-accent focus:ring-2"
+                />
+              </label>
+
               <label className="block text-sm">
                 <span className="font-medium text-black/70">
                   Title (optional)
@@ -394,8 +466,20 @@ function NotesWorkspace() {
           </article>
 
           <article className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
-            <h2 className="text-lg font-semibold text-foreground">Filter by Date</h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <h2 className="text-lg font-semibold text-foreground">Filter Notes</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="text-sm">
+                <span className="font-medium text-black/70">Station</span>
+                <input
+                  type="text"
+                  value={filterStationIcao}
+                  onChange={(event) =>
+                    setFilterStationIcao(normalizeStationInput(event.target.value))
+                  }
+                  placeholder="All stations"
+                  className="mt-1.5 w-full rounded-xl border border-black/20 bg-white/80 px-3 py-2 text-sm uppercase outline-none ring-accent focus:ring-2"
+                />
+              </label>
               <label className="text-sm">
                 <span className="font-medium text-black/70">From</span>
                 <input
@@ -419,6 +503,7 @@ function NotesWorkspace() {
               <button
                 type="button"
                 onClick={() => {
+                  setFilterStationIcao("");
                   setFromDate("");
                   setToDate("");
                 }}
@@ -427,7 +512,7 @@ function NotesWorkspace() {
                 Clear Filter
               </button>
               <p className="text-xs text-black/60">
-                Empty dates show all notes.
+                Empty filters show all notes.
               </p>
             </div>
             {dateRangeError ? (
@@ -462,9 +547,14 @@ function NotesWorkspace() {
                   key={note._id}
                   className="rounded-2xl border border-black/10 bg-white/75 p-4"
                 >
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    {formatCreatedAt(note.createdAt)}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-black/55">
+                    <span>{formatCreatedAt(note.createdAt)}</span>
+                    {note.stationIcao ? (
+                      <span className="inline-flex rounded-full bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
+                        {note.stationIcao}
+                      </span>
+                    ) : null}
+                  </div>
                   {note.title ? (
                     <h3 className="mt-2 text-lg font-semibold text-black">{note.title}</h3>
                   ) : null}
@@ -473,6 +563,16 @@ function NotesWorkspace() {
                       {note.body}
                     </p>
                   ) : null}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteNote(note)}
+                      disabled={deletingNoteId === note._id}
+                      className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 transition hover:border-red-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {deletingNoteId === note._id ? "Deleting..." : "Delete Note"}
+                    </button>
+                  </div>
                   {note.images.length > 0 ? (
                     <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       {note.images.map((image, imageIndex) =>
