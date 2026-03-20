@@ -74,6 +74,15 @@ crons.cron(
     { stationIcao: "NZWN", durationMs: 15 * 60 * 1000, includeAeroweb: false },
 );
 
+// Polls MetService Wellington Aero (93439) current conditions every 10 minutes
+// and stores each reading so the NZWN day page can plot a continuous AWS line.
+crons.cron(
+    "nzwn_metservice_aws_every_10_min",
+    "*/10 * * * *",
+    api.nzwnWeather.pollMetServiceCurrentConditions,
+    { stationIcao: "NZWN" },
+);
+
 // Runs every minute so the default LFPG background source is NOAA tgftp.
 // AEROWEB is now reserved for manual on-demand official fetches on the page
 // instead of continuous background race tracking.

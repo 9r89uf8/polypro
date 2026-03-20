@@ -299,6 +299,58 @@ function buildLineDataset(rows, unit) {
   };
 }
 
+function buildMetServiceDataset(metServiceRows, currentReading, unit, selectedDate) {
+  const points = metServiceRows
+    .map((row) => {
+      const x = parseMinute(row.obsTimeLocal);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  // Append the live current reading if it's for the selected date and
+  // newer than the latest stored row (avoids duplicate).
+  if (
+    currentReading?.status === "ok" &&
+    currentReading.observedAtLocal?.slice(0, 10) === selectedDate
+  ) {
+    const liveX = parseMinute(currentReading.observedAtLocal);
+    const liveY = unit === "C" ? currentReading.tempC : currentReading.tempF;
+    if (liveX !== null && Number.isFinite(liveY)) {
+      const lastX = points.length ? points[points.length - 1].x : -1;
+      if (liveX > lastX) {
+        points.push({ x: liveX, y: liveY });
+      }
+    }
+  }
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    label: "MetService AWS",
+    data: points,
+    borderColor: "#16a34a",
+    backgroundColor: "#16a34a",
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    pointHitRadius: 18,
+    pointStyle: "rectRot",
+    pointBorderColor: "#166534",
+    pointBorderWidth: 1.5,
+    borderWidth: 2,
+    tension: 0.22,
+    showLine: true,
+  };
+}
+
 function buildForecastPeakByDate(rows) {
   const rowsByDate = new Map();
   for (const row of rows) {
@@ -409,6 +461,15 @@ export default function NzwnDayPage() {
         }
       : "skip",
   );
+  const metServiceData = useQuery(
+    "nzwnWeather:getMetServiceObservations",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
   const raceData = useQuery("preflight:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
@@ -416,6 +477,7 @@ export default function NzwnDayPage() {
 
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
+  const metServiceRows = metServiceData?.rows ?? [];
   const raceRows = raceData?.rows ?? [];
   const displayedRaceRows = useMemo(
     () =>
@@ -610,10 +672,18 @@ export default function NzwnDayPage() {
   }
 
   const chartData = useMemo(
-    () => ({
-      datasets: rows.length ? [buildLineDataset(rows, displayUnit)] : [],
-    }),
-    [rows, displayUnit],
+    () => {
+      const datasets = [];
+      if (rows.length) {
+        datasets.push(buildLineDataset(rows, displayUnit));
+      }
+      const metDs = buildMetServiceDataset(metServiceRows, currentReading, displayUnit, date);
+      if (metDs) {
+        datasets.push(metDs);
+      }
+      return { datasets };
+    },
+    [rows, displayUnit, metServiceRows, currentReading, date],
   );
 
   const chartOptions = useMemo(
@@ -661,6 +731,9 @@ export default function NzwnDayPage() {
         },
         y: {
           title: { display: true, text: `Temperature (°${displayUnit})` },
+          ticks: {
+            stepSize: 0.5,
+          },
         },
       },
     }),
@@ -883,7 +956,7 @@ export default function NzwnDayPage() {
             </div>
           </div>
 
-          <div className="mt-6 h-[420px]">
+          <div className="mt-6 h-[620px]">
             {rows.length ? (
               <Line data={chartData} options={chartOptions} />
             ) : (

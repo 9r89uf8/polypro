@@ -1,4 +1,4 @@
-import { actionGeneric } from "convex/server";
+import { actionGeneric, internalMutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 
 const AUCKLAND_TIMEZONE = "Pacific/Auckland";
@@ -311,6 +311,7 @@ async function fetchMetServiceCurrentReading({ timeZone }) {
     relativeHumidity: toFiniteNumber(rainNode?.relativeHumidity),
     windSpeedKph: toFiniteNumber(windNode?.averageSpeed),
     windGustKph: toFiniteNumber(windNode?.gustSpeed),
+    windDirection: toNonEmptyString(windNode?.direction),
     pressureHpa: toFiniteNumber(pressureNode?.atSeaLevel),
   };
 }
@@ -475,5 +476,102 @@ export const getDayPageWeather = actionGeneric({
       selectedDatePeak: selectPeakForecastRow(hourlyResult.rows, args.date),
       todayPeak: selectPeakForecastRow(hourlyResult.rows, todayDate),
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// MetService AWS 10-minute observation storage
+// ---------------------------------------------------------------------------
+
+const storeMetServiceObservation = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+    obsTimeUtc: v.number(),
+    obsTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    relativeHumidity: v.optional(v.number()),
+    windSpeedKph: v.optional(v.number()),
+    windGustKph: v.optional(v.number()),
+    windDirection: v.optional(v.string()),
+    pressureHpa: v.optional(v.number()),
+    source: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("nzwnMetServiceObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("date", args.date)
+          .eq("obsTimeUtc", args.obsTimeUtc),
+      )
+      .first();
+    if (existing) {
+      return { inserted: false };
+    }
+    await ctx.db.insert("nzwnMetServiceObservations", {
+      ...args,
+      createdAt: Date.now(),
+    });
+    return { inserted: true };
+  },
+});
+
+export { storeMetServiceObservation };
+
+export const pollMetServiceCurrentConditions = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
+    const timeZone = NZWN_STATION.timeZone;
+
+    const reading = await fetchMetServiceCurrentReading({ timeZone });
+
+    await ctx.runMutation("nzwnWeather:storeMetServiceObservation", {
+      stationIcao,
+      date: formatDateInTimezone(reading.observedAtUtc, timeZone),
+      obsTimeUtc: reading.observedAtUtc,
+      obsTimeLocal: reading.observedAtLocal,
+      tempC: reading.tempC,
+      tempF: reading.tempF,
+      relativeHumidity: reading.relativeHumidity ?? undefined,
+      windSpeedKph: reading.windSpeedKph ?? undefined,
+      windGustKph: reading.windGustKph ?? undefined,
+      windDirection: reading.windDirection ?? undefined,
+      pressureHpa: reading.pressureHpa ?? undefined,
+      source: "metservice_93439",
+    });
+
+    return {
+      status: "ok",
+      observedAtUtc: reading.observedAtUtc,
+      observedAtLocal: reading.observedAtLocal,
+      tempC: reading.tempC,
+      tempF: reading.tempF,
+    };
+  },
+});
+
+export const getMetServiceObservations = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+    const rows = await ctx.db
+      .query("nzwnMetServiceObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    rows.sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
+    return { rows };
   },
 });
