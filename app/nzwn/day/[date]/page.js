@@ -192,9 +192,6 @@ function formatChicagoDateTimeSeconds(epochMs) {
 }
 
 function formatRaceWinner(winner) {
-  if (winner === "aeroweb") {
-    return "AEROWEB";
-  }
   if (winner === "preflight") {
     return "PreFlight";
   }
@@ -218,6 +215,26 @@ function formatLeadMs(leadMs) {
     return `${(leadMs / 1000).toFixed(1)}s`;
   }
   return `${(leadMs / 60000).toFixed(1)} min`;
+}
+
+function computeDisplayedRaceState(row) {
+  const preflightSeenAt = Number.isFinite(row?.preflightFirstSeenAt)
+    ? row.preflightFirstSeenAt
+    : null;
+  const tgftpSeenAt = Number.isFinite(row?.tgftpFirstSeenAt)
+    ? row.tgftpFirstSeenAt
+    : null;
+
+  if (preflightSeenAt === null || tgftpSeenAt === null) {
+    return { winner: null, leadMs: null };
+  }
+  if (preflightSeenAt === tgftpSeenAt) {
+    return { winner: "tie", leadMs: 0 };
+  }
+  if (preflightSeenAt < tgftpSeenAt) {
+    return { winner: "preflight", leadMs: tgftpSeenAt - preflightSeenAt };
+  }
+  return { winner: "tgftp", leadMs: preflightSeenAt - tgftpSeenAt };
 }
 
 function formatBackfillMessage(result) {
@@ -400,6 +417,14 @@ export default function NzwnDayPage() {
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
   const raceRows = raceData?.rows ?? [];
+  const displayedRaceRows = useMemo(
+    () =>
+      raceRows.map((row) => ({
+        ...row,
+        displayRace: computeDisplayedRaceState(row),
+      })),
+    [raceRows],
+  );
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
   const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
   const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
@@ -880,11 +905,11 @@ export default function NzwnDayPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-xl font-semibold text-foreground">
-                Weather.com + Google
+                MetService + Google
               </h2>
               <p className="mt-1 max-w-3xl text-sm text-black/60">
-                Weather.com airport current for NZWN, Weather.com&apos;s 5-day
-                forecast for Wellington, and Google hourly timing for forecast
+                MetService airport current for NZWN (Lyall Bay / station 93439),
+                MetService 10-day forecast, and Google hourly timing for forecast
                 peak windows. Peak-window cells only fill when the hourly window
                 covers that date.
               </p>
@@ -905,7 +930,7 @@ export default function NzwnDayPage() {
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                Weather.com Current Temperature
+                MetService Current Temperature
               </p>
               <p className="mt-2 text-3xl font-semibold text-black">
                 {currentReading?.status === "ok"
@@ -923,9 +948,9 @@ export default function NzwnDayPage() {
               </p>
               <p className="mt-1 text-xs text-black/55">
                 {currentReading?.status === "error"
-                  ? currentReading.error || "Weather.com current conditions unavailable."
+                  ? currentReading.error || "MetService current conditions unavailable."
                   : currentReading?.phrase ||
-                    "Wellington airport current conditions from Weather.com."}
+                    "Wellington airport current conditions from MetService."}
               </p>
             </div>
 
@@ -955,7 +980,7 @@ export default function NzwnDayPage() {
 
             <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                Weather.com Forecast
+                MetService Forecast
               </p>
               <p className="mt-2 text-3xl font-semibold text-black">
                 {selectedDateForecast
@@ -970,7 +995,7 @@ export default function NzwnDayPage() {
               <p className="mt-2 text-sm text-black/60">Selected Date {date}</p>
               <p className="mt-1 text-xs text-black/55">
                 {weatherForecast?.status === "error"
-                  ? weatherForecast.error || "5-day forecast unavailable."
+                  ? weatherForecast.error || "Forecast unavailable."
                   : selectedDateForecast
                     ? `Min ${formatTemp(
                         displayUnit === "C"
@@ -978,7 +1003,7 @@ export default function NzwnDayPage() {
                           : selectedDateForecast.minTempF,
                         displayUnit,
                       )}${selectedDateForecast.dayPhrase ? ` | ${selectedDateForecast.dayPhrase}` : ""}`
-                    : "Selected date is outside the current 5-day Weather.com window."}
+                    : "Selected date is outside the current MetService forecast window."}
               </p>
             </div>
 
@@ -1026,10 +1051,10 @@ export default function NzwnDayPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-xl font-semibold text-foreground">
-                Weather.com 5-Day Forecast
+                MetService 10-Day Forecast
               </h2>
               <p className="mt-1 text-sm text-black/60">
-                Daily rows come from Weather.com&apos;s 5-day forecast endpoint.
+                Daily rows come from MetService&apos;s Lyall Bay forecast.
                 Peak Window comes from Google&apos;s hourly forecast API, so only
                 days inside that hourly window will show a hit time.
               </p>
@@ -1088,10 +1113,10 @@ export default function NzwnDayPage() {
                   <tr>
                     <td colSpan={6} className="px-3 py-6 text-center text-black/55">
                       {weatherForecast?.status === "error"
-                        ? weatherForecast.error || "Weather.com forecast unavailable."
+                        ? weatherForecast.error || "MetService forecast unavailable."
                         : isWeatherLoading
-                          ? "Loading Weather.com forecast..."
-                          : "No Weather.com forecast rows available."}
+                          ? "Loading MetService forecast..."
+                          : "No MetService forecast rows available."}
                     </td>
                   </tr>
                 )}
@@ -1105,12 +1130,11 @@ export default function NzwnDayPage() {
             <div>
               <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
               <p className="mt-1 text-sm text-black/60">
-                Recent NZWN first-seen timing across official PreFlight,
-                authenticated AEROWEB, and NOAA `tgftp`. Times in this table are
-                shown in America/Chicago. This logger runs a 1-second watch
-                starting at `:04` and `:34` and also keeps minute fallback polls
-                because NZWN publication can drift well past the nominal
-                schedule.
+                Recent NZWN first-seen timing across official PreFlight and
+                NOAA `tgftp`. Times in this table are shown in
+                America/Chicago. This logger runs a 1-second watch starting at
+                `:04` and `:34` and also keeps minute fallback polls because
+                NZWN publication can drift well past the nominal schedule.
               </p>
             </div>
           </div>
@@ -1122,15 +1146,14 @@ export default function NzwnDayPage() {
                   <th className="px-3 py-2 font-semibold">Winner</th>
                   <th className="px-3 py-2 font-semibold">Lead</th>
                   <th className="px-3 py-2 font-semibold">PreFlight Seen</th>
-                  <th className="px-3 py-2 font-semibold">AEROWEB Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Seen</th>
                   <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
                   <th className="px-3 py-2 font-semibold">Raw METAR</th>
                 </tr>
               </thead>
               <tbody>
-                {raceRows.length ? (
-                  raceRows.map((row) => (
+                {displayedRaceRows.length ? (
+                  displayedRaceRows.map((row) => (
                     <tr
                       key={row._id}
                       className="border-b border-black/5 align-top last:border-b-0"
@@ -1141,28 +1164,23 @@ export default function NzwnDayPage() {
                       <td className="px-3 py-3 whitespace-nowrap">
                         <span
                           className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "aeroweb"
-                              ? "bg-cyan-50 text-cyan-900"
-                              : row.winner === "preflight"
+                            row.displayRace.winner === "preflight"
                               ? "bg-emerald-50 text-emerald-800"
-                              : row.winner === "tgftp"
+                              : row.displayRace.winner === "tgftp"
                                 ? "bg-amber-50 text-amber-900"
-                                : row.winner === "tie"
+                                : row.displayRace.winner === "tie"
                                   ? "bg-slate-100 text-slate-800"
                                   : "bg-black/[0.05] text-black/65"
                           }`}
                         >
-                          {formatRaceWinner(row.winner)}
+                          {formatRaceWinner(row.displayRace.winner)}
                         </span>
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatLeadMs(row.leadMs)}
+                        {formatLeadMs(row.displayRace.leadMs)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
                         {formatChicagoDateTimeSeconds(row.preflightFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.aerowebFirstSeenAt)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-black/60">
                         {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
@@ -1171,17 +1189,16 @@ export default function NzwnDayPage() {
                         {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ??
-                          row.preflightRawMetar ??
-                          row.aerowebRawMetar ??
+                        {row.preflightRawMetar ??
                           row.tgftpRawMetar ??
+                          row.rawMetar ??
                           "—"}
                       </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-black/55">
+                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
                       No publish-race rows stored yet.
                     </td>
                   </tr>

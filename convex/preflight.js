@@ -1080,6 +1080,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
     stationIcao: v.string(),
     intervalMs: v.optional(v.number()),
     durationMs: v.optional(v.number()),
+    includeAeroweb: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
@@ -1095,6 +1096,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
       intervalMs,
       Math.min(20 * 60 * 1000, Math.round(args.durationMs ?? DEFAULT_RACE_WATCH_DURATION_MS)),
     );
+    const includeAeroweb = args.includeAeroweb !== false;
 
     const startedAt = Date.now();
     const deadline = startedAt + durationMs;
@@ -1119,7 +1121,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
     let statusMetarRowFound = false;
     let statusFingerprintChangeCount = 0;
     let lastPersistedPreflightReportTs = null;
-    const aerowebSessionRef = { cookieHeader: null };
+    const aerowebSessionRef = includeAeroweb ? { cookieHeader: null } : null;
 
     while (Date.now() <= deadline) {
       try {
@@ -1136,7 +1138,9 @@ export const watchStationPublishRaceWindow = actionGeneric({
         const [raceResults, statusResult] = await Promise.all([
           Promise.allSettled([
             fetchLatestPreflightRaceHit(stationIcao),
-            fetchLatestAerowebMessage(stationIcao, aerowebSessionRef),
+            includeAeroweb
+              ? fetchLatestAerowebMessage(stationIcao, aerowebSessionRef)
+              : Promise.resolve(null),
             fetchLatestTgftpRaceHit(stationIcao),
           ]),
           statusPromise,
@@ -1221,7 +1225,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
               : String(preflightResult.reason);
         }
 
-        if (aerowebResult.status === "fulfilled") {
+        if (includeAeroweb && aerowebResult.status === "fulfilled" && aerowebResult.value) {
           lastAeroweb = aerowebResult.value;
           mutationCalls.push(
             ctx.runMutation("preflight:recordPublishRaceHit", {
@@ -1233,7 +1237,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
               seenAt: aerowebResult.value.seenAt,
             }),
           );
-        } else {
+        } else if (includeAeroweb) {
           errorCount += 1;
           lastError =
             aerowebResult.reason instanceof Error
@@ -1300,6 +1304,7 @@ export const watchStationPublishRaceWindow = actionGeneric({
       intervalMs,
       iterations,
       errorCount,
+      includeAeroweb,
       statusErrorCount,
       lastStatusError,
       statusShape,

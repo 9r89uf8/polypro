@@ -2,15 +2,11 @@ import { actionGeneric } from "convex/server";
 import { v } from "convex/values";
 
 const AUCKLAND_TIMEZONE = "Pacific/Auckland";
-const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
-const WEATHERCOM_CURRENT_CONDITIONS_URL =
-  `${WEATHERCOM_API_BASE_URL}/v3/wx/observations/current`;
-const WEATHERCOM_DAILY_FORECAST_URL =
-  `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/daily/5day`;
-const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
-// Public Weather.com client key embedded in Wunderground airport pages.
-const WEATHERCOM_WUNDERGROUND_API_KEY =
-  "e1f10a1e78da46f5b10a1e78da96f525";
+const METSERVICE_BASE_URL = "https://www.metservice.com/publicData";
+const METSERVICE_CURRENT_CONDITIONS_URL =
+  `${METSERVICE_BASE_URL}/webdata/module/currentConditions/93439/93439`;
+const METSERVICE_DAILY_FORECAST_URL =
+  `${METSERVICE_BASE_URL}/localForecastlyall-bay`;
 const GOOGLE_WEATHER_BASE_URL = "https://weather.googleapis.com/v1";
 const GOOGLE_HOURLY_FORECAST_URL =
   `${GOOGLE_WEATHER_BASE_URL}/forecast/hours:lookup`;
@@ -25,9 +21,9 @@ const WEATHER_STATUS = {
 const NZWN_STATION = {
   stationIcao: "NZWN",
   stationName: "Wellington International",
-  // Wellington forecast geocode exposed by the Wunderground/Weather.com page.
-  lat: -41.286,
-  lon: 174.777,
+  // Lyall Bay / Wellington Aero station 93439 — closest to the airport.
+  lat: -41.327,
+  lon: 174.805,
   timeZone: AUCKLAND_TIMEZONE,
 };
 
@@ -97,10 +93,6 @@ function toFahrenheit(celsius) {
   return roundToTenth((celsius * 9) / 5 + 32);
 }
 
-function toCelsius(fahrenheit) {
-  return roundToTenth(((fahrenheit - 32) * 5) / 9);
-}
-
 function toFiniteNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -135,23 +127,6 @@ function parseValidUtcEpoch(value) {
   return Number.isFinite(epoch) ? epoch : null;
 }
 
-function addUtcDays(dateIso, days) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateIso);
-  if (!match) {
-    return dateIso;
-  }
-  const epoch = Date.UTC(
-    Number(match[1]),
-    Number(match[2]) - 1,
-    Number(match[3]) + days,
-  );
-  const d = new Date(epoch);
-  const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function extractIsoDate(rawValue) {
   const rawString = String(rawValue ?? "");
   if (/^\d{4}-\d{2}-\d{2}/.test(rawString)) {
@@ -168,28 +143,13 @@ function extractIsoDate(rawValue) {
   return `${year}-${month}-${day}`;
 }
 
-function normalizeWeatherComTempPair(value, requestedUnit) {
+function celsiusTempPair(value) {
   const parsed = toFiniteNumber(value);
   if (parsed === null) {
     return {};
   }
-  if (requestedUnit === "metric") {
-    const tempC = roundToTenth(parsed);
-    return { tempC, tempF: toFahrenheit(tempC) };
-  }
-  const tempF = roundToTenth(parsed);
-  return { tempF, tempC: toCelsius(tempF) };
-}
-
-function normalizeWeatherComCurrentTemp(payload, requestedUnit) {
-  const normalized = normalizeWeatherComTempPair(payload?.temperature, requestedUnit);
-  if (Number.isFinite(normalized.tempC) && Number.isFinite(normalized.tempF)) {
-    return {
-      tempC: roundToTenth(normalized.tempC),
-      tempF: roundToTenth(normalized.tempF),
-    };
-  }
-  return null;
+  const tempC = roundToTenth(parsed);
+  return { tempC, tempF: toFahrenheit(tempC) };
 }
 
 function normalizeGoogleLanguage(language) {
@@ -209,55 +169,18 @@ function extractGoogleDescription(node) {
   );
 }
 
-function normalizeWeatherComForecastDays(
-  payload,
-  durationDays,
-  requestedUnit,
-  timeZone,
-) {
-  const fallbackStartDate = formatDateInTimezone(Date.now(), timeZone);
+function normalizeMetServiceForecastDays(payload) {
+  const days = Array.isArray(payload?.days) ? payload.days : [];
   const normalizedRows = [];
-  const maxRows = Math.min(durationDays, 5);
-  const daypartNode =
-    Array.isArray(payload?.daypart) && payload.daypart.length > 0
-      ? payload.daypart[0]
-      : null;
-  const daypartNarratives = Array.isArray(daypartNode?.narrative)
-    ? daypartNode.narrative
-    : [];
-  const rowCount = Math.max(
-    Array.isArray(payload?.validTimeLocal) ? payload.validTimeLocal.length : 0,
-    Array.isArray(payload?.validTimeUtc) ? payload.validTimeUtc.length : 0,
-    Array.isArray(payload?.temperatureMax) ? payload.temperatureMax.length : 0,
-    Array.isArray(payload?.calendarDayTemperatureMax)
-      ? payload.calendarDayTemperatureMax.length
-      : 0,
-    Array.isArray(payload?.temperatureMin) ? payload.temperatureMin.length : 0,
-    Array.isArray(payload?.calendarDayTemperatureMin)
-      ? payload.calendarDayTemperatureMin.length
-      : 0,
-    Array.isArray(payload?.narrative) ? payload.narrative.length : 0,
-  );
 
-  for (let i = 0; i < rowCount && normalizedRows.length < maxRows; i += 1) {
-    const validTimeLocal = payload?.validTimeLocal?.[i];
-    const validTimeUtc = toFiniteNumber(payload?.validTimeUtc?.[i]);
-    const date =
-      extractIsoDate(validTimeLocal) ??
-      (validTimeUtc !== null
-        ? formatDateInTimezone(validTimeUtc * 1000, timeZone)
-        : null) ??
-      addUtcDays(fallbackStartDate, i);
-    const maxValue =
-      payload?.temperatureMax?.[i] ?? payload?.calendarDayTemperatureMax?.[i];
-    const minValue =
-      payload?.temperatureMin?.[i] ?? payload?.calendarDayTemperatureMin?.[i];
-    const maximum = normalizeWeatherComTempPair(maxValue, requestedUnit);
-    const minimum = normalizeWeatherComTempPair(minValue, requestedUnit);
-    const dayPhrase =
-      toNonEmptyString(daypartNarratives[i * 2]) ??
-      toNonEmptyString(payload?.narrative?.[i]);
-    const nightPhrase = toNonEmptyString(daypartNarratives[i * 2 + 1]);
+  for (const day of days) {
+    const date = extractIsoDate(day.dateISO);
+    if (!date) {
+      continue;
+    }
+    const maximum = celsiusTempPair(day.max);
+    const minimum = celsiusTempPair(day.min);
+    const dayPhrase = toNonEmptyString(day.forecast);
 
     normalizedRows.push({
       date,
@@ -266,14 +189,13 @@ function normalizeWeatherComForecastDays(
       ...(maximum.tempC !== undefined ? { maxTempC: maximum.tempC } : {}),
       ...(maximum.tempF !== undefined ? { maxTempF: maximum.tempF } : {}),
       ...(dayPhrase ? { dayPhrase } : {}),
-      ...(nightPhrase ? { nightPhrase } : {}),
     });
   }
 
   return normalizedRows;
 }
 
-function normalizeGoogleHourlyRows(payload, requestedUnit, timeZone) {
+function normalizeGoogleHourlyRows(payload, timeZone) {
   const rows = [];
   const forecastHours = Array.isArray(payload?.forecastHours)
     ? payload.forecastHours
@@ -281,10 +203,7 @@ function normalizeGoogleHourlyRows(payload, requestedUnit, timeZone) {
 
   for (const row of forecastHours) {
     const validTimeUtc = parseValidUtcEpoch(row?.interval?.startTime);
-    const temperature = normalizeWeatherComTempPair(
-      row?.temperature?.degrees,
-      requestedUnit,
-    );
+    const temperature = celsiusTempPair(row?.temperature?.degrees);
 
     if (
       !Number.isFinite(validTimeUtc) ||
@@ -336,36 +255,14 @@ function selectPeakForecastRow(rows, date) {
   };
 }
 
-function toWeatherComUnits(unit) {
-  return unit === "metric" ? "m" : "e";
-}
-
-function getWeatherComApiKey() {
-  return (
-    toNonEmptyString(process.env.WEATHERCOM_API_KEY) ??
-    WEATHERCOM_WUNDERGROUND_API_KEY
-  );
-}
-
 function getGoogleWeatherApiKey() {
   return toNonEmptyString(process.env.GOOGLE_WEATHER_API_KEY);
 }
 
-async function fetchWeatherComAirportCurrentReading({
-  stationIcao,
-  unit,
-  language,
-  apiKey,
-  timeZone,
-}) {
-  const url = new URL(WEATHERCOM_CURRENT_CONDITIONS_URL);
-  url.searchParams.set("icaoCode", stationIcao);
-  url.searchParams.set("units", toWeatherComUnits(unit));
-  url.searchParams.set("language", language);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("apiKey", apiKey);
+async function fetchMetServiceCurrentReading({ timeZone }) {
+  const url = `${METSERVICE_CURRENT_CONDITIONS_URL}?pagetype=48hr`;
 
-  const response = await fetch(url.toString(), {
+  const response = await fetch(url, {
     cache: "no-store",
     headers: {
       Accept: "application/json",
@@ -375,60 +272,51 @@ async function fetchWeatherComAirportCurrentReading({
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
-      `Weather.com airport current failed (${response.status}): ${text.slice(0, 220)}`,
+      `MetService current conditions failed (${response.status}): ${text.slice(0, 220)}`,
     );
   }
 
   const payload = await response.json();
-  const normalizedTemp = normalizeWeatherComCurrentTemp(payload, unit);
-  if (!normalizedTemp) {
-    throw new Error("Weather.com airport current response missing temperature.");
+  const tempNode = Array.isArray(payload?.observations?.temperature)
+    ? payload.observations.temperature[0]
+    : null;
+  const currentTemp = celsiusTempPair(tempNode?.current);
+  if (!Number.isFinite(currentTemp.tempC)) {
+    throw new Error("MetService current conditions response missing temperature.");
   }
 
-  const validTimeUtcSeconds = toFiniteNumber(payload?.validTimeUtc);
   const observedAtUtc =
-    (validTimeUtcSeconds !== null ? Math.round(validTimeUtcSeconds * 1000) : null) ??
-    parseValidUtcEpoch(payload?.validTimeLocal) ??
+    parseValidUtcEpoch(payload?.issuedAt) ??
+    parseValidUtcEpoch(payload?.asAt) ??
     Date.now();
-  const phrase =
-    toNonEmptyString(payload?.wxPhraseLong) ??
-    toNonEmptyString(payload?.wxPhraseMedium) ??
-    toNonEmptyString(payload?.wxPhraseShort) ??
-    null;
+
+  const windNode = Array.isArray(payload?.observations?.wind)
+    ? payload.observations.wind[0]
+    : null;
+  const rainNode = Array.isArray(payload?.observations?.rain)
+    ? payload.observations.rain[0]
+    : null;
+  const pressureNode = Array.isArray(payload?.observations?.pressure)
+    ? payload.observations.pressure[0]
+    : null;
 
   return {
-    source: "weathercom_airport_current",
-    sourceLabel: "Weather.com airport current (unofficial)",
+    source: "metservice_93439",
+    sourceLabel: "MetService Wellington Aero (93439)",
     status: WEATHER_STATUS.OK,
     observedAtUtc,
     observedAtLocal: formatDateTimeInTimezone(observedAtUtc, timeZone),
-    tempC: normalizedTemp.tempC,
-    tempF: normalizedTemp.tempF,
-    relativeHumidity: toFiniteNumber(payload?.relativeHumidity),
-    windSpeedKph: toFiniteNumber(payload?.windSpeed),
-    windGustKph: toFiniteNumber(payload?.windGust),
-    pressureHpa: toFiniteNumber(payload?.pressureMeanSeaLevel),
-    ...(phrase ? { phrase } : {}),
-    ...(phrase ? { raw: phrase } : {}),
+    tempC: currentTemp.tempC,
+    tempF: currentTemp.tempF,
+    relativeHumidity: toFiniteNumber(rainNode?.relativeHumidity),
+    windSpeedKph: toFiniteNumber(windNode?.averageSpeed),
+    windGustKph: toFiniteNumber(windNode?.gustSpeed),
+    pressureHpa: toFiniteNumber(pressureNode?.atSeaLevel),
   };
 }
 
-async function fetchWeatherComDailyForecast({
-  geocode,
-  durationDays,
-  unit,
-  language,
-  apiKey,
-  timeZone,
-}) {
-  const url = new URL(WEATHERCOM_DAILY_FORECAST_URL);
-  url.searchParams.set("geocode", geocode);
-  url.searchParams.set("units", toWeatherComUnits(unit));
-  url.searchParams.set("language", language);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("apiKey", apiKey);
-
-  const response = await fetch(url.toString(), {
+async function fetchMetServiceDailyForecast() {
+  const response = await fetch(METSERVICE_DAILY_FORECAST_URL, {
     cache: "no-store",
     headers: {
       Accept: "application/json",
@@ -438,21 +326,14 @@ async function fetchWeatherComDailyForecast({
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
-      `Weather.com daily forecast failed (${response.status}): ${text.slice(0, 220)}`,
+      `MetService daily forecast failed (${response.status}): ${text.slice(0, 220)}`,
     );
   }
 
   const payload = await response.json();
-  const forecastDays = normalizeWeatherComForecastDays(
-    payload,
-    durationDays,
-    unit,
-    timeZone,
-  );
-  if (forecastDays.length < Math.min(durationDays, 5)) {
-    throw new Error(
-      `Weather.com daily forecast returned ${forecastDays.length} usable rows.`,
-    );
+  const forecastDays = normalizeMetServiceForecastDays(payload);
+  if (forecastDays.length === 0) {
+    throw new Error("MetService daily forecast returned no usable rows.");
   }
 
   return forecastDays;
@@ -497,7 +378,7 @@ async function fetchGoogleHourlyForecast({
     }
 
     const payload = await response.json();
-    rows.push(...normalizeGoogleHourlyRows(payload, unit, timeZone));
+    rows.push(...normalizeGoogleHourlyRows(payload, timeZone));
     nextPageToken = toNonEmptyString(payload?.nextPageToken);
   } while (nextPageToken);
 
@@ -517,56 +398,28 @@ export const getDayPageWeather = actionGeneric({
       throw new Error("Date must be in YYYY-MM-DD format.");
     }
 
-    const apiKey = getWeatherComApiKey();
-    const geocode = `${NZWN_STATION.lat},${NZWN_STATION.lon}`;
     const unit = "metric";
-    const weatherComLanguage = DEFAULT_WEATHERCOM_LANGUAGE;
     const googleLanguage = normalizeGoogleLanguage(DEFAULT_GOOGLE_LANGUAGE);
     const todayDate = formatDateInTimezone(Date.now(), NZWN_STATION.timeZone);
     const googleApiKey = getGoogleWeatherApiKey();
 
     const [currentReading, forecastResult, hourlyResult] = await Promise.all([
       (async () => {
-        if (!apiKey) {
-          return {
-            source: "weathercom_airport_current",
-            status: WEATHER_STATUS.ERROR,
-            error: "Missing WEATHERCOM_API_KEY.",
-          };
-        }
         try {
-          return await fetchWeatherComAirportCurrentReading({
-            stationIcao: NZWN_STATION.stationIcao,
-            unit,
-            language: weatherComLanguage,
-            apiKey,
+          return await fetchMetServiceCurrentReading({
             timeZone: NZWN_STATION.timeZone,
           });
         } catch (error) {
           return {
-            source: "weathercom_airport_current",
+            source: "metservice_93439",
             status: WEATHER_STATUS.ERROR,
             error: formatErrorMessage(error),
           };
         }
       })(),
       (async () => {
-        if (!apiKey) {
-          return {
-            status: WEATHER_STATUS.ERROR,
-            error: "Missing WEATHERCOM_API_KEY.",
-            days: [],
-          };
-        }
         try {
-          const days = await fetchWeatherComDailyForecast({
-            geocode,
-            durationDays: 5,
-            unit,
-            language: weatherComLanguage,
-            apiKey,
-            timeZone: NZWN_STATION.timeZone,
-          });
+          const days = await fetchMetServiceDailyForecast();
           return {
             status: WEATHER_STATUS.OK,
             days,

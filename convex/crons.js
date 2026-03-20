@@ -64,24 +64,14 @@ crons.cron(
     { stationIcao: "NZWN" },
 );
 
-// Runs every minute because AEROWEB also exposes NZWN, and we want the same
-// continuous fallback sampling used for the PreFlight-vs-NOAA timing race.
-crons.cron(
-    "nzwn_aeroweb_publish_race_every_minute",
-    "* * * * *",
-    api.preflight.pollLatestAerowebPublishRace,
-    { stationIcao: "NZWN" },
-);
-
 // Starts four minutes after both routine NZWN boundaries and keeps watching
-// through the usual late-publication window so PreFlight, authenticated
-// AEROWEB, and NOAA tgftp first-seen times are measured more precisely than the
-// minute fallback polls.
+// through the usual late-publication window so PreFlight and NOAA tgftp
+// first-seen times are measured more precisely than the minute fallback polls.
 crons.cron(
     "nzwn_publish_race_watch_minute_04_34",
     "4,34 * * * *",
     api.preflight.watchStationPublishRaceWindow,
-    { stationIcao: "NZWN", durationMs: 15 * 60 * 1000 },
+    { stationIcao: "NZWN", durationMs: 15 * 60 * 1000, includeAeroweb: false },
 );
 
 // Runs every minute so the default LFPG background source is NOAA tgftp.
