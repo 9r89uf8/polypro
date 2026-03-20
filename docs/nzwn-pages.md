@@ -52,6 +52,8 @@ What this page displays:
   - off-hour `SPECI` points if the official feed exposes them
   - blue points for `METAR`, red points for `SPECI`
   - x-axis is `Pacific/Auckland` local time
+  - on mobile, the chart can be swiped horizontally; the plot area widens with
+    data density instead of shrinking down to the viewport
 - `Latest Raw METAR` panel
 - `Publish Race` table showing recent first-seen timing across official
   PreFlight and NOAA `tgftp`

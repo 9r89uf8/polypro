@@ -685,6 +685,23 @@ export default function NzwnDayPage() {
     },
     [rows, displayUnit, metServiceRows, currentReading, date],
   );
+  const chartWidthPx = useMemo(() => {
+    const hasLiveMetServicePoint =
+      currentReading?.status === "ok" &&
+      currentReading.observedAtLocal?.slice(0, 10) === date;
+    const pointCount = Math.max(
+      rows.length,
+      metServiceRows.length + (hasLiveMetServicePoint ? 1 : 0),
+      24,
+    );
+    return Math.min(2200, Math.max(840, pointCount * 34));
+  }, [
+    rows.length,
+    metServiceRows.length,
+    currentReading?.status,
+    currentReading?.observedAtLocal,
+    date,
+  ]);
 
   const chartOptions = useMemo(
     () => ({
@@ -954,16 +971,24 @@ export default function NzwnDayPage() {
                 Blue markers are routine METAR. Red markers are SPECI.
               </p>
             </div>
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-black/45">
+              Swipe left/right on mobile
+            </p>
           </div>
 
-          <div className="mt-6 h-[620px]">
-            {rows.length ? (
-              <Line data={chartData} options={chartOptions} />
-            ) : (
-              <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No NZWN observations stored for this date yet.
-              </div>
-            )}
+          <div className="mt-6 overflow-x-auto overscroll-x-contain pb-2 touch-pan-x [-webkit-overflow-scrolling:touch]">
+            <div
+              className="h-[620px]"
+              style={{ width: `max(100%, ${chartWidthPx}px)` }}
+            >
+              {rows.length ? (
+                <Line data={chartData} options={chartOptions} />
+              ) : (
+                <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
+                  No NZWN observations stored for this date yet.
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
