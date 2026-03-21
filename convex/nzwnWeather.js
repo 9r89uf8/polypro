@@ -7,6 +7,8 @@ const METSERVICE_CURRENT_CONDITIONS_URL =
   `${METSERVICE_BASE_URL}/webdata/module/currentConditions/93439/93439`;
 const METSERVICE_DAILY_FORECAST_URL =
   `${METSERVICE_BASE_URL}/localForecastlyall-bay`;
+const METSERVICE_48HOUR_GRAPH_URL =
+  `${METSERVICE_BASE_URL}/webdata/module/48hourGraph/93439/93439`;
 const GOOGLE_WEATHER_BASE_URL = "https://weather.googleapis.com/v1";
 const GOOGLE_HOURLY_FORECAST_URL =
   `${GOOGLE_WEATHER_BASE_URL}/forecast/hours:lookup`;
@@ -340,6 +342,75 @@ async function fetchMetServiceDailyForecast() {
   return forecastDays;
 }
 
+async function fetchMetService48HourGraph({ timeZone }) {
+  const response = await fetch(METSERVICE_48HOUR_GRAPH_URL, {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `MetService 48h graph failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  const payload = await response.json();
+  const graphNode = payload?.graph ?? {};
+  const seriesArr = Array.isArray(graphNode?.series) ? graphNode.series : [];
+  const graphData = Array.isArray(graphNode?.columns) ? graphNode.columns : [];
+
+  // Build a set of indices that are "Observed" vs "Forecast".
+  const observedIndices = new Set();
+  const forecastIndices = new Set();
+  for (const s of seriesArr) {
+    const start = Number(s.start) || 0;
+    const count = Number(s.count) || 0;
+    const label = String(s.label || "").toLowerCase();
+    for (let i = start; i < start + count; i += 1) {
+      if (label === "observed") {
+        observedIndices.add(i);
+      } else {
+        forecastIndices.add(i);
+      }
+    }
+  }
+
+  const observed = [];
+  const forecast = [];
+
+  for (let i = 0; i < graphData.length; i += 1) {
+    const point = graphData[i];
+    const validTimeUtc = parseValidUtcEpoch(point?.date);
+    const temp = celsiusTempPair(point?.temperature);
+    if (!Number.isFinite(validTimeUtc) || !Number.isFinite(temp.tempC)) {
+      continue;
+    }
+
+    const windNode = point?.wind;
+    const row = {
+      date: formatDateInTimezone(validTimeUtc, timeZone),
+      validTimeUtc,
+      validTimeLocal: formatDateTimeInTimezone(validTimeUtc, timeZone),
+      tempC: temp.tempC,
+      tempF: temp.tempF,
+      windSpeedKph: toFiniteNumber(windNode?.speed),
+      windDirection: toNonEmptyString(windNode?.direction),
+      rainfall: toFiniteNumber(point?.rainfall),
+    };
+
+    if (observedIndices.has(i)) {
+      observed.push(row);
+    } else {
+      forecast.push(row);
+    }
+  }
+
+  return { observed, forecast };
+}
+
 async function fetchGoogleHourlyForecast({
   station,
   hours,
@@ -521,6 +592,59 @@ const storeMetServiceObservation = internalMutationGeneric({
 
 export { storeMetServiceObservation };
 
+const storeMetServiceHourlyForecastBatch = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    rows: v.array(
+      v.object({
+        date: v.string(),
+        forecastTimeUtc: v.number(),
+        forecastTimeLocal: v.string(),
+        tempC: v.number(),
+        tempF: v.number(),
+        windSpeedKph: v.optional(v.number()),
+        windDirection: v.optional(v.string()),
+        rainfall: v.optional(v.number()),
+      }),
+    ),
+    capturedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    let upserted = 0;
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("nzwnMetServiceHourlyForecasts")
+        .withIndex("by_station_date_ts", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("date", row.date)
+            .eq("forecastTimeUtc", row.forecastTimeUtc),
+        )
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          tempC: row.tempC,
+          tempF: row.tempF,
+          windSpeedKph: row.windSpeedKph,
+          windDirection: row.windDirection,
+          rainfall: row.rainfall,
+          capturedAt: args.capturedAt,
+        });
+      } else {
+        await ctx.db.insert("nzwnMetServiceHourlyForecasts", {
+          stationIcao: args.stationIcao,
+          ...row,
+          capturedAt: args.capturedAt,
+        });
+      }
+      upserted += 1;
+    }
+    return { upserted };
+  },
+});
+
+export { storeMetServiceHourlyForecastBatch };
+
 export const pollMetServiceCurrentConditions = actionGeneric({
   args: {
     stationIcao: v.optional(v.string()),
@@ -529,8 +653,16 @@ export const pollMetServiceCurrentConditions = actionGeneric({
     const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
     const timeZone = NZWN_STATION.timeZone;
 
-    const reading = await fetchMetServiceCurrentReading({ timeZone });
+    const [reading, graph48h] = await Promise.all([
+      fetchMetServiceCurrentReading({ timeZone }),
+      fetchMetService48HourGraph({ timeZone }).catch((error) => ({
+        observed: [],
+        forecast: [],
+        error: formatErrorMessage(error),
+      })),
+    ]);
 
+    // Store the live 10-minute current reading.
     await ctx.runMutation("nzwnWeather:storeMetServiceObservation", {
       stationIcao,
       date: formatDateInTimezone(reading.observedAtUtc, timeZone),
@@ -546,13 +678,68 @@ export const pollMetServiceCurrentConditions = actionGeneric({
       source: "metservice_93439",
     });
 
+    // Store hourly observed points from the 48h graph (backfills gaps).
+    for (const obs of graph48h.observed) {
+      await ctx.runMutation("nzwnWeather:storeMetServiceObservation", {
+        stationIcao,
+        date: obs.date,
+        obsTimeUtc: obs.validTimeUtc,
+        obsTimeLocal: obs.validTimeLocal,
+        tempC: obs.tempC,
+        tempF: obs.tempF,
+        windSpeedKph: obs.windSpeedKph ?? undefined,
+        windDirection: obs.windDirection ?? undefined,
+        source: "metservice_48h_observed",
+      });
+    }
+
+    // Store hourly forecast points (upsert — forecast values change each poll).
+    if (graph48h.forecast.length > 0) {
+      await ctx.runMutation("nzwnWeather:storeMetServiceHourlyForecastBatch", {
+        stationIcao,
+        rows: graph48h.forecast.map((row) => ({
+          date: row.date,
+          forecastTimeUtc: row.validTimeUtc,
+          forecastTimeLocal: row.validTimeLocal,
+          tempC: row.tempC,
+          tempF: row.tempF,
+          windSpeedKph: row.windSpeedKph ?? undefined,
+          windDirection: row.windDirection ?? undefined,
+          rainfall: row.rainfall ?? undefined,
+        })),
+        capturedAt: Date.now(),
+      });
+    }
+
     return {
       status: "ok",
       observedAtUtc: reading.observedAtUtc,
       observedAtLocal: reading.observedAtLocal,
       tempC: reading.tempC,
       tempF: reading.tempF,
+      graph48hObserved: graph48h.observed.length,
+      graph48hForecast: graph48h.forecast.length,
     };
+  },
+});
+
+export const getMetServiceHourlyForecasts = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+    const rows = await ctx.db
+      .query("nzwnMetServiceHourlyForecasts")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    rows.sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc);
+    return { rows };
   },
 });
 

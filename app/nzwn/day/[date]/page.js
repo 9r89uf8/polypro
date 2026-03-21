@@ -378,6 +378,43 @@ function buildMetServiceDataset(metServiceRows, currentReading, unit, selectedDa
   };
 }
 
+function buildMetServiceForecastDataset(forecastRows, unit) {
+  const points = forecastRows
+    .map((row) => {
+      const x = parseMinute(row.forecastTimeLocal);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    label: "MetService Hourly Forecast",
+    data: points,
+    borderColor: "#f59e0b",
+    backgroundColor: "#f59e0b",
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    pointHitRadius: 18,
+    pointStyle: "triangle",
+    pointBorderColor: "#b45309",
+    pointBorderWidth: 1.5,
+    borderWidth: 2,
+    borderDash: [6, 3],
+    tension: 0.22,
+    showLine: true,
+  };
+}
+
 function buildForecastPeakByDate(rows) {
   const rowsByDate = new Map();
   for (const row of rows) {
@@ -501,6 +538,15 @@ export default function NzwnDayPage() {
         }
       : "skip",
   );
+  const metServiceForecastData = useQuery(
+    "nzwnWeather:getMetServiceHourlyForecasts",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
   const raceData = useQuery("preflight:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
@@ -517,6 +563,7 @@ export default function NzwnDayPage() {
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
   const metServiceRows = metServiceData?.rows ?? [];
+  const metServiceForecastRows = metServiceForecastData?.rows ?? [];
   const raceRows = raceData?.rows ?? [];
   const displayedRaceRows = useMemo(
     () =>
@@ -748,9 +795,13 @@ export default function NzwnDayPage() {
       if (metDs) {
         datasets.push(metDs);
       }
+      const metFcDs = buildMetServiceForecastDataset(metServiceForecastRows, displayUnit);
+      if (metFcDs) {
+        datasets.push(metFcDs);
+      }
       return { datasets };
     },
-    [rows, displayUnit, metServiceRows, currentReading, date],
+    [rows, displayUnit, metServiceRows, metServiceForecastRows, currentReading, date],
   );
   const chartWidthPx = useMemo(() => {
     const hasLiveMetServicePoint =
@@ -1139,7 +1190,8 @@ export default function NzwnDayPage() {
                 Temperature Line
               </h2>
               <p className="mt-1 text-sm text-black/60">
-                Blue markers are routine METAR. Red markers are SPECI.
+                Blue = METAR (red = SPECI). Green = MetService AWS.
+                Orange dashed = MetService hourly forecast.
               </p>
             </div>
             <p className="text-xs font-medium uppercase tracking-[0.16em] text-black/45">

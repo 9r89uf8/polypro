@@ -609,6 +609,19 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_station_date_ts", ["stationIcao", "date", "obsTimeUtc"]),
 
+  nzwnMetServiceHourlyForecasts: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    forecastTimeUtc: v.number(),
+    forecastTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    windSpeedKph: v.optional(v.number()),
+    windDirection: v.optional(v.string()),
+    rainfall: v.optional(v.number()),
+    capturedAt: v.number(),
+  }).index("by_station_date_ts", ["stationIcao", "date", "forecastTimeUtc"]),
+
   seoulMetarObservations: defineTable({
     stationIcao: v.string(),
     date: v.string(),
