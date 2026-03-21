@@ -246,6 +246,43 @@ function buildOfficialLineDataset(rows, unit) {
   };
 }
 
+function buildAemetForecastDataset(forecastRows, unit) {
+  const points = forecastRows
+    .map((row) => {
+      const x = parseMinute(row.forecastTimeLocal);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    label: "AEMET Hourly Forecast",
+    data: points,
+    borderColor: "#f59e0b",
+    backgroundColor: "#f59e0b",
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    pointHitRadius: 18,
+    pointStyle: "triangle",
+    pointBorderColor: "#b45309",
+    pointBorderWidth: 1.5,
+    borderWidth: 2,
+    borderDash: [6, 3],
+    tension: 0.22,
+    showLine: true,
+  };
+}
+
 export default function MadridDayPage() {
   const params = useParams();
   const router = useRouter();
@@ -272,6 +309,15 @@ export default function MadridDayPage() {
         }
       : "skip",
   );
+  const aemetForecastData = useQuery(
+    "madrid:getAemetHourlyForecasts",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
   const raceData = useQuery("madrid:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
@@ -280,6 +326,7 @@ export default function MadridDayPage() {
 
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
+  const aemetForecastRows = aemetForecastData?.rows ?? [];
   const raceRows = raceData?.rows ?? [];
   const latestRow = rows.length ? rows[rows.length - 1] : null;
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
@@ -361,10 +408,18 @@ export default function MadridDayPage() {
   }
 
   const chartData = useMemo(
-    () => ({
-      datasets: rows.length ? [buildOfficialLineDataset(rows, displayUnit)] : [],
-    }),
-    [rows, displayUnit],
+    () => {
+      const datasets = [];
+      if (rows.length) {
+        datasets.push(buildOfficialLineDataset(rows, displayUnit));
+      }
+      const fcDs = buildAemetForecastDataset(aemetForecastRows, displayUnit);
+      if (fcDs) {
+        datasets.push(fcDs);
+      }
+      return { datasets };
+    },
+    [rows, displayUnit, aemetForecastRows],
   );
 
   const chartOptions = useMemo(

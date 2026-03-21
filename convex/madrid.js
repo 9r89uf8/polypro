@@ -8,6 +8,10 @@ import { v } from "convex/values";
 const MADRID_TIMEZONE = "Europe/Madrid";
 const AEMET_FETCH_TIMEOUT_MS = 25000;
 const DEFAULT_AEMET_BASE_URL = "https://ama.aemet.es";
+const AEMET_OPENDATA_BASE_URL = "https://opendata.aemet.es/opendata";
+// Paracuellos de Jarama — closest municipality to Barajas airport (~4.9 km).
+// Madrid city (28079) runs 2-3°C warmer overnight due to urban heat island.
+const MADRID_MUNICIPIO = "28104";
 const NOAA_LATEST_METAR_BASE_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
 const RACE_SOURCE = {
@@ -1408,5 +1412,235 @@ export const getRecentPublishRaceReports = queryGeneric({
       count: Math.min(filteredRows.length, limit),
       rows: filteredRows.slice(0, limit),
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// AEMET OpenData hourly forecast for Madrid
+// ---------------------------------------------------------------------------
+
+function getAemetOpenDataKey() {
+  return toNonEmptyString(process.env.OPENDATA_AEMET_KEY);
+}
+
+async function fetchAemetHourlyForecast({ municipio, apiKey }) {
+  // Step 1: get the redirect URL containing the actual data.
+  const metaUrl = `${AEMET_OPENDATA_BASE_URL}/api/prediccion/especifica/municipio/horaria/${municipio}?api_key=${apiKey}`;
+  const metaResponse = await fetch(metaUrl, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (!metaResponse.ok) {
+    const text = await metaResponse.text();
+    throw new Error(
+      `AEMET hourly forecast meta failed (${metaResponse.status}): ${text.slice(0, 220)}`,
+    );
+  }
+  const meta = await metaResponse.json();
+  const datosUrl = toNonEmptyString(meta?.datos);
+  if (!datosUrl) {
+    throw new Error("AEMET hourly forecast meta missing datos URL.");
+  }
+
+  // Step 2: fetch the actual forecast data.
+  const dataResponse = await fetch(datosUrl, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (!dataResponse.ok) {
+    const text = await dataResponse.text();
+    throw new Error(
+      `AEMET hourly forecast data failed (${dataResponse.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  const payload = await dataResponse.json();
+  const prediction = Array.isArray(payload) && payload.length > 0
+    ? payload[0]?.prediccion
+    : null;
+  const days = Array.isArray(prediction?.dia) ? prediction.dia : [];
+
+  const rows = [];
+  for (const day of days) {
+    const dateBase = day.fecha ? day.fecha.slice(0, 10) : null;
+    if (!dateBase) {
+      continue;
+    }
+    const temps = Array.isArray(day.temperatura) ? day.temperatura : [];
+    const humidities = Array.isArray(day.humedadRelativa) ? day.humedadRelativa : [];
+    const skies = Array.isArray(day.estadoCielo) ? day.estadoCielo : [];
+    const precips = Array.isArray(day.precipitacion) ? day.precipitacion : [];
+
+    // Wind entries alternate: odd entries are wind objects with direccion/velocidad,
+    // even entries are gust values. We only want the wind objects.
+    const windEntries = Array.isArray(day.vientoAndRachaMax)
+      ? day.vientoAndRachaMax
+      : [];
+    const windByHour = new Map();
+    for (const w of windEntries) {
+      if (Array.isArray(w.direccion) && Array.isArray(w.velocidad) && w.periodo) {
+        windByHour.set(w.periodo, {
+          direction: w.direccion[0],
+          speed: Number(w.velocidad[0]) || 0,
+        });
+      }
+    }
+
+    const humidityByHour = new Map();
+    for (const h of humidities) {
+      if (h.periodo && h.value) {
+        humidityByHour.set(h.periodo, Number(h.value));
+      }
+    }
+    const skyByHour = new Map();
+    for (const s of skies) {
+      if (s.periodo && s.descripcion) {
+        skyByHour.set(s.periodo, s.descripcion);
+      }
+    }
+    const precipByHour = new Map();
+    for (const p of precips) {
+      if (p.periodo && p.value !== undefined) {
+        precipByHour.set(p.periodo, Number(p.value) || 0);
+      }
+    }
+
+    for (const t of temps) {
+      const hour = t.periodo;
+      const tempC = Number(t.value);
+      if (!hour || !Number.isFinite(tempC)) {
+        continue;
+      }
+      const hourNum = Number(hour);
+      const isoString = `${dateBase}T${String(hourNum).padStart(2, "0")}:00:00`;
+      // Parse as Madrid local time.
+      const forecastTimeUtc = new Date(`${isoString}+01:00`).getTime();
+      // Adjust for Madrid timezone properly.
+      const localStr = `${dateBase} ${String(hourNum).padStart(2, "0")}:00`;
+      const wind = windByHour.get(hour);
+
+      rows.push({
+        date: dateBase,
+        forecastTimeUtc,
+        forecastTimeLocal: localStr,
+        tempC: roundToTenth(tempC),
+        tempF: toFahrenheit(tempC),
+        humidity: humidityByHour.get(hour) ?? undefined,
+        windSpeedKph: wind?.speed ?? undefined,
+        windDirection: wind?.direction ?? undefined,
+        skyDescription: skyByHour.get(hour) ?? undefined,
+        precipitation: precipByHour.get(hour) ?? undefined,
+      });
+    }
+  }
+
+  return rows;
+}
+
+const storeAemetHourlyForecastBatch = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    rows: v.array(
+      v.object({
+        date: v.string(),
+        forecastTimeUtc: v.number(),
+        forecastTimeLocal: v.string(),
+        tempC: v.number(),
+        tempF: v.number(),
+        humidity: v.optional(v.number()),
+        windSpeedKph: v.optional(v.number()),
+        windDirection: v.optional(v.string()),
+        skyDescription: v.optional(v.string()),
+        precipitation: v.optional(v.number()),
+      }),
+    ),
+    capturedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    let upserted = 0;
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("madridAemetHourlyForecasts")
+        .withIndex("by_station_date_ts", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("date", row.date)
+            .eq("forecastTimeUtc", row.forecastTimeUtc),
+        )
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          tempC: row.tempC,
+          tempF: row.tempF,
+          humidity: row.humidity,
+          windSpeedKph: row.windSpeedKph,
+          windDirection: row.windDirection,
+          skyDescription: row.skyDescription,
+          precipitation: row.precipitation,
+          capturedAt: args.capturedAt,
+        });
+      } else {
+        await ctx.db.insert("madridAemetHourlyForecasts", {
+          stationIcao: args.stationIcao,
+          ...row,
+          capturedAt: args.capturedAt,
+        });
+      }
+      upserted += 1;
+    }
+    return { upserted };
+  },
+});
+
+export { storeAemetHourlyForecastBatch };
+
+export const pollAemetHourlyForecast = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? "LEMD";
+    const apiKey = getAemetOpenDataKey();
+    if (!apiKey) {
+      return { status: "error", error: "Missing OPENDATA_AEMET_KEY." };
+    }
+
+    const rows = await fetchAemetHourlyForecast({
+      municipio: MADRID_MUNICIPIO,
+      apiKey,
+    });
+
+    if (rows.length > 0) {
+      await ctx.runMutation("madrid:storeAemetHourlyForecastBatch", {
+        stationIcao,
+        rows,
+        capturedAt: Date.now(),
+      });
+    }
+
+    return {
+      status: "ok",
+      forecastRows: rows.length,
+    };
+  },
+});
+
+export const getAemetHourlyForecasts = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+    const rows = await ctx.db
+      .query("madridAemetHourlyForecasts")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    rows.sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc);
+    return { rows };
   },
 });

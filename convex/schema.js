@@ -593,6 +593,21 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_station_reportTs", ["stationIcao", "reportTsUtc"]),
 
+  madridAemetHourlyForecasts: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    forecastTimeUtc: v.number(),
+    forecastTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    humidity: v.optional(v.number()),
+    windSpeedKph: v.optional(v.number()),
+    windDirection: v.optional(v.string()),
+    skyDescription: v.optional(v.string()),
+    precipitation: v.optional(v.number()),
+    capturedAt: v.number(),
+  }).index("by_station_date_ts", ["stationIcao", "date", "forecastTimeUtc"]),
+
   nzwnMetServiceObservations: defineTable({
     stationIcao: v.string(),
     date: v.string(),

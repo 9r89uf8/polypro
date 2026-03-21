@@ -114,6 +114,15 @@ crons.cron(
     { stationIcao: "LEMD" },
 );
 
+// Polls AEMET OpenData hourly forecast for Madrid (municipio 28079) every hour.
+// The forecast covers ~48 hours and updates a few times per day.
+crons.cron(
+    "madrid_aemet_hourly_forecast_every_hour",
+    "0 * * * *",
+    api.madrid.pollAemetHourlyForecast,
+    { stationIcao: "LEMD" },
+);
+
 // Runs only around the expected RKSI routine publication windows so the
 // official AMO latest METAR endpoint stays fresh without minute-by-minute
 // background polling all day.
