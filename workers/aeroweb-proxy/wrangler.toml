@@ -1,0 +1,7 @@
+name = "aeroweb-proxy"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+
+[vars]
+UPSTREAM_BASE = "https://aviation.meteo.fr"
+# Set PROXY_SECRET via `npx wrangler secret put PROXY_SECRET`

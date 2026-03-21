@@ -700,13 +700,24 @@ function md5Hex(value) {
   return [a, b, c, d].map(md5WordToHex).join("");
 }
 
+function getAerowebProxySecret() {
+  return toNonEmptyString(process.env.AEROWEB_PROXY_SECRET);
+}
+
 async function fetchWithTimeout(url, init = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), AEROWEB_FETCH_TIMEOUT_MS);
   try {
+    const headers = { ...(init.headers || {}) };
+    // If routing through the Cloudflare proxy, attach the shared secret.
+    const proxySecret = getAerowebProxySecret();
+    if (proxySecret && String(url).startsWith(getAerowebBaseUrl())) {
+      headers["x-proxy-secret"] = proxySecret;
+    }
     return await fetch(url, {
       cache: "no-store",
       ...init,
+      headers,
       signal: controller.signal,
     });
   } finally {
