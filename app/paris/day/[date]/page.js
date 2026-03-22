@@ -489,6 +489,66 @@ export default function ParisDayPage() {
   const selectedDateForecast = weatherPanel?.selectedDateForecast ?? null;
   const noaaOfficialMax = weatherPanel?.noaaOfficialMax ?? null;
 
+  // Météo-France live current temp (latest 6-min observation).
+  const mfLatestObs = meteoFranceRows.length
+    ? meteoFranceRows[meteoFranceRows.length - 1]
+    : null;
+  // Météo-France daily forecast from the mobile API (stored via getDayPageWeather).
+  const mfDailyForecast = weatherPanel?.meteoFranceDailyForecast ?? [];
+  const mfSelectedDateForecast = mfDailyForecast.find((d) => d.date === date) ?? null;
+  // Météo-France hourly forecast peak detection.
+  const mfForecastPeakByDate = useMemo(
+    () => {
+      const peaks = new Map();
+      const byDate = new Map();
+      for (const row of meteoFranceForecastRows) {
+        if (!row.date || !Number.isFinite(row.tempC) || !Number.isFinite(row.forecastTimeUtc)) continue;
+        if (!byDate.has(row.date)) byDate.set(row.date, []);
+        byDate.get(row.date).push(row);
+      }
+      for (const [dayDate, dayRows] of byDate.entries()) {
+        dayRows.sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc);
+        let maxTempC = Number.NEGATIVE_INFINITY;
+        for (const r of dayRows) {
+          if (r.tempC > maxTempC) maxTempC = r.tempC;
+        }
+        if (!Number.isFinite(maxTempC)) continue;
+        let peakWindow = null;
+        for (const r of dayRows) {
+          if (r.tempC !== maxTempC) {
+            if (peakWindow) break;
+            continue;
+          }
+          if (!peakWindow) {
+            peakWindow = {
+              date: dayDate,
+              startValidTimeUtc: r.forecastTimeUtc,
+              endValidTimeUtc: r.forecastTimeUtc,
+              startValidTimeLocal: r.forecastTimeLocal,
+              endValidTimeLocal: r.forecastTimeLocal,
+              tempC: r.tempC,
+              tempF: r.tempF,
+              phrase: r.weatherDescription ?? null,
+            };
+            continue;
+          }
+          if (r.forecastTimeUtc - peakWindow.endValidTimeUtc <= 90 * 60 * 1000) {
+            peakWindow.endValidTimeUtc = r.forecastTimeUtc;
+            peakWindow.endValidTimeLocal = r.forecastTimeLocal;
+            continue;
+          }
+          break;
+        }
+        if (peakWindow) peaks.set(dayDate, peakWindow);
+      }
+      return peaks;
+    },
+    [meteoFranceForecastRows],
+  );
+  const mfSelectedForecastPeak = mfForecastPeakByDate.get(date) ?? null;
+  const mfTodayForecastPeak = mfForecastPeakByDate.get(parisTodayDate) ?? null;
+  const mfForecastPeak = mfSelectedForecastPeak ?? mfTodayForecastPeak;
+
   useEffect(() => {
     setInputDate(date);
   }, [date]);
@@ -948,13 +1008,12 @@ export default function ParisDayPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-xl font-semibold text-foreground">
-                Weather.com + NOAA
+                Météo-France + NOAA
               </h2>
               <p className="mt-1 max-w-3xl text-sm text-black/60">
-                Current Paris airport temperature from Weather.com, today&apos;s
-                NOAA/AviationWeather official max, and Google hourly forecast
-                timing. Peak-time cells are only filled when the hourly forecast
-                window covers that date.
+                Météo-France DPObs 6-minute live temperature for CDG,
+                today&apos;s NOAA METAR max, Météo-France hourly forecast peak
+                timing, and Météo-France 15-day daily forecast.
               </p>
             </div>
             {isWeatherLoading ? (
@@ -973,26 +1032,26 @@ export default function ParisDayPage() {
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                Weather.com Current Temperature
+                Météo-France Current Temperature
               </p>
               <p className="mt-2 text-3xl font-semibold text-black">
-                {currentReading?.status === "ok"
+                {mfLatestObs
                   ? formatTemp(
-                      displayUnit === "C" ? currentReading.tempC : currentReading.tempF,
+                      displayUnit === "C" ? mfLatestObs.tempC : mfLatestObs.tempF,
                       displayUnit,
                     )
                   : "—"}
               </p>
               <p className="mt-2 text-sm text-black/60">
                 Observed{" "}
-                {currentReading?.observedAtLocal
-                  ? formatStoredLocalDateTime(currentReading.observedAtLocal)
+                {mfLatestObs?.obsTimeLocal
+                  ? formatStoredLocalDateTime(mfLatestObs.obsTimeLocal)
                   : "—"}
               </p>
               <p className="mt-1 text-xs text-black/55">
-                {currentReading?.status === "error"
-                  ? currentReading.error || "Weather.com current conditions unavailable."
-                  : currentReading?.raw || "Paris airport current conditions from Weather.com."}
+                {mfLatestObs
+                  ? "CDG 6-minute AWS observation from Météo-France DPObs."
+                  : "No Météo-France observations stored for this date yet."}
               </p>
             </div>
 
@@ -1027,51 +1086,47 @@ export default function ParisDayPage() {
                 Forecast Peak Time
               </p>
               <p className="mt-2 text-3xl font-semibold text-black">
-                {formatPeakWindow(forecastPeak)}
+                {formatPeakWindow(mfForecastPeak)}
               </p>
               <p className="mt-2 text-sm text-black/60">
-                {forecastPeak?.date
-                  ? `Google hourly peak for ${forecastPeak.date}`
-                  : "Hourly peak time is only available inside the current Google forecast window."}
+                {mfForecastPeak?.date
+                  ? `Météo-France hourly peak for ${mfForecastPeak.date}`
+                  : "Peak time available when hourly forecast data covers the selected date."}
               </p>
               <p className="mt-1 text-xs text-black/55">
-                {weatherHourly?.status === "error"
-                  ? weatherHourly.error || "Hourly forecast unavailable."
-                  : forecastPeak
-                    ? `${formatTemp(
-                        displayUnit === "C" ? forecastPeak.tempC : forecastPeak.tempF,
-                        displayUnit,
-                      )}${forecastPeak.phrase ? ` | ${forecastPeak.phrase}` : ""}`
-                    : "Selected date peak timing is not available from the current hourly forecast window."}
+                {mfForecastPeak
+                  ? `${formatTemp(
+                      displayUnit === "C" ? mfForecastPeak.tempC : mfForecastPeak.tempF,
+                      displayUnit,
+                    )}${mfForecastPeak.phrase ? ` | ${mfForecastPeak.phrase}` : ""}`
+                  : "No Météo-France hourly forecast data for this date yet."}
               </p>
             </div>
 
             <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                Weather.com Forecast
+                Météo-France Forecast
               </p>
               <p className="mt-2 text-3xl font-semibold text-black">
-                {selectedDateForecast
+                {mfSelectedDateForecast
                   ? formatTemp(
                       displayUnit === "C"
-                        ? selectedDateForecast.maxTempC
-                        : selectedDateForecast.maxTempF,
+                        ? mfSelectedDateForecast.maxTempC
+                        : mfSelectedDateForecast.maxTempF,
                       displayUnit,
                     )
                   : "—"}
               </p>
               <p className="mt-2 text-sm text-black/60">Selected Date {date}</p>
               <p className="mt-1 text-xs text-black/55">
-                {weatherForecast?.status === "error"
-                  ? weatherForecast.error || "5-day forecast unavailable."
-                  : selectedDateForecast
-                    ? `Min ${formatTemp(
-                        displayUnit === "C"
-                          ? selectedDateForecast.minTempC
-                          : selectedDateForecast.minTempF,
-                        displayUnit,
-                      )}${selectedDateForecast.dayPhrase ? ` | ${selectedDateForecast.dayPhrase}` : ""}`
-                    : "Selected date is outside the current 5-day Weather.com window."}
+                {mfSelectedDateForecast
+                  ? `Min ${formatTemp(
+                      displayUnit === "C"
+                        ? mfSelectedDateForecast.minTempC
+                        : mfSelectedDateForecast.minTempF,
+                      displayUnit,
+                    )}${mfSelectedDateForecast.dayPhrase ? ` | ${mfSelectedDateForecast.dayPhrase}` : ""}`
+                  : "Selected date is outside the current Météo-France forecast window."}
               </p>
             </div>
           </div>
@@ -1081,12 +1136,11 @@ export default function ParisDayPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-xl font-semibold text-foreground">
-                Weather.com 5-Day Forecast
+                Météo-France 15-Day Forecast
               </h2>
               <p className="mt-1 text-sm text-black/60">
-                Daily forecast rows come from Weather.com&apos;s 5-day endpoint.
-                Peak Time comes from Google&apos;s hourly forecast API, so only
-                days inside that window will show a hit time.
+                Daily forecast from Météo-France for Paris CDG.
+                Peak Window comes from the stored Météo-France hourly forecast.
               </p>
             </div>
           </div>
@@ -1100,13 +1154,12 @@ export default function ParisDayPage() {
                   <th className="px-3 py-2 font-semibold">Max</th>
                   <th className="px-3 py-2 font-semibold">Peak Window</th>
                   <th className="px-3 py-2 font-semibold">Day</th>
-                  <th className="px-3 py-2 font-semibold">Night</th>
                 </tr>
               </thead>
               <tbody>
-                {weatherForecastDays.length ? (
-                  weatherForecastDays.map((day) => {
-                    const peak = forecastPeakByDate.get(day.date) ?? null;
+                {mfDailyForecast.length ? (
+                  mfDailyForecast.map((day) => {
+                    const peak = mfForecastPeakByDate.get(day.date) ?? null;
                     const isSelectedForecastDay = day.date === date;
 
                     return (
@@ -1135,18 +1188,15 @@ export default function ParisDayPage() {
                           {formatPeakWindow(peak)}
                         </td>
                         <td className="px-3 py-3 text-black/70">{day.dayPhrase || "—"}</td>
-                        <td className="px-3 py-3 text-black/70">{day.nightPhrase || "—"}</td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-black/55">
-                      {weatherForecast?.status === "error"
-                        ? weatherForecast.error || "Weather.com forecast unavailable."
-                        : isWeatherLoading
-                          ? "Loading Weather.com forecast..."
-                          : "No Weather.com forecast rows available."}
+                    <td colSpan={5} className="px-3 py-6 text-center text-black/55">
+                      {isWeatherLoading
+                        ? "Loading Météo-France forecast..."
+                        : "No Météo-France daily forecast rows available."}
                     </td>
                   </tr>
                 )}

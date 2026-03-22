@@ -820,6 +820,19 @@ export const getDayPageWeather = actionGeneric({
       })(),
     ]);
 
+    // Also fetch Météo-France mobile daily forecast (no key needed).
+    let meteoFranceDailyForecast = [];
+    try {
+      const mfResult = await fetchMeteoFranceMobileForecast({
+        lat: PARIS_STATION.lat,
+        lon: PARIS_STATION.lon,
+        timeZone: PARIS_STATION.timeZone,
+      });
+      meteoFranceDailyForecast = mfResult.daily;
+    } catch (error) {
+      // Non-fatal — the stored hourly forecast covers peak detection.
+    }
+
     return {
       stationIcao: PARIS_STATION.stationIcao,
       stationName: PARIS_STATION.stationName,
@@ -832,6 +845,7 @@ export const getDayPageWeather = actionGeneric({
       selectedDatePeak: selectPeakForecastRow(hourlyResult.rows, args.date),
       todayPeak: selectPeakForecastRow(hourlyResult.rows, todayDate),
       noaaOfficialMax,
+      meteoFranceDailyForecast,
     };
   },
 });
