@@ -423,6 +423,41 @@ export default defineSchema({
     .index("by_station_pws_date", ["stationIcao", "pwsStationId", "date"])
     .index("by_station_date", ["stationIcao", "date"]),
 
+  parisMeteoFranceObservations: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    obsTimeUtc: v.number(),
+    obsTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    dewpointC: v.optional(v.number()),
+    humidity: v.optional(v.number()),
+    windSpeedMps: v.optional(v.number()),
+    windDirection: v.optional(v.number()),
+    windGustMps: v.optional(v.number()),
+    pressureHpa: v.optional(v.number()),
+    visibility: v.optional(v.number()),
+    source: v.string(),
+    createdAt: v.number(),
+  }).index("by_station_date_ts", ["stationIcao", "date", "obsTimeUtc"]),
+
+  parisMeteoFranceHourlyForecasts: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    forecastTimeUtc: v.number(),
+    forecastTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    humidity: v.optional(v.number()),
+    windSpeedMps: v.optional(v.number()),
+    windDirection: v.optional(v.number()),
+    windGustMps: v.optional(v.number()),
+    cloudCover: v.optional(v.number()),
+    weatherDescription: v.optional(v.string()),
+    rain1h: v.optional(v.number()),
+    capturedAt: v.number(),
+  }).index("by_station_date_ts", ["stationIcao", "date", "forecastTimeUtc"]),
+
   aerowebMetarObservations: defineTable({
     stationIcao: v.string(),
     date: v.string(),

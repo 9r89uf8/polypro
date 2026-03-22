@@ -273,6 +273,79 @@ function buildLineDataset(rows, unit) {
   };
 }
 
+function buildMeteoFranceDataset(meteoFranceRows, unit) {
+  const points = meteoFranceRows
+    .map((row) => {
+      const x = parseMinute(row.obsTimeLocal);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    label: "Météo-France AWS",
+    data: points,
+    borderColor: "#16a34a",
+    backgroundColor: "#16a34a",
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    pointHitRadius: 18,
+    pointStyle: "rectRot",
+    pointBorderColor: "#166534",
+    pointBorderWidth: 1.5,
+    borderWidth: 2,
+    tension: 0.22,
+    showLine: true,
+  };
+}
+
+function buildMeteoFranceForecastDataset(forecastRows, unit) {
+  const points = forecastRows
+    .map((row) => {
+      const x = parseMinute(row.forecastTimeLocal);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    label: "Météo-France Forecast",
+    data: points,
+    borderColor: "#f59e0b",
+    backgroundColor: "#f59e0b",
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    pointHitRadius: 18,
+    pointStyle: "triangle",
+    pointBorderColor: "#b45309",
+    pointBorderWidth: 1.5,
+    borderWidth: 2,
+    borderDash: [6, 3],
+    tension: 0.22,
+    showLine: true,
+  };
+}
+
 function buildForecastPeakByDate(rows) {
   const rowsByDate = new Map();
   for (const row of rows) {
@@ -383,7 +456,27 @@ export default function ParisDayPage() {
         }
       : "skip",
   );
+  const meteoFranceData = useQuery(
+    "parisWeather:getMeteoFranceObservations",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
+  const meteoFranceForecastData = useQuery(
+    "parisWeather:getMeteoFranceHourlyForecasts",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
   const rows = dayData?.rows ?? [];
+  const meteoFranceRows = meteoFranceData?.rows ?? [];
+  const meteoFranceForecastRows = meteoFranceForecastData?.rows ?? [];
   const summary = dayData?.summary ?? null;
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
   const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
@@ -570,10 +663,22 @@ export default function ParisDayPage() {
   }
 
   const chartData = useMemo(
-    () => ({
-      datasets: rows.length ? [buildLineDataset(rows, displayUnit)] : [],
-    }),
-    [rows, displayUnit],
+    () => {
+      const datasets = [];
+      if (rows.length) {
+        datasets.push(buildLineDataset(rows, displayUnit));
+      }
+      const mfDs = buildMeteoFranceDataset(meteoFranceRows, displayUnit);
+      if (mfDs) {
+        datasets.push(mfDs);
+      }
+      const mfFcDs = buildMeteoFranceForecastDataset(meteoFranceForecastRows, displayUnit);
+      if (mfFcDs) {
+        datasets.push(mfFcDs);
+      }
+      return { datasets };
+    },
+    [rows, displayUnit, meteoFranceRows, meteoFranceForecastRows],
   );
 
   const chartOptions = useMemo(

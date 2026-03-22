@@ -1,7 +1,13 @@
-import { actionGeneric } from "convex/server";
+import { actionGeneric, internalMutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 
 const PARIS_TIMEZONE = "Europe/Paris";
+const METEOFRANCE_DPOBS_BASE_URL =
+  "https://public-api.meteofrance.fr/public/DPObs/v1";
+const METEOFRANCE_MOBILE_BASE_URL = "https://webservice.meteofrance.com";
+const METEOFRANCE_MOBILE_TOKEN =
+  "__Wj7dVSTjV9YGu1guveLyDq0g7S7TfTjaHBTPTpO0kj8__";
+const METEOFRANCE_CDG_STATION_ID = "95527001";
 const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
 const WEATHERCOM_CURRENT_CONDITIONS_URL =
   `${WEATHERCOM_API_BASE_URL}/v3/wx/observations/current`;
@@ -827,5 +833,343 @@ export const getDayPageWeather = actionGeneric({
       todayPeak: selectPeakForecastRow(hourlyResult.rows, todayDate),
       noaaOfficialMax,
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Météo-France DPObs 6-minute observation + mobile API forecast
+// ---------------------------------------------------------------------------
+
+function getMeteoFranceApiKey() {
+  return toNonEmptyString(process.env.METEOFRANCE_API_KEY);
+}
+
+async function fetchMeteoFrance6MinObservation({ stationId, apiKey, timeZone }) {
+  const url = `${METEOFRANCE_DPOBS_BASE_URL}/station/infrahoraire-6m?id_station=${stationId}&format=json`;
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { apikey: apiKey },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Météo-France DPObs failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+  const data = await response.json();
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error("Météo-France DPObs returned no records.");
+  }
+  const row = data[data.length - 1];
+  const tempK = Number(row.t);
+  if (!Number.isFinite(tempK)) {
+    throw new Error("Météo-France DPObs missing temperature.");
+  }
+  const tempC = roundToTenth(tempK - 273.15);
+  const observedAtUtc = parseValidUtcEpoch(row.validity_time) ?? Date.now();
+  const dewpointK = Number(row.td);
+  const dewpointC = Number.isFinite(dewpointK) ? roundToTenth(dewpointK - 273.15) : undefined;
+
+  return {
+    source: `meteofrance_dpobs_${stationId}`,
+    sourceLabel: `Météo-France DPObs (${stationId})`,
+    observedAtUtc,
+    observedAtLocal: formatDateTimeInTimezone(observedAtUtc, timeZone),
+    date: formatDateInTimezone(observedAtUtc, timeZone),
+    tempC,
+    tempF: toFahrenheit(tempC),
+    dewpointC,
+    humidity: Number.isFinite(Number(row.u)) ? Number(row.u) : undefined,
+    windSpeedMps: Number.isFinite(Number(row.ff)) ? roundToTenth(Number(row.ff)) : undefined,
+    windDirection: Number.isFinite(Number(row.dd)) ? Number(row.dd) : undefined,
+    windGustMps: Number.isFinite(Number(row.fxi10)) ? roundToTenth(Number(row.fxi10)) : undefined,
+    pressureHpa: Number.isFinite(Number(row.pmer))
+      ? roundToTenth(Number(row.pmer) / 100)
+      : undefined,
+    visibility: Number.isFinite(Number(row.vv)) ? Number(row.vv) : undefined,
+  };
+}
+
+async function fetchMeteoFranceMobileForecast({ lat, lon, timeZone }) {
+  const url = `${METEOFRANCE_MOBILE_BASE_URL}/forecast?lat=${lat}&lon=${lon}&lang=fr&token=${METEOFRANCE_MOBILE_TOKEN}`;
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Météo-France mobile forecast failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+  const payload = await response.json();
+  const hourlyEntries = Array.isArray(payload?.forecast) ? payload.forecast : [];
+
+  const rows = [];
+  for (const entry of hourlyEntries) {
+    const dt = Number(entry.dt);
+    if (!Number.isFinite(dt)) continue;
+    const forecastTimeUtc = dt * 1000;
+    const tempC = Number(entry.T?.value);
+    if (!Number.isFinite(tempC)) continue;
+
+    rows.push({
+      date: formatDateInTimezone(forecastTimeUtc, timeZone),
+      forecastTimeUtc,
+      forecastTimeLocal: formatDateTimeInTimezone(forecastTimeUtc, timeZone),
+      tempC: roundToTenth(tempC),
+      tempF: toFahrenheit(tempC),
+      humidity: Number.isFinite(Number(entry.humidity)) ? Number(entry.humidity) : undefined,
+      windSpeedMps: Number.isFinite(Number(entry.wind?.speed))
+        ? roundToTenth(Number(entry.wind.speed))
+        : undefined,
+      windDirection: Number.isFinite(Number(entry.wind?.direction))
+        ? Number(entry.wind.direction)
+        : undefined,
+      windGustMps: Number.isFinite(Number(entry.wind?.gust))
+        ? roundToTenth(Number(entry.wind.gust))
+        : undefined,
+      cloudCover: Number.isFinite(Number(entry.clouds)) ? Number(entry.clouds) : undefined,
+      weatherDescription: toNonEmptyString(entry.weather?.desc),
+      rain1h: Number.isFinite(Number(entry.rain?.["1h"]))
+        ? Number(entry.rain["1h"])
+        : undefined,
+    });
+  }
+
+  // Also extract daily forecast for the forecast panel.
+  const dailyEntries = Array.isArray(payload?.daily_forecast) ? payload.daily_forecast : [];
+  const days = [];
+  for (const entry of dailyEntries) {
+    const dt = Number(entry.dt);
+    if (!Number.isFinite(dt)) continue;
+    const dayDate = formatDateInTimezone(dt * 1000, timeZone);
+    const maxTempC = Number(entry.T?.max);
+    const minTempC = Number(entry.T?.min);
+    if (!Number.isFinite(maxTempC) || !Number.isFinite(minTempC)) continue;
+
+    days.push({
+      date: dayDate,
+      maxTempC: roundToTenth(maxTempC),
+      maxTempF: toFahrenheit(maxTempC),
+      minTempC: roundToTenth(minTempC),
+      minTempF: toFahrenheit(minTempC),
+      dayPhrase: toNonEmptyString(entry.weather12H?.desc),
+    });
+  }
+
+  return { hourly: rows, daily: days };
+}
+
+const storeMeteoFranceObservation = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+    obsTimeUtc: v.number(),
+    obsTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    dewpointC: v.optional(v.number()),
+    humidity: v.optional(v.number()),
+    windSpeedMps: v.optional(v.number()),
+    windDirection: v.optional(v.number()),
+    windGustMps: v.optional(v.number()),
+    pressureHpa: v.optional(v.number()),
+    visibility: v.optional(v.number()),
+    source: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("parisMeteoFranceObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("date", args.date)
+          .eq("obsTimeUtc", args.obsTimeUtc),
+      )
+      .first();
+    if (existing) {
+      return { inserted: false };
+    }
+    await ctx.db.insert("parisMeteoFranceObservations", {
+      ...args,
+      createdAt: Date.now(),
+    });
+    return { inserted: true };
+  },
+});
+
+export { storeMeteoFranceObservation };
+
+const storeMeteoFranceHourlyForecastBatch = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    rows: v.array(
+      v.object({
+        date: v.string(),
+        forecastTimeUtc: v.number(),
+        forecastTimeLocal: v.string(),
+        tempC: v.number(),
+        tempF: v.number(),
+        humidity: v.optional(v.number()),
+        windSpeedMps: v.optional(v.number()),
+        windDirection: v.optional(v.number()),
+        windGustMps: v.optional(v.number()),
+        cloudCover: v.optional(v.number()),
+        weatherDescription: v.optional(v.string()),
+        rain1h: v.optional(v.number()),
+      }),
+    ),
+    capturedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    let upserted = 0;
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("parisMeteoFranceHourlyForecasts")
+        .withIndex("by_station_date_ts", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("date", row.date)
+            .eq("forecastTimeUtc", row.forecastTimeUtc),
+        )
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          tempC: row.tempC,
+          tempF: row.tempF,
+          humidity: row.humidity,
+          windSpeedMps: row.windSpeedMps,
+          windDirection: row.windDirection,
+          windGustMps: row.windGustMps,
+          cloudCover: row.cloudCover,
+          weatherDescription: row.weatherDescription,
+          rain1h: row.rain1h,
+          capturedAt: args.capturedAt,
+        });
+      } else {
+        await ctx.db.insert("parisMeteoFranceHourlyForecasts", {
+          stationIcao: args.stationIcao,
+          ...row,
+          capturedAt: args.capturedAt,
+        });
+      }
+      upserted += 1;
+    }
+    return { upserted };
+  },
+});
+
+export { storeMeteoFranceHourlyForecastBatch };
+
+export const pollMeteoFranceObservation = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? PARIS_STATION.stationIcao;
+    const apiKey = getMeteoFranceApiKey();
+    if (!apiKey) {
+      return { status: "error", error: "Missing METEOFRANCE_API_KEY." };
+    }
+
+    const reading = await fetchMeteoFrance6MinObservation({
+      stationId: METEOFRANCE_CDG_STATION_ID,
+      apiKey,
+      timeZone: PARIS_STATION.timeZone,
+    });
+
+    await ctx.runMutation("parisWeather:storeMeteoFranceObservation", {
+      stationIcao,
+      date: reading.date,
+      obsTimeUtc: reading.observedAtUtc,
+      obsTimeLocal: reading.observedAtLocal,
+      tempC: reading.tempC,
+      tempF: reading.tempF,
+      dewpointC: reading.dewpointC,
+      humidity: reading.humidity,
+      windSpeedMps: reading.windSpeedMps,
+      windDirection: reading.windDirection,
+      windGustMps: reading.windGustMps,
+      pressureHpa: reading.pressureHpa,
+      visibility: reading.visibility,
+      source: reading.source,
+    });
+
+    return {
+      status: "ok",
+      observedAtUtc: reading.observedAtUtc,
+      observedAtLocal: reading.observedAtLocal,
+      tempC: reading.tempC,
+      tempF: reading.tempF,
+    };
+  },
+});
+
+export const pollMeteoFranceForecast = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? PARIS_STATION.stationIcao;
+
+    const { hourly } = await fetchMeteoFranceMobileForecast({
+      lat: PARIS_STATION.lat,
+      lon: PARIS_STATION.lon,
+      timeZone: PARIS_STATION.timeZone,
+    });
+
+    if (hourly.length > 0) {
+      await ctx.runMutation("parisWeather:storeMeteoFranceHourlyForecastBatch", {
+        stationIcao,
+        rows: hourly,
+        capturedAt: Date.now(),
+      });
+    }
+
+    return {
+      status: "ok",
+      forecastRows: hourly.length,
+    };
+  },
+});
+
+export const getMeteoFranceObservations = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+    const rows = await ctx.db
+      .query("parisMeteoFranceObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    rows.sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
+    return { rows };
+  },
+});
+
+export const getMeteoFranceHourlyForecasts = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+    const rows = await ctx.db
+      .query("parisMeteoFranceHourlyForecasts")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    rows.sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc);
+    return { rows };
   },
 });

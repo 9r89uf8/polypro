@@ -83,6 +83,22 @@ crons.cron(
     { stationIcao: "NZWN" },
 );
 
+// Polls Météo-France DPObs 6-minute observations for CDG (station 95527001).
+crons.cron(
+    "paris_meteofrance_obs_every_6_min",
+    "*/6 * * * *",
+    api.parisWeather.pollMeteoFranceObservation,
+    { stationIcao: "LFPG" },
+);
+
+// Polls Météo-France mobile API hourly forecast for CDG every hour.
+crons.cron(
+    "paris_meteofrance_forecast_every_hour",
+    "0 * * * *",
+    api.parisWeather.pollMeteoFranceForecast,
+    { stationIcao: "LFPG" },
+);
+
 // Runs every minute so the default LFPG background source is NOAA tgftp.
 // AEROWEB is now reserved for manual on-demand official fetches on the page
 // instead of continuous background race tracking.
