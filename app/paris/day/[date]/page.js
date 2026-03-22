@@ -742,6 +742,15 @@ export default function ParisDayPage() {
     },
     [rows, displayUnit, meteoFranceRows, meteoFranceForecastRows],
   );
+  const chartWidthPx = useMemo(() => {
+    const pointCount = Math.max(
+      rows.length,
+      meteoFranceRows.length,
+      meteoFranceForecastRows.length,
+      24,
+    );
+    return Math.min(2200, Math.max(840, pointCount * 34));
+  }, [rows.length, meteoFranceRows.length, meteoFranceForecastRows.length]);
 
   const chartOptions = useMemo(
     () => ({
@@ -1214,20 +1223,28 @@ export default function ParisDayPage() {
                 Temperature Line
               </h2>
               <p className="mt-1 text-sm text-black/60">
-                Stored LFPG METAR rows. Blue markers are routine METAR. Red
-                markers are SPECI.
+                Blue = METAR (red = SPECI). Green = Météo-France AWS.
+                Orange dashed = Météo-France hourly forecast.
               </p>
             </div>
+            <p className="text-xs font-medium uppercase tracking-[0.16em] text-black/45">
+              Swipe left/right on mobile
+            </p>
           </div>
 
-          <div className="mt-6 h-[420px]">
-            {rows.length ? (
-              <Line data={chartData} options={chartOptions} />
-            ) : (
-              <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No LFPG observations stored for this date yet.
-              </div>
-            )}
+          <div className="mt-6 overflow-x-auto overscroll-x-contain pb-2 touch-pan-x [-webkit-overflow-scrolling:touch]">
+            <div
+              className="h-[620px]"
+              style={{ width: `max(100%, ${chartWidthPx}px)` }}
+            >
+              {rows.length ? (
+                <Line data={chartData} options={chartOptions} />
+              ) : (
+                <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
+                  No LFPG observations stored for this date yet.
+                </div>
+              )}
+            </div>
           </div>
         </section>
 

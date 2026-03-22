@@ -52,6 +52,9 @@ Main page behavior:
 - when consecutive hourly rows share the same daily high, the page shows a
   start-to-end peak window such as `3:00 PM to 5:00 PM`; an isolated single
   peak hour still shows one time
+- on mobile, the `Temperature Line` chart can be swiped horizontally; the
+  plotted width expands with LFPG data density instead of shrinking down to the
+  viewport
 
 Official source used today:
 
