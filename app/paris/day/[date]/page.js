@@ -445,6 +445,7 @@ export default function ParisDayPage() {
 
   const pollLatestOfficial = useAction("aeroweb:pollLatestStationMetar");
   const pollLatestNoaa = useAction("aeroweb:pollLatestNoaaStationMetar");
+  const pollMeteoFranceObs = useAction("parisWeather:pollMeteoFranceObservation");
   const loadParisWeather = useAction("parisWeather:getDayPageWeather");
 
   const dayData = useQuery(
@@ -650,6 +651,7 @@ export default function ParisDayPage() {
       const [pollResult, weatherResult] = await Promise.allSettled([
         pollLatestNoaa({ stationIcao: STATION_ICAO }),
         loadParisWeather({ date }),
+        pollMeteoFranceObs({ stationIcao: STATION_ICAO }),
       ]);
 
       if (pollResult.status === "fulfilled") {

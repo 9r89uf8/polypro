@@ -83,10 +83,12 @@ crons.cron(
     { stationIcao: "NZWN" },
 );
 
-// Polls Météo-France DPObs 6-minute observations for CDG (station 95527001).
+// Polls Météo-France DPObs observations for CDG (station 95527001).
+// DPObs updates every 6 minutes but has ~10 min publication delay,
+// so polling every 10 minutes captures all readings.
 crons.cron(
-    "paris_meteofrance_obs_every_6_min",
-    "*/6 * * * *",
+    "paris_meteofrance_obs_every_10_min",
+    "*/10 * * * *",
     api.parisWeather.pollMeteoFranceObservation,
     { stationIcao: "LFPG" },
 );
