@@ -458,6 +458,28 @@ export default defineSchema({
     capturedAt: v.number(),
   }).index("by_station_date_ts", ["stationIcao", "date", "forecastTimeUtc"]),
 
+  parisForecastPredictions: defineTable({
+    stationIcao: v.string(),
+    provider: v.literal("meteofrance"),
+    targetDate: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    captureDate: v.string(),
+    leadDays: v.number(),
+    minTempC: v.optional(v.number()),
+    minTempF: v.optional(v.number()),
+    maxTempC: v.optional(v.number()),
+    maxTempF: v.optional(v.number()),
+    dayPhrase: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_station_provider_target_capturedAt", [
+    "stationIcao",
+    "provider",
+    "targetDate",
+    "capturedAt",
+  ]),
+
   aerowebMetarObservations: defineTable({
     stationIcao: v.string(),
     date: v.string(),
