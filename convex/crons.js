@@ -141,6 +141,39 @@ crons.cron(
     { stationIcao: "LEMD" },
 );
 
+// Polls MGM sondurumlar for LTAC every minute to catch the latest METAR
+// as fast as possible (MGM publishes ~2 min after observation).
+crons.cron(
+    "ankara_mgm_metar_every_minute",
+    "* * * * *",
+    api.ankara.pollLatestMgmMetar,
+    { stationIcao: "LTAC" },
+);
+
+// Polls NOAA tgftp for LTAC every minute for the publish race comparison.
+crons.cron(
+    "ankara_tgftp_publish_race_every_minute",
+    "* * * * *",
+    api.ankara.pollLatestNoaaPublishRace,
+    { stationIcao: "LTAC" },
+);
+
+// Polls MGM sondurumlar AWS data every 10 minutes for the live temperature line.
+crons.cron(
+    "ankara_mgm_aws_every_10_min",
+    "*/10 * * * *",
+    api.ankara.pollMgmCurrentConditions,
+    { stationIcao: "LTAC" },
+);
+
+// Polls MGM 3-hourly and 5-day forecasts every hour.
+crons.cron(
+    "ankara_mgm_forecast_every_hour",
+    "0 * * * *",
+    api.ankara.pollMgmForecast,
+    { stationIcao: "LTAC" },
+);
+
 // Runs only around the expected RKSI routine publication windows so the
 // official AMO latest METAR endpoint stays fresh without minute-by-minute
 // background polling all day.

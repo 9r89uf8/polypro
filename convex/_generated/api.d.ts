@@ -10,6 +10,7 @@
 
 import type * as aeroweb from "../aeroweb.js";
 import type * as aerowebShared from "../aerowebShared.js";
+import type * as ankara from "../ankara.js";
 import type * as crons from "../crons.js";
 import type * as forecastCollector from "../forecastCollector.js";
 import type * as http from "../http.js";
@@ -37,6 +38,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   aeroweb: typeof aeroweb;
   aerowebShared: typeof aerowebShared;
+  ankara: typeof ankara;
   crons: typeof crons;
   forecastCollector: typeof forecastCollector;
   http: typeof http;
