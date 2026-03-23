@@ -204,6 +204,13 @@ function parseReportTimestampFromRaw(rawMetar, nowEpochMs = Date.now()) {
   return bestCandidate;
 }
 
+function isSameUtcMinute(leftEpochMs, rightEpochMs) {
+  if (!Number.isFinite(leftEpochMs) || !Number.isFinite(rightEpochMs)) {
+    return false;
+  }
+  return Math.floor(leftEpochMs / 60000) === Math.floor(rightEpochMs / 60000);
+}
+
 // ---------------------------------------------------------------------------
 // NOAA tgftp parsing
 // ---------------------------------------------------------------------------
@@ -1016,12 +1023,16 @@ export const pollLatestMgmMetar = actionGeneric({
       };
     }
 
-    // Build the observation row; prefer MGM's 0.1 C precision temp if available.
+    // Only trust sondurumlar.sicaklik for the METAR row when veriZamani matches
+    // the METAR observation minute. MGM can publish a newer raw METAR while the
+    // AWS/current-conditions fields are still on the previous update.
     const row = buildObservationRow({
       stationIcao,
       rawMetar: labeledMetar,
       obsTimeUtc,
-      reportedTempC: mgmData.tempC,
+      reportedTempC: isSameUtcMinute(mgmData.obsTimeUtc, obsTimeUtc)
+        ? mgmData.tempC
+        : null,
       sourcePrefix: "mgm_sondurumlar",
       fallbackReportType: reportType,
     });

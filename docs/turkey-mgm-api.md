@@ -2,20 +2,29 @@
 
 Discovered March 22, 2026. The Turkish State Meteorological Service operates
 an undocumented but fully functional REST API at `servis.mgm.gov.tr/web/`.
-No API key or authentication is needed — only `Origin` and `Referer` headers.
+No API key or token is needed. In live tests on March 23, 2026, requests
+worked with `Origin: https://www.mgm.gov.tr`; our code also sends `Referer`
+and `Accept`, but those were not required in curl tests.
 
 ## Authentication
 
-No token or key required. Every request must include:
+No token or key required. In live tests, the server required the official
+browser origin:
 
 ```
 Origin: https://www.mgm.gov.tr
+```
+
+Our code also sends:
+
+```
 Referer: https://www.mgm.gov.tr/
 Accept: application/json
 ```
 
-Without these headers the API returns 403. The same headers are used by the
-official MGM website and mobile app.
+Requests with no `Origin`, or with a different `Origin`, currently fail with
+HTTP 500 and a JSON body like `{"error":"ServerError","message":"Not allowed by MGM"}`.
+`Referer` and `Accept` were optional in March 23, 2026 tests.
 
 ## Base URL
 
@@ -29,9 +38,11 @@ MGM uses several identifier types:
 
 | ID Type | Example | Used For |
 |---|---|---|
-| `istNo` (station number) | `17128` | Esenboğa Airport — observations, station metadata |
-| `merkezId` (center ID) | `90601` | Ankara city center — daily forecast |
-| `saatlikTahminIstNo` | `17130` | Ankara — 3-hourly forecast |
+| `istNo` (station number) | `17128` | Esenboğa Airport station — observations, station metadata |
+| `sondurumIstNo` | `17130` | Center-station current conditions |
+| `merkezId` (center ID) | `90601` | Location lookup and center-based queries |
+| `saatlikTahminIstNo` | `17130` | Ankara center — 3-hourly forecast |
+| `gunlukTahminIstNo` | `90601` | Ankara center — 5-day daily forecast |
 | `ilPlaka` (province plate) | `6` | Ankara province — bulk queries |
 
 To find IDs for other locations, query `/web/merkezler/iller` (all provinces)
@@ -39,10 +50,10 @@ or `/web/merkezler/ililcesi?il=Ankara` (districts within a province).
 
 ### Key IDs for Ankara / Esenboğa
 
-- Airport observations: `istno=17128` (Ankara Esenboğa Airport, LTAC)
-- City observations: `istno=17130` (Ankara central)
-- 3-hourly forecast: `istno=17130` (airport station 17128 returns empty for forecasts)
-- 5-day daily forecast: `merkezid=90601`
+- Airport observations / raw METAR: `istno=17128` (Ankara Esenboğa Airport, LTAC)
+- Center observations: `istno=17130` (`?il=Ankara` and `?merkezid=90601` resolve here)
+- 3-hourly forecast: `istno=17130` or `merkezid=90601` (`istno=17128` returns `[]`)
+- 5-day daily forecast: `merkezid=90601`, `istno=90601`, or `il=Ankara`
 - Province bulk queries: `ilPlaka=6`
 
 ## Endpoints
@@ -53,7 +64,8 @@ or `/web/merkezler/ililcesi?il=Ankara` (districts within a province).
 GET /web/sondurumlar?istno=17128
 ```
 
-Returns the latest observation for a station. Airport stations include the raw METAR.
+Returns the latest observation for a station. Airport stations can include the
+raw METAR; center-station queries often return `rasatMetar: "-9999"`.
 
 Response (single-element array):
 ```json
@@ -89,7 +101,7 @@ Key fields:
 - `sicaklik` — temperature in °C (0.1° precision from AWS, not METAR integer)
 - `hissedilenSicaklik` — feels-like temperature °C
 - `nem` — relative humidity %
-- `ruzgarHiz` — wind speed in m/s
+- `ruzgarHiz` — wind speed; live values align with km/h, not m/s
 - `ruzgarYon` — wind direction in degrees
 - `gorus` — visibility in meters
 - `denizeIndirgenmisBasinc` — sea-level pressure in hPa
@@ -97,12 +109,12 @@ Key fields:
 - `kapalilik` — cloud cover (oktas, 0–8)
 - `hadiseKodu` — weather code (see weather codes below)
 - `rasatMetar` — raw METAR string (airport stations only)
-- `veriZamani` — observation timestamp (UTC)
+- `veriZamani` — observation timestamp (current live responses use UTC ISO strings with `Z`)
 - `-9999` means "not available"
 
 Other query forms:
-- `?il=Ankara` — returns current conditions for the province capital
-- `?merkezid=90601` — by center ID
+- `?il=Ankara` — returns the Ankara center station (`istNo: 17130`), not the airport
+- `?merkezid=90601` — same center-station response as `?il=Ankara`
 
 ### All Current Conditions for a Province
 
@@ -118,8 +130,10 @@ Returns current observations for every station in the province.
 GET /web/tahminler/saatlik?istno=17130
 ```
 
-Returns 8 forecast time steps at 3-hour intervals (~24 hours ahead).
-Only works for city center stations, not airport stations.
+Returns the currently available future steps at 3-hour intervals. The live
+Ankara response on March 23, 2026 returned 7 steps (~21 hours ahead), so do
+not assume a fixed count. It works for center forecast stations, not airport
+observation stations.
 
 Response:
 ```json
@@ -148,8 +162,8 @@ Forecast fields:
 - `hissedilenSicaklik` — feels-like °C
 - `nem` — humidity %
 - `ruzgarYonu` — wind direction degrees
-- `ruzgarHizi` — wind speed (units unclear, likely m/s or km/h)
-- `maksimumRuzgarHizi` — max gust speed
+- `ruzgarHizi` — average wind speed in km/h
+- `maksimumRuzgarHizi` — max wind speed / gust in km/h
 - `hadise` — weather code
 
 Other query forms:
@@ -162,15 +176,19 @@ Other query forms:
 GET /web/tahminler/gunluk?merkezid=90601
 ```
 
-Returns min/max temperatures and weather for 5 days.
+Returns min/max temperatures and weather for 5 forecast days.
 
 Response fields per day (numbered 1–5):
 - `enDusukGun1` through `enDusukGun5` — daily minimum °C
 - `enYuksekGun1` through `enYuksekGun5` — daily maximum °C
 - `hadiseGun1` through `hadiseGun5` — weather code
-- `ruzgarHizGun1` through `ruzgarHizGun5` — wind speed
+- `ruzgarHizGun1` through `ruzgarHizGun5` — wind speed in km/h
 - `ruzgarYonGun1` through `ruzgarYonGun5` — wind direction
-- `nemGun1` through `nemGun5` — humidity ranges
+- `enDusukNemGun1` / `enYuksekNemGun1` through `...Gun5` — humidity ranges
+
+Current live responses also include a duplicate `*Gun0` block for the current
+day (`tarihGun0`, `hadiseGun0`, etc.). The Ankara code ignores `Gun0` and
+stores only `Gun1` through `Gun5`.
 
 Other query forms:
 - `?istno=90601`
@@ -229,9 +247,9 @@ weather descriptions. Updated once or twice daily.
 
 ## Rate Limits
 
-No documented rate limits. The API is used by the official website and mobile
-app which make frequent requests. Polling every 10 minutes for observations
-should be safe. Avoid excessive burst requests to prevent IP-based blocking.
+No documented rate limits. We have only used light polling against these
+endpoints and there is no published quota. Keep requests modest and avoid
+bursts.
 
 ## Publish Race Results (March 23, 2026)
 
@@ -248,23 +266,25 @@ AviationWeather.gov is a downstream of NOAA, about 1 minute slower.
 
 ## `sondurumlar` Update Frequency
 
-The `veriZamani` field updates roughly every **10 minutes** with AWS data
-at 0.1°C precision. This is a live AWS feed, not just METAR repackaging:
+`sondurumlar` is clearly more than a pure METAR mirror: `sicaklik` carries
+0.1°C precision and `veriZamani` can move independently of `rasatMetar`.
+Treat it as a near-live AWS/current-conditions feed, not just METAR
+repackaging.
+
+Also, do not assume `sicaklik` belongs to the same observation minute as the
+raw `rasatMetar`. In live LTAC responses, we observed a newer `rasatMetar`
+(`230220Z`) while `veriZamani` and `sicaklik` were still at `02:06Z`.
+
+The exact cadence is not fixed in the API. On March 23, 2026 we observed:
 
 ```
-00:00Z  veriZamani=00:00  temp=3.9°C  (METAR still shows 23:50Z / 05°C)
-00:06Z  veriZamani=00:06  temp=3.8°C  (temp changed 0.1°C between METARs)
-00:20Z  veriZamani=00:20  temp=3.6°C  (synced with new METAR)
-00:30Z  veriZamani=00:30  temp=3.6°C  (next 10-min AWS update)
+LTAC airport query (`istno=17128`): veriZamani=2026-03-23T01:50:00.000Z
+Ankara center query (`il=Ankara`): veriZamani=2026-03-23T02:06:00.000Z
 ```
 
-The METAR in `rasatMetar` updates on the METAR cycle (:20/:50), but
-`veriZamani` and `sicaklik` update every ~10 minutes independently.
-Temperature values between METARs have sub-degree changes (3.9 → 3.8 → 3.6)
-that the METAR's integer rounding (05°C) doesn't capture.
-
-MGM also includes the **full METAR with RMK runway winds** — NOAA strips
-those remarks.
+That supports sub-hourly updates, but not a guaranteed exact `:00/:10/:20/...`
+schedule. LTAC `rasatMetar` currently includes the full runway-wind `RMK`
+text.
 
 ## Known Limitations
 
@@ -275,13 +295,13 @@ those remarks.
 - `-9999` is the sentinel value for unavailable/missing data.
 - `denizSicaklik` (sea temperature) and `karYukseklik` (snow depth) are
   typically `-9999` for inland stations.
-- The `sondurumlar` update frequency needs verification — it may update
-  every 10–30 minutes with AWS data, or only with each METAR cycle.
+- `sondurumlar` looks sub-hourly, but the exact publish cadence is still not
+  documented and should not be treated as a fixed clock schedule.
 
 ## Convex Environment Variables
 
-No environment variables needed — the API is open. The required Origin/Referer
-headers are set in the fetch function.
+No environment variables needed. `convex/ankara.js` sets the official `Origin`
+header and also sends `Referer` and `Accept`.
 
 ## Useful Links
 

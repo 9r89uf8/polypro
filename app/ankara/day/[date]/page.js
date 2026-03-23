@@ -345,6 +345,7 @@ export default function AnkaraDayPage() {
   const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
   const pollLatest = useAction("ankara:pollLatestMgmMetar");
+  const pollMgmAws = useAction("ankara:pollMgmCurrentConditions");
 
   const dayData = useQuery(
     "ankara:getDayStationRows",
@@ -442,8 +443,16 @@ export default function AnkaraDayPage() {
     setIsRefreshing(true);
     inFlightRef.current = true;
     try {
-      const result = await pollLatest({ stationIcao: STATION_ICAO });
-      setLiveMessage(formatLivePollMessage(result));
+      const [result] = await Promise.allSettled([
+        pollLatest({ stationIcao: STATION_ICAO }),
+        pollMgmAws({ stationIcao: STATION_ICAO }),
+      ]);
+      if (result.status === "fulfilled") {
+        setLiveMessage(formatLivePollMessage(result.value));
+      } else {
+        const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        setLiveMessage(`Manual refresh failed: ${message}`);
+      }
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);
@@ -565,7 +574,7 @@ export default function AnkaraDayPage() {
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
             Official LTAC METAR and SPECI from MGM, stored live and compared
-            against NOAA `tgftp` in a publish-race table. MGM AWS 10-minute
+            against NOAA `tgftp` in a publish-race table. MGM AWS
             observations and 3-hourly forecasts are overlaid on the chart.
           </p>
 
@@ -662,20 +671,20 @@ export default function AnkaraDayPage() {
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              MGM Current Temp
+              Latest Official Temp
             </p>
             <p className="mt-2 text-3xl font-semibold text-foreground">
-              {latestMgmObs
+              {latestRow
                 ? formatTemp(
-                    displayUnit === "C" ? latestMgmObs.tempC : latestMgmObs.tempF,
+                    displayUnit === "C" ? latestRow.tempC : latestRow.tempF,
                     displayUnit,
                   )
                 : "\u2014"}
             </p>
             <p className="mt-2 text-sm text-black/65">
-              {latestMgmObs?.obsTimeLocal
-                ? `AWS at ${formatStoredLocalDateTime(latestMgmObs.obsTimeLocal)}`
-                : "No MGM AWS observation yet"}
+              {latestRow?.obsTimeLocal
+                ? `${latestRow.reportType} at ${formatStoredLocalDateTime(latestRow.obsTimeLocal)}`
+                : "No official LTAC observation yet"}
             </p>
           </div>
 
@@ -707,10 +716,13 @@ export default function AnkaraDayPage() {
 
           <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Current Details
+              Latest MGM AWS Details
             </p>
             {latestMgmObs ? (
               <div className="mt-2 space-y-1 text-sm text-foreground">
+                <p className="text-black/65">
+                  AWS at {formatStoredLocalDateTime(latestMgmObs.obsTimeLocal)}
+                </p>
                 <p>
                   Humidity:{" "}
                   <span className="font-semibold">
@@ -720,10 +732,12 @@ export default function AnkaraDayPage() {
                 <p>
                   Wind:{" "}
                   <span className="font-semibold">
-                    {latestMgmObs.windSpeed != null
-                      ? `${latestMgmObs.windSpeed} kt`
+                    {latestMgmObs.windSpeedMps != null
+                      ? `${latestMgmObs.windSpeedMps.toFixed(1)} km/h`
                       : "\u2014"}
-                    {latestMgmObs.windDir != null ? ` @ ${latestMgmObs.windDir}\u00b0` : ""}
+                    {latestMgmObs.windDirection != null
+                      ? ` @ ${latestMgmObs.windDirection}\u00b0`
+                      : ""}
                   </span>
                 </p>
                 <p>
@@ -735,7 +749,9 @@ export default function AnkaraDayPage() {
                 <p>
                   Pressure:{" "}
                   <span className="font-semibold">
-                    {latestMgmObs.pressure != null ? `${latestMgmObs.pressure} hPa` : "\u2014"}
+                    {latestMgmObs.pressureHpa != null
+                      ? `${latestMgmObs.pressureHpa} hPa`
+                      : "\u2014"}
                   </span>
                 </p>
               </div>
@@ -752,7 +768,7 @@ export default function AnkaraDayPage() {
                 Temperature Line
               </h2>
               <p className="mt-1 text-sm text-black/60">
-                Official LTAC METAR (blue), MGM AWS 10-min observations (green),
+                Official LTAC METAR (blue), MGM AWS observations (green),
                 and MGM 3-hourly forecast (orange dashed).
               </p>
             </div>
