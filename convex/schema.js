@@ -672,6 +672,47 @@ export default defineSchema({
     capturedAt: v.number(),
   }).index("by_station_date_ts", ["stationIcao", "date", "forecastTimeUtc"]),
 
+  nzwnForecastPredictions: defineTable({
+    stationIcao: v.string(),
+    provider: v.literal("metservice"),
+    targetDate: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    captureDate: v.string(),
+    leadDays: v.number(),
+    minTempC: v.optional(v.number()),
+    minTempF: v.optional(v.number()),
+    maxTempC: v.optional(v.number()),
+    maxTempF: v.optional(v.number()),
+    dayPhrase: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_station_provider_target_capturedAt", [
+      "stationIcao",
+      "provider",
+      "targetDate",
+      "capturedAt",
+    ])
+    .index("by_station_captureDate", ["stationIcao", "captureDate"]),
+
+  nzwnDailySummaries: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    obsCount: v.number(),
+    maxTempC: v.optional(v.number()),
+    maxTempF: v.optional(v.number()),
+    maxTempAtUtc: v.optional(v.number()),
+    maxTempAtLocal: v.optional(v.string()),
+    minTempC: v.optional(v.number()),
+    minTempF: v.optional(v.number()),
+    minTempAtUtc: v.optional(v.number()),
+    minTempAtLocal: v.optional(v.string()),
+    latestObsTimeUtc: v.optional(v.number()),
+    latestObsTimeLocal: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_station_date", ["stationIcao", "date"]),
+
   ankaraMetarObservations: defineTable({
     stationIcao: v.string(),
     date: v.string(),

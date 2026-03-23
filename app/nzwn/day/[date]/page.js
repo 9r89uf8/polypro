@@ -551,6 +551,15 @@ export default function NzwnDayPage() {
     stationIcao: STATION_ICAO,
     limit: 12,
   });
+  const forecastTrendData = useQuery(
+    "nzwnWeather:getForecastTrend",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          targetDate: date,
+        }
+      : "skip",
+  );
   const stationNotes = useQuery(
     "notes:listNotes",
     isNotesOpen
@@ -560,6 +569,7 @@ export default function NzwnDayPage() {
       : "skip",
   );
 
+  const forecastTrendRows = forecastTrendData?.rows ?? [];
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
   const metServiceRows = metServiceData?.rows ?? [];
@@ -1528,6 +1538,93 @@ export default function NzwnDayPage() {
             </table>
           </div>
         </section>
+
+        {forecastTrendRows.length > 0 && (
+          <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-foreground">Forecast History</h2>
+              <Link
+                href="/nzwn/forecast-accuracy"
+                className="text-sm text-blue-700 underline decoration-blue-300 underline-offset-2 hover:decoration-blue-600"
+              >
+                Full accuracy report
+              </Link>
+            </div>
+            <p className="mt-1 text-sm text-black/55">
+              What MetService predicted for this date at various lead times
+            </p>
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-black/10 text-black/55">
+                    <th className="px-3 py-2 font-semibold">Captured</th>
+                    <th className="px-3 py-2 font-semibold">Lead</th>
+                    <th className="px-3 py-2 font-semibold">Max</th>
+                    <th className="px-3 py-2 font-semibold">Min</th>
+                    <th className="px-3 py-2 font-semibold">Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forecastTrendRows.map((r, i) => {
+                    const absError = r.errorC !== null ? Math.abs(r.errorC) : null;
+                    const errorClass =
+                      absError === null
+                        ? ""
+                        : absError <= 1
+                          ? "text-green-700 bg-green-50"
+                          : absError <= 2
+                            ? "text-yellow-700 bg-yellow-50"
+                            : "text-red-700 bg-red-50";
+                    return (
+                      <tr
+                        key={i}
+                        className="border-b border-black/5 last:border-b-0"
+                      >
+                        <td className="px-3 py-2 whitespace-nowrap text-black/80">
+                          {formatStoredLocalDateTime(r.capturedAtLocal)}
+                        </td>
+                        <td className="px-3 py-2">{r.leadDays}d</td>
+                        <td className="px-3 py-2 font-medium">
+                          {displayUnit === "C"
+                            ? r.maxTempC !== null ? `${r.maxTempC.toFixed(1)}°C` : "—"
+                            : r.maxTempC !== null ? `${((r.maxTempC * 9) / 5 + 32).toFixed(1)}°F` : "—"}
+                        </td>
+                        <td className="px-3 py-2">
+                          {displayUnit === "C"
+                            ? r.minTempC !== null ? `${r.minTempC.toFixed(1)}°C` : "—"
+                            : r.minTempC !== null ? `${((r.minTempC * 9) / 5 + 32).toFixed(1)}°F` : "—"}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.errorC !== null ? (
+                            <span
+                              className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${errorClass}`}
+                            >
+                              {r.errorC > 0 ? "+" : ""}
+                              {r.errorC}°C
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {forecastTrendData?.actualMaxC !== null && (
+              <p className="mt-3 text-sm text-black/55">
+                Actual observed max:{" "}
+                <span className="font-semibold text-foreground">
+                  {displayUnit === "C"
+                    ? `${forecastTrendData.actualMaxC.toFixed(1)}°C`
+                    : `${((forecastTrendData.actualMaxC * 9) / 5 + 32).toFixed(1)}°F`}
+                </span>
+                {" "}({forecastTrendData.obsCount} obs)
+              </p>
+            )}
+          </section>
+        )}
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
           <h2 className="text-xl font-semibold text-foreground">Raw Observations</h2>

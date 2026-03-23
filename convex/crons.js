@@ -83,6 +83,15 @@ crons.cron(
     { stationIcao: "NZWN" },
 );
 
+// Captures the MetService 10-day daily forecast every 6 hours so we can
+// track how predictions change with lead time and measure accuracy.
+crons.cron(
+    "nzwn_metservice_forecast_snapshot_6h",
+    "0 0,6,12,18 * * *",
+    api.nzwnWeather.collectForecastSnapshot,
+    { stationIcao: "NZWN" },
+);
+
 // Polls Météo-France DPObs observations for CDG (station 95527001).
 // DPObs updates every 6 minutes but has ~10 min publication delay,
 // so polling every 10 minutes captures all readings.

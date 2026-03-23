@@ -711,6 +711,13 @@ export const pollMetServiceCurrentConditions = actionGeneric({
       });
     }
 
+    // Recompute daily summary for the current observation date.
+    const obsDate = formatDateInTimezone(reading.observedAtUtc, timeZone);
+    await ctx.runMutation("nzwnWeather:recomputeDailySummary", {
+      stationIcao,
+      date: obsDate,
+    });
+
     return {
       status: "ok",
       observedAtUtc: reading.observedAtUtc,
@@ -760,5 +767,413 @@ export const getMetServiceObservations = queryGeneric({
       .collect();
     rows.sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
     return { rows };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Forecast prediction snapshot storage
+// ---------------------------------------------------------------------------
+
+const storeForecastPredictionBatch = internalMutationGeneric({
+  args: {
+    rows: v.array(
+      v.object({
+        stationIcao: v.string(),
+        provider: v.literal("metservice"),
+        targetDate: v.string(),
+        capturedAt: v.number(),
+        capturedAtLocal: v.string(),
+        captureDate: v.string(),
+        leadDays: v.number(),
+        minTempC: v.optional(v.number()),
+        minTempF: v.optional(v.number()),
+        maxTempC: v.optional(v.number()),
+        maxTempF: v.optional(v.number()),
+        dayPhrase: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    let inserted = 0;
+    let skipped = 0;
+    const now = Date.now();
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("nzwnForecastPredictions")
+        .withIndex("by_station_provider_target_capturedAt", (query) =>
+          query
+            .eq("stationIcao", row.stationIcao)
+            .eq("provider", row.provider)
+            .eq("targetDate", row.targetDate)
+            .eq("capturedAt", row.capturedAt),
+        )
+        .first();
+      if (existing) {
+        skipped += 1;
+        continue;
+      }
+      await ctx.db.insert("nzwnForecastPredictions", {
+        ...row,
+        createdAt: now,
+        updatedAt: now,
+      });
+      inserted += 1;
+    }
+    return { inserted, skipped };
+  },
+});
+
+export { storeForecastPredictionBatch };
+
+export const collectForecastSnapshot = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
+    const timeZone = AUCKLAND_TIMEZONE;
+    const now = Date.now();
+    const capturedAtLocal = formatDateTimeInTimezone(now, timeZone);
+    const captureDate = formatDateInTimezone(now, timeZone);
+
+    const forecastDays = await fetchMetServiceDailyForecast();
+
+    const rows = [];
+    for (const day of forecastDays) {
+      const targetDate = day.date;
+      if (!targetDate) continue;
+      // Compute leadDays as difference between targetDate and captureDate
+      const targetEpoch = Date.parse(targetDate + "T00:00:00Z");
+      const captureEpoch = Date.parse(captureDate + "T00:00:00Z");
+      const leadDays = Math.round((targetEpoch - captureEpoch) / (24 * 60 * 60 * 1000));
+
+      rows.push({
+        stationIcao,
+        provider: "metservice",
+        targetDate,
+        capturedAt: now,
+        capturedAtLocal,
+        captureDate,
+        leadDays,
+        ...(day.minTempC !== undefined ? { minTempC: day.minTempC } : {}),
+        ...(day.minTempF !== undefined ? { minTempF: day.minTempF } : {}),
+        ...(day.maxTempC !== undefined ? { maxTempC: day.maxTempC } : {}),
+        ...(day.maxTempF !== undefined ? { maxTempF: day.maxTempF } : {}),
+        ...(day.dayPhrase ? { dayPhrase: day.dayPhrase } : {}),
+      });
+    }
+
+    if (rows.length === 0) {
+      return { status: "error", error: "No forecast days to store." };
+    }
+
+    const result = await ctx.runMutation(
+      "nzwnWeather:storeForecastPredictionBatch",
+      { rows },
+    );
+
+    return {
+      status: "ok",
+      capturedAt: now,
+      capturedAtLocal,
+      captureDate,
+      forecastDayCount: forecastDays.length,
+      ...result,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Daily summary recomputation
+// ---------------------------------------------------------------------------
+
+const recomputeDailySummary = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const observations = await ctx.db
+      .query("nzwnMetServiceObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+
+    if (observations.length === 0) {
+      return { updated: false, obsCount: 0 };
+    }
+
+    let maxRow = null;
+    let minRow = null;
+    let latestRow = null;
+
+    for (const obs of observations) {
+      if (obs.tempC === undefined || obs.tempC === null) continue;
+      if (!maxRow || obs.tempC > maxRow.tempC) maxRow = obs;
+      if (!minRow || obs.tempC < minRow.tempC) minRow = obs;
+      if (!latestRow || obs.obsTimeUtc > latestRow.obsTimeUtc) latestRow = obs;
+    }
+
+    const summaryFields = {
+      stationIcao: args.stationIcao,
+      date: args.date,
+      obsCount: observations.length,
+      ...(maxRow
+        ? {
+            maxTempC: maxRow.tempC,
+            maxTempF: maxRow.tempF,
+            maxTempAtUtc: maxRow.obsTimeUtc,
+            maxTempAtLocal: maxRow.obsTimeLocal,
+          }
+        : {}),
+      ...(minRow
+        ? {
+            minTempC: minRow.tempC,
+            minTempF: minRow.tempF,
+            minTempAtUtc: minRow.obsTimeUtc,
+            minTempAtLocal: minRow.obsTimeLocal,
+          }
+        : {}),
+      ...(latestRow
+        ? {
+            latestObsTimeUtc: latestRow.obsTimeUtc,
+            latestObsTimeLocal: latestRow.obsTimeLocal,
+          }
+        : {}),
+      updatedAt: Date.now(),
+    };
+
+    const existing = await ctx.db
+      .query("nzwnDailySummaries")
+      .withIndex("by_station_date", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, summaryFields);
+    } else {
+      await ctx.db.insert("nzwnDailySummaries", summaryFields);
+    }
+
+    return { updated: true, obsCount: observations.length };
+  },
+});
+
+export { recomputeDailySummary };
+
+// ---------------------------------------------------------------------------
+// Forecast accuracy analysis
+// ---------------------------------------------------------------------------
+
+export const getForecastAccuracy = queryGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    trailingDays: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
+    const trailingDays = Math.max(1, Math.min(90, args.trailingDays ?? 30));
+    const todayDate = formatDateInTimezone(Date.now(), AUCKLAND_TIMEZONE);
+
+    // Build date range: from (today - trailingDays) to yesterday
+    const dates = [];
+    for (let i = 1; i <= trailingDays; i++) {
+      const epoch = Date.parse(todayDate + "T00:00:00Z") - i * 24 * 60 * 60 * 1000;
+      const d = new Date(epoch);
+      const year = d.getUTCFullYear();
+      const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      dates.push(`${year}-${month}-${day}`);
+    }
+
+    // Fetch summaries and predictions for all dates
+    const dateDetails = [];
+    const buckets = {};
+    for (let ld = 0; ld <= 9; ld++) {
+      buckets[ld] = { errors: [], biases: [], within1: 0, within2: 0, count: 0 };
+    }
+
+    for (const date of dates) {
+      const [summary, predictions] = await Promise.all([
+        ctx.db
+          .query("nzwnDailySummaries")
+          .withIndex("by_station_date", (q) =>
+            q.eq("stationIcao", stationIcao).eq("date", date),
+          )
+          .first(),
+        ctx.db
+          .query("nzwnForecastPredictions")
+          .withIndex("by_station_provider_target_capturedAt", (q) =>
+            q
+              .eq("stationIcao", stationIcao)
+              .eq("provider", "metservice")
+              .eq("targetDate", date),
+          )
+          .collect(),
+      ]);
+
+      const actualMaxC = summary?.maxTempC ?? null;
+      const dateRow = {
+        date,
+        actualMaxC,
+        actualMinC: summary?.minTempC ?? null,
+        obsCount: summary?.obsCount ?? 0,
+        predictions: [],
+      };
+
+      // Deduplicate predictions: keep the latest capturedAt per leadDays
+      const byLead = new Map();
+      for (const pred of predictions) {
+        const existing = byLead.get(pred.leadDays);
+        if (!existing || pred.capturedAt > existing.capturedAt) {
+          byLead.set(pred.leadDays, pred);
+        }
+      }
+
+      for (const [leadDays, pred] of byLead) {
+        const predMaxC = pred.maxTempC ?? null;
+        let errorC = null;
+        if (actualMaxC !== null && predMaxC !== null) {
+          errorC = roundToTenth(predMaxC - actualMaxC);
+          const absError = Math.abs(errorC);
+          if (leadDays >= 0 && leadDays <= 9) {
+            buckets[leadDays].errors.push(absError);
+            buckets[leadDays].biases.push(errorC);
+            buckets[leadDays].count += 1;
+            if (absError <= 1) buckets[leadDays].within1 += 1;
+            if (absError <= 2) buckets[leadDays].within2 += 1;
+          }
+        }
+        dateRow.predictions.push({
+          leadDays,
+          capturedAt: pred.capturedAt,
+          capturedAtLocal: pred.capturedAtLocal,
+          maxTempC: predMaxC,
+          minTempC: pred.minTempC ?? null,
+          errorC,
+          dayPhrase: pred.dayPhrase ?? null,
+        });
+      }
+      dateRow.predictions.sort((a, b) => a.leadDays - b.leadDays);
+      dateDetails.push(dateRow);
+    }
+
+    // Compute per-lead-day metrics
+    const leadDayMetrics = [];
+    for (let ld = 0; ld <= 9; ld++) {
+      const b = buckets[ld];
+      if (b.count === 0) {
+        leadDayMetrics.push({
+          leadDays: ld,
+          sampleSize: 0,
+          mae: null,
+          meanBias: null,
+          within1Pct: null,
+          within2Pct: null,
+        });
+        continue;
+      }
+      const mae = roundToTenth(
+        b.errors.reduce((s, e) => s + e, 0) / b.count,
+      );
+      const meanBias = roundToTenth(
+        b.biases.reduce((s, e) => s + e, 0) / b.count,
+      );
+      const within1Pct = roundToTenth((b.within1 / b.count) * 100);
+      const within2Pct = roundToTenth((b.within2 / b.count) * 100);
+      leadDayMetrics.push({
+        leadDays: ld,
+        sampleSize: b.count,
+        mae,
+        meanBias,
+        within1Pct,
+        within2Pct,
+      });
+    }
+
+    dateDetails.sort((a, b) => b.date.localeCompare(a.date));
+
+    return {
+      stationIcao,
+      trailingDays,
+      todayDate,
+      leadDayMetrics,
+      dateDetails,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Forecast trend for a single target date
+// ---------------------------------------------------------------------------
+
+export const getForecastTrend = queryGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    targetDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
+
+    const [predictions, summary] = await Promise.all([
+      ctx.db
+        .query("nzwnForecastPredictions")
+        .withIndex("by_station_provider_target_capturedAt", (q) =>
+          q
+            .eq("stationIcao", stationIcao)
+            .eq("provider", "metservice")
+            .eq("targetDate", args.targetDate),
+        )
+        .collect(),
+      ctx.db
+        .query("nzwnDailySummaries")
+        .withIndex("by_station_date", (q) =>
+          q.eq("stationIcao", stationIcao).eq("date", args.targetDate),
+        )
+        .first(),
+    ]);
+
+    predictions.sort((a, b) => a.capturedAt - b.capturedAt);
+
+    const actualMaxC = summary?.maxTempC ?? null;
+    const actualMinC = summary?.minTempC ?? null;
+
+    let previousMaxC = null;
+    const trendRows = predictions.map((pred) => {
+      const maxC = pred.maxTempC ?? null;
+      const deltaC =
+        maxC !== null && previousMaxC !== null
+          ? roundToTenth(maxC - previousMaxC)
+          : null;
+      if (maxC !== null) previousMaxC = maxC;
+      const errorC =
+        maxC !== null && actualMaxC !== null
+          ? roundToTenth(maxC - actualMaxC)
+          : null;
+
+      return {
+        capturedAt: pred.capturedAt,
+        capturedAtLocal: pred.capturedAtLocal,
+        captureDate: pred.captureDate,
+        leadDays: pred.leadDays,
+        maxTempC: maxC,
+        minTempC: pred.minTempC ?? null,
+        dayPhrase: pred.dayPhrase ?? null,
+        deltaC,
+        errorC,
+      };
+    });
+
+    return {
+      stationIcao,
+      targetDate: args.targetDate,
+      actualMaxC,
+      actualMinC,
+      obsCount: summary?.obsCount ?? 0,
+      count: trendRows.length,
+      rows: trendRows,
+    };
   },
 });
