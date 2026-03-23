@@ -123,6 +123,14 @@ function formatTemp(value, unit) {
   return `${value.toFixed(1)}°${unit}`;
 }
 
+function formatDelta(value, unit) {
+  if (value === undefined || value === null) {
+    return "—";
+  }
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(1)}°${unit}`;
+}
+
 function formatStoredLocalDateTime(tsLocal) {
   const match =
     /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(tsLocal || "");
@@ -171,6 +179,21 @@ function formatAucklandDateTimeSeconds(epochMs) {
   });
   const parts = getDateParts(formatter, new Date(epochMs));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
+}
+
+function formatAucklandAxisDateTime(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return "";
+  }
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: AUCKLAND_TIMEZONE,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    hour12: true,
+  });
+  const parts = getDateParts(formatter, new Date(epochMs));
+  return `${parts.month}/${parts.day} ${parts.hour} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
 }
 
 function formatChicagoDateTimeSeconds(epochMs) {
@@ -229,6 +252,19 @@ function formatRaceWinner(winner) {
     return "Tie";
   }
   return "Pending";
+}
+
+function getTrendPointColor(changeDirection) {
+  if (changeDirection === "up") {
+    return "#15803d";
+  }
+  if (changeDirection === "down") {
+    return "#dc2626";
+  }
+  if (changeDirection === "same") {
+    return "#6b7280";
+  }
+  return "#0f4c81";
 }
 
 function formatLeadMs(leadMs) {
@@ -893,6 +929,154 @@ export default function NzwnDayPage() {
   const todayForecastPeak =
     forecastPeakByDate.get(weatherPanel?.todayDate ?? aucklandTodayDate) ?? null;
   const forecastPeak = selectedForecastPeak ?? todayForecastPeak;
+  const forecastTrendChartPoints = useMemo(
+    () =>
+      forecastTrendRows
+        .filter((row) => Number.isFinite(row.maxTempC) && Number.isFinite(row.capturedAt))
+        .map((row) => {
+          const deltaC = row.deltaC ?? null;
+          let changeDirection = null;
+          if (deltaC !== null) {
+            if (deltaC > 0) {
+              changeDirection = "up";
+            } else if (deltaC < 0) {
+              changeDirection = "down";
+            } else {
+              changeDirection = "same";
+            }
+          }
+
+          return {
+            x: row.capturedAt,
+            y: displayUnit === "C" ? row.maxTempC : (row.maxTempC * 9) / 5 + 32,
+            capturedAtLocal: row.capturedAtLocal,
+            delta:
+              deltaC === null
+                ? null
+                : displayUnit === "C"
+                  ? deltaC
+                  : (deltaC * 9) / 5,
+            changeDirection,
+          };
+        })
+        .filter((row) => Number.isFinite(row.y)),
+    [displayUnit, forecastTrendRows],
+  );
+  const forecastTrendSummary = useMemo(() => {
+    if (!forecastTrendChartPoints.length) {
+      return null;
+    }
+
+    let minPoint = forecastTrendChartPoints[0];
+    let maxPoint = forecastTrendChartPoints[0];
+    let changeCount = 0;
+    for (const point of forecastTrendChartPoints) {
+      if (point.y < minPoint.y) {
+        minPoint = point;
+      }
+      if (point.y > maxPoint.y) {
+        maxPoint = point;
+      }
+      if (point.delta !== null && Math.abs(point.delta) > 0.0001) {
+        changeCount += 1;
+      }
+    }
+
+    const firstPoint = forecastTrendChartPoints[0];
+    const latestPoint = forecastTrendChartPoints[forecastTrendChartPoints.length - 1];
+    return {
+      firstPoint,
+      latestPoint,
+      minPoint,
+      maxPoint,
+      pointCount: forecastTrendChartPoints.length,
+      changeCount,
+      netDelta: latestPoint.y - firstPoint.y,
+    };
+  }, [forecastTrendChartPoints]);
+  const officialTrendMaxC = forecastTrendData?.actualMaxC ?? summary?.maxTempC ?? null;
+  const officialTrendMax =
+    officialTrendMaxC === null
+      ? null
+      : displayUnit === "C"
+        ? officialTrendMaxC
+        : (officialTrendMaxC * 9) / 5 + 32;
+  const officialTrendMaxAtLocal = summary?.maxTempAtLocal ?? null;
+  const forecastTrendChartData = useMemo(
+    () => ({
+      datasets: [
+        {
+          label: "Predicted High",
+          data: forecastTrendChartPoints,
+          borderColor: "#0f4c81",
+          backgroundColor: "#0f4c81",
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointHitRadius: 18,
+          pointBackgroundColor: forecastTrendChartPoints.map((point) =>
+            getTrendPointColor(point.changeDirection),
+          ),
+          pointBorderColor: forecastTrendChartPoints.map((point) =>
+            getTrendPointColor(point.changeDirection),
+          ),
+          pointBorderWidth: 1.5,
+          borderWidth: 2,
+          stepped: true,
+          tension: 0,
+          showLine: true,
+        },
+      ],
+    }),
+    [forecastTrendChartPoints],
+  );
+  const forecastTrendChartOptions = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      interaction: {
+        mode: "nearest",
+        axis: "x",
+        intersect: false,
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title(items) {
+              if (!items.length) {
+                return "";
+              }
+              return formatStoredLocalDateTime(items[0].raw?.capturedAtLocal);
+            },
+            label(item) {
+              return `Predicted high ${item.parsed.y.toFixed(1)}°${displayUnit}`;
+            },
+            afterLabel(item) {
+              const delta = item.raw?.delta;
+              return delta === null || delta === undefined
+                ? ""
+                : `Change ${formatDelta(delta, displayUnit)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: "linear",
+          ticks: {
+            callback(value) {
+              return formatAucklandAxisDateTime(Number(value));
+            },
+          },
+        },
+        y: {
+          title: { display: true, text: `Predicted High (°${displayUnit})` },
+        },
+      },
+    }),
+    [displayUnit],
+  );
 
   if (!isDateValid) {
     return (
@@ -1545,10 +1729,20 @@ export default function NzwnDayPage() {
           </div>
         </section>
 
-        {forecastTrendRows.length > 0 && (
-          <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-            <div className="flex items-center justify-between">
+        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
               <h2 className="text-xl font-semibold text-foreground">Forecast History</h2>
+              <p className="mt-1 text-sm text-black/60">
+                Track how MetService changed its predicted high for {date} over
+                successive stored forecast captures, scored against the official
+                NZWN max.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-black/45">
+                Stored every 6 hours
+              </p>
               <Link
                 href="/nzwn/forecast-accuracy"
                 className="text-sm text-blue-700 underline decoration-blue-300 underline-offset-2 hover:decoration-blue-600"
@@ -1556,82 +1750,190 @@ export default function NzwnDayPage() {
                 Full accuracy report
               </Link>
             </div>
-            <p className="mt-1 text-sm text-black/55">
-              What MetService predicted for this date at various lead times,
-              scored against the official NZWN max
+          </div>
+
+          {forecastTrendData === undefined ? (
+            <p className="mt-4 text-sm text-black/60">
+              Loading MetService forecast history for {date}...
             </p>
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-full border-collapse text-left text-sm">
-                <thead>
-                  <tr className="border-b border-black/10 text-black/55">
-                    <th className="px-3 py-2 font-semibold">Captured</th>
-                    <th className="px-3 py-2 font-semibold">Lead</th>
-                    <th className="px-3 py-2 font-semibold">Max</th>
-                    <th className="px-3 py-2 font-semibold">Min</th>
-                    <th className="px-3 py-2 font-semibold">Err vs official</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {forecastTrendRows.map((r, i) => {
-                    const absError = r.errorC !== null ? Math.abs(r.errorC) : null;
-                    const errorClass =
-                      absError === null
-                        ? ""
-                        : absError <= 1
-                          ? "text-green-700 bg-green-50"
-                          : absError <= 2
-                            ? "text-yellow-700 bg-yellow-50"
-                            : "text-red-700 bg-red-50";
-                    return (
+          ) : !forecastTrendRows.length ? (
+            <div className="mt-4 rounded-2xl border border-dashed border-black/15 bg-white/70 p-4 text-sm text-black/65">
+              No stored MetService forecast history for {date} yet. This history
+              only starts from saved 6-hour forecast snapshots, so older dates may
+              be empty until new polls accumulate.
+            </div>
+          ) : (
+            <>
+              <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                    First Prediction
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold text-black">
+                    {formatTemp(forecastTrendSummary?.firstPoint?.y, displayUnit)}
+                  </p>
+                  <p className="mt-2 text-xs text-black/55">
+                    {formatStoredLocalDateTime(
+                      forecastTrendSummary?.firstPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                    Latest Prediction
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold text-black">
+                    {formatTemp(forecastTrendSummary?.latestPoint?.y, displayUnit)}
+                  </p>
+                  <p className="mt-2 text-xs text-black/55">
+                    {formatStoredLocalDateTime(
+                      forecastTrendSummary?.latestPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                    Net Change
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold text-black">
+                    {formatDelta(forecastTrendSummary?.netDelta, displayUnit)}
+                  </p>
+                  <p className="mt-2 text-xs text-black/55">
+                    {forecastTrendSummary?.changeCount ?? 0} changes
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                    Lowest Seen
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold text-black">
+                    {formatTemp(forecastTrendSummary?.minPoint?.y, displayUnit)}
+                  </p>
+                  <p className="mt-2 text-xs text-black/55">
+                    {formatStoredLocalDateTime(
+                      forecastTrendSummary?.minPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                    Highest Seen
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold text-black">
+                    {formatTemp(forecastTrendSummary?.maxPoint?.y, displayUnit)}
+                  </p>
+                  <p className="mt-2 text-xs text-black/55">
+                    {formatStoredLocalDateTime(
+                      forecastTrendSummary?.maxPoint?.capturedAtLocal,
+                    )}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
+                    Official Max
+                  </p>
+                  <p className="mt-2 text-2xl font-semibold text-black">
+                    {formatTemp(officialTrendMax, displayUnit)}
+                  </p>
+                  <p className="mt-2 text-xs text-black/55">
+                    {officialTrendMaxAtLocal
+                      ? formatStoredLocalDateTime(officialTrendMaxAtLocal)
+                      : "Available after METAR ingest"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-black/10 bg-white/75">
+                <div className="min-w-[760px] p-4">
+                  <div className="h-[320px]">
+                    <Line
+                      data={forecastTrendChartData}
+                      options={forecastTrendChartOptions}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-black/10 text-black/55">
+                      <th className="px-3 py-2 font-semibold">Captured</th>
+                      <th className="px-3 py-2 font-semibold">Lead</th>
+                      <th className="px-3 py-2 font-semibold">Predicted High</th>
+                      <th className="px-3 py-2 font-semibold">Delta</th>
+                      <th className="px-3 py-2 font-semibold">Err vs official</th>
+                      <th className="px-3 py-2 font-semibold">Day</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {forecastTrendRows.map((row, index) => (
                       <tr
-                        key={i}
-                        className="border-b border-black/5 last:border-b-0"
+                        key={`${row.capturedAt}-${index}`}
+                        className="border-b border-black/5 align-top last:border-b-0"
                       >
-                        <td className="px-3 py-2 whitespace-nowrap text-black/80">
-                          {formatStoredLocalDateTime(r.capturedAtLocal)}
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {formatStoredLocalDateTime(row.capturedAtLocal)}
                         </td>
-                        <td className="px-3 py-2">{r.leadDays}d</td>
-                        <td className="px-3 py-2 font-medium">
-                          {displayUnit === "C"
-                            ? r.maxTempC !== null ? `${r.maxTempC.toFixed(1)}°C` : "—"
-                            : r.maxTempC !== null ? `${((r.maxTempC * 9) / 5 + 32).toFixed(1)}°F` : "—"}
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {Number.isFinite(row.leadDays) ? `${row.leadDays}d` : "—"}
                         </td>
-                        <td className="px-3 py-2">
-                          {displayUnit === "C"
-                            ? r.minTempC !== null ? `${r.minTempC.toFixed(1)}°C` : "—"
-                            : r.minTempC !== null ? `${((r.minTempC * 9) / 5 + 32).toFixed(1)}°F` : "—"}
-                        </td>
-                        <td className="px-3 py-2">
-                          {r.errorC !== null ? (
-                            <span
-                              className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${errorClass}`}
-                            >
-                              {r.errorC > 0 ? "+" : ""}
-                              {r.errorC}°C
-                            </span>
-                          ) : (
-                            "—"
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {formatTemp(
+                            row.maxTempC === null
+                              ? null
+                              : displayUnit === "C"
+                                ? row.maxTempC
+                                : (row.maxTempC * 9) / 5 + 32,
+                            displayUnit,
                           )}
                         </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {formatDelta(
+                            row.deltaC === null
+                              ? null
+                              : displayUnit === "C"
+                                ? row.deltaC
+                                : (row.deltaC * 9) / 5,
+                            displayUnit,
+                          )}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
+                          {formatDelta(
+                            row.errorC === null
+                              ? null
+                              : displayUnit === "C"
+                                ? row.errorC
+                                : (row.errorC * 9) / 5,
+                            displayUnit,
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-black/70">
+                          {row.dayPhrase || "—"}
+                        </td>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {forecastTrendData?.actualMaxC !== null && (
-              <p className="mt-3 text-sm text-black/55">
-                {forecastTrendData.actualLabel ?? "Official NZWN max"}:{" "}
-                <span className="font-semibold text-foreground">
-                  {displayUnit === "C"
-                    ? `${forecastTrendData.actualMaxC.toFixed(1)}°C`
-                    : `${((forecastTrendData.actualMaxC * 9) / 5 + 32).toFixed(1)}°F`}
-                </span>
-                {" "}({forecastTrendData.obsCount} official reports)
-              </p>
-            )}
-          </section>
-        )}
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {officialTrendMaxC !== null && (
+                <p className="mt-3 text-sm text-black/55">
+                  {forecastTrendData?.actualLabel ?? "Official NZWN max"}:{" "}
+                  <span className="font-semibold text-foreground">
+                    {formatTemp(officialTrendMax, displayUnit)}
+                  </span>{" "}
+                  ({forecastTrendData?.obsCount ?? summary?.obsCount ?? 0} official reports)
+                </p>
+              )}
+            </>
+          )}
+        </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
           <h2 className="text-xl font-semibold text-foreground">Raw Observations</h2>

@@ -67,9 +67,13 @@ What this page displays:
   PreFlight and NOAA `tgftp`
   - publish-race timestamps are displayed in `America/Chicago`
   - the UI shows PreFlight, `tgftp`, and `tgftp` `Last-Modified`
-- `Forecast History` table:
-  - shows what MetService forecast snapshots predicted for the selected date at
-    each stored lead time
+- `Forecast History` section:
+  - summary cards for first prediction, latest prediction, net change, lowest
+    seen, highest seen, and official NZWN max
+  - stepped progression chart showing how the predicted high moved across stored
+    forecast captures
+  - capture table with lead day, predicted high, delta vs previous capture, and
+    error vs the official NZWN max
   - errors are scored against the official NZWN day max from
     `preflightDailySummaries`, not against the unofficial MetService AWS max
   - links to the full `/nzwn/forecast-accuracy` page
