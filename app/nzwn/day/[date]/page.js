@@ -322,6 +322,13 @@ function formatLivePollMessage(result) {
   return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
 }
 
+function formatForecastSnapshotMessage(result) {
+  if (result?.status !== "ok") {
+    return "MetService forecast snapshot failed.";
+  }
+  return `Forecast snapshot: stored ${result.inserted} new rows for ${result.forecastDayCount} days at ${formatStoredLocalDateTime(result.capturedAtLocal)}.`;
+}
+
 function buildLineDataset(rows, unit) {
   const points = rows
     .map((row) => {
@@ -554,6 +561,7 @@ export default function NzwnDayPage() {
   const backfillDay = useAction("preflight:backfillDayStationMessages");
   const pollLatest = useAction("preflight:pollLatestStationMetar");
   const loadNzwnWeather = useAction("nzwnWeather:getDayPageWeather");
+  const collectForecastSnapshot = useAction("nzwnWeather:collectForecastSnapshot");
   const deleteNote = useMutation("notes:deleteNote");
 
   const dayData = useQuery(
@@ -745,7 +753,7 @@ export default function NzwnDayPage() {
     weatherRequestRef.current = weatherRequestId;
     setIsWeatherLoading(true);
     try {
-      const [officialResult, weatherResult] = await Promise.allSettled([
+      const [officialResult, weatherResult, forecastSnapshotResult] = await Promise.allSettled([
         (async () => {
           const messages = [];
           const backfillResult = await backfillDay({
@@ -763,17 +771,19 @@ export default function NzwnDayPage() {
           return messages.join(" ");
         })(),
         loadNzwnWeather({ date }),
+        collectForecastSnapshot({ stationIcao: STATION_ICAO }),
       ]);
 
+      const refreshMessages = [];
       if (officialResult.status === "fulfilled") {
-        setLiveMessage(officialResult.value);
+        refreshMessages.push(officialResult.value);
       } else {
         console.error(officialResult.reason);
         const message =
           officialResult.reason instanceof Error
             ? officialResult.reason.message
             : String(officialResult.reason);
-        setLiveMessage(`Manual refresh failed: ${message}`);
+        refreshMessages.push(`Manual refresh failed: ${message}`);
       }
 
       if (weatherResult.status === "fulfilled") {
@@ -791,6 +801,19 @@ export default function NzwnDayPage() {
           setWeatherPanelError(message);
         }
       }
+
+      if (forecastSnapshotResult.status === "fulfilled") {
+        refreshMessages.push(formatForecastSnapshotMessage(forecastSnapshotResult.value));
+      } else {
+        console.error(forecastSnapshotResult.reason);
+        const message =
+          forecastSnapshotResult.reason instanceof Error
+            ? forecastSnapshotResult.reason.message
+            : String(forecastSnapshotResult.reason);
+        refreshMessages.push(`Forecast snapshot failed: ${message}`);
+      }
+
+      setLiveMessage(refreshMessages.filter(Boolean).join(" "));
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : String(error);

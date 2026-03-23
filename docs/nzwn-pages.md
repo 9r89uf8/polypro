@@ -101,7 +101,9 @@ Behavior details:
   - MetService daily forecast for Lyall Bay / Wellington
   - Google hourly forecast used to derive peak-time windows
 - Manual refresh reruns the same rolling sync, reruns the latest poll when the
-  route date is today, and reloads that weather sidecar.
+  route date is today, reloads that weather sidecar, and stores a fresh
+  MetService daily-forecast snapshot so `Forecast History` can update without
+  waiting for the 6-hour cron.
 - The NZWN notes panel is lazy-loaded:
   - it only queries station-tagged notes after `Show NZWN Notes` is clicked
   - notes come from the shared `notes` table and must be saved with
