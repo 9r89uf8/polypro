@@ -992,6 +992,12 @@ export default function NzwnDayPage() {
                 </button>
               ))}
             </div>
+            <Link
+              href="/nzwn/forecast-accuracy"
+              className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 transition hover:border-sky-400"
+            >
+              Forecast Accuracy
+            </Link>
             <button
               type="button"
               onClick={handleRefreshNow}

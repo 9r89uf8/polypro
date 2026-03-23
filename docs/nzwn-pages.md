@@ -27,6 +27,7 @@ What this page displays:
   - two quick previous-day links
   - date picker + `Go`
 - Unit toggle (`C` / `F`)
+- `Forecast Accuracy` button linking to `/nzwn/forecast-accuracy`
 - `Refresh Current Data` button
 - Live badge when viewing the current Wellington local date
 - live `Wellington Time` clock in the header so Chicago-side viewing does not
