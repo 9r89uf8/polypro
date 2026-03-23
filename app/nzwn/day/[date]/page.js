@@ -1551,7 +1551,8 @@ export default function NzwnDayPage() {
               </Link>
             </div>
             <p className="mt-1 text-sm text-black/55">
-              What MetService predicted for this date at various lead times
+              What MetService predicted for this date at various lead times,
+              scored against the official NZWN max
             </p>
             <div className="mt-4 overflow-x-auto">
               <table className="min-w-full border-collapse text-left text-sm">
@@ -1561,7 +1562,7 @@ export default function NzwnDayPage() {
                     <th className="px-3 py-2 font-semibold">Lead</th>
                     <th className="px-3 py-2 font-semibold">Max</th>
                     <th className="px-3 py-2 font-semibold">Min</th>
-                    <th className="px-3 py-2 font-semibold">Error</th>
+                    <th className="px-3 py-2 font-semibold">Err vs official</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1614,13 +1615,13 @@ export default function NzwnDayPage() {
             </div>
             {forecastTrendData?.actualMaxC !== null && (
               <p className="mt-3 text-sm text-black/55">
-                Actual observed max:{" "}
+                {forecastTrendData.actualLabel ?? "Official NZWN max"}:{" "}
                 <span className="font-semibold text-foreground">
                   {displayUnit === "C"
                     ? `${forecastTrendData.actualMaxC.toFixed(1)}°C`
                     : `${((forecastTrendData.actualMaxC * 9) / 5 + 32).toFixed(1)}°F`}
                 </span>
-                {" "}({forecastTrendData.obsCount} obs)
+                {" "}({forecastTrendData.obsCount} official reports)
               </p>
             )}
           </section>

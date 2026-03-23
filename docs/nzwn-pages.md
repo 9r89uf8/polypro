@@ -66,6 +66,12 @@ What this page displays:
   PreFlight and NOAA `tgftp`
   - publish-race timestamps are displayed in `America/Chicago`
   - the UI shows PreFlight, `tgftp`, and `tgftp` `Last-Modified`
+- `Forecast History` table:
+  - shows what MetService forecast snapshots predicted for the selected date at
+    each stored lead time
+  - errors are scored against the official NZWN day max from
+    `preflightDailySummaries`, not against the unofficial MetService AWS max
+  - links to the full `/nzwn/forecast-accuracy` page
 - Raw observations table:
   - `Local Time`
   - `Type`
@@ -100,6 +106,11 @@ Behavior details:
 - The unofficial current card is independent of the selected historical date.
 - The 5-day forecast and hourly peak windows are limited to the current live
   provider window, so older selected dates usually show no forecast row.
+- Forecast accuracy on the day page uses official NZWN daily summaries from
+  `preflightDailySummaries`.
+- The unofficial MetService AWS observations and `nzwnDailySummaries` remain a
+  sidecar data source for the near-live current panel and internal diagnostics;
+  they are not the benchmark for forecast accuracy.
 - Observations are deduped by `(stationIcao, date, obsTimeUtc)` in
   `preflightMetarObservations`.
 - Recent publish-race rows are loaded from `preflightPublishRaceReports`.
@@ -158,6 +169,37 @@ Known limitation:
 - Older dates are accurate only if those rows were already captured live by the
   cron or by an earlier page visit.
 
+## `/nzwn/forecast-accuracy`
+
+Purpose: analyze how well stored MetService daily forecasts predicted the
+official NZWN day high.
+
+What this page displays:
+
+- `Accuracy by Lead Time`
+  - MAE, mean bias, `≤1°C`, `≤2°C`, and sample count by lead day
+  - benchmark is the official NZWN daily max from `preflightDailySummaries`
+  - each lead-day bucket keeps the earliest stored forecast capture for that
+    date, so same-day late updates do not dominate the score
+- `Forecast Progression`
+  - all stored MetService captures for one selected date
+  - shows how the predicted max changed across successive captures
+  - overlays the official NZWN max for that day
+  - defaults to the latest completed/scored NZWN date with stored forecast
+    history, rather than the current in-progress Auckland date
+- `Recent Predictions`
+  - compact grid of recent dates showing the official max and representative
+    lead-day predictions
+
+Behavior details:
+
+- Forecast snapshots are stored immutably in `nzwnForecastPredictions`; old
+  forecast values are not overwritten.
+- Accuracy scoring uses official PreFlight day summaries as truth, not
+  `nzwnDailySummaries`.
+- The representative lead-day metric uses the earliest stored capture in each
+  lead-day bucket.
+
 ## Data Model
 
 - `preflightMetarObservations`
@@ -167,6 +209,17 @@ Known limitation:
 - `preflightDailySummaries`
   - one row per station/date
   - stores obs count, latest row fields, min/max temps, and min/max times
+- `nzwnForecastPredictions`
+  - one row per MetService forecast day per captured snapshot
+  - stores captured time, target date, lead days, min/max forecast temps, and
+    forecast phrase
+- `nzwnMetServiceObservations`
+  - one row per unofficial MetService airport-current or 48h-graph observed
+    reading
+- `nzwnDailySummaries`
+  - one row per station/date derived from `nzwnMetServiceObservations`
+  - used for unofficial sidecar diagnostics, not as the forecast-accuracy
+    benchmark
 - `preflightPublishRaceReports`
   - one row per station/report timestamp
   - stores PreFlight first-seen time, NOAA `tgftp` first-seen time, optional
@@ -189,6 +242,13 @@ Convex cron:
   - passes `durationMs=900000`, so each watch runs for 15 minutes
   - polls PreFlight and NOAA `tgftp` every `1s` through the usual late
     post-`:00` / post-`:30` release window
+- `nzwn_metservice_aws_every_10_min`
+  - calls `nzwnWeather:pollMetServiceCurrentConditions`
+  - stores the near-live airport-current reading plus 48h observed backfill
+  - recomputes `nzwnDailySummaries` for every touched local date
+- `nzwn_metservice_forecast_snapshot_6h`
+  - calls `nzwnWeather:collectForecastSnapshot`
+  - stores one immutable MetService daily-forecast snapshot every 6 hours
 
 NZWN uses both:
 

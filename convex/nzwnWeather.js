@@ -662,10 +662,14 @@ export const pollMetServiceCurrentConditions = actionGeneric({
       })),
     ]);
 
+    const touchedDates = new Set();
+    const obsDate = formatDateInTimezone(reading.observedAtUtc, timeZone);
+    touchedDates.add(obsDate);
+
     // Store the live 10-minute current reading.
     await ctx.runMutation("nzwnWeather:storeMetServiceObservation", {
       stationIcao,
-      date: formatDateInTimezone(reading.observedAtUtc, timeZone),
+      date: obsDate,
       obsTimeUtc: reading.observedAtUtc,
       obsTimeLocal: reading.observedAtLocal,
       tempC: reading.tempC,
@@ -680,6 +684,7 @@ export const pollMetServiceCurrentConditions = actionGeneric({
 
     // Store hourly observed points from the 48h graph (backfills gaps).
     for (const obs of graph48h.observed) {
+      touchedDates.add(obs.date);
       await ctx.runMutation("nzwnWeather:storeMetServiceObservation", {
         stationIcao,
         date: obs.date,
@@ -711,12 +716,13 @@ export const pollMetServiceCurrentConditions = actionGeneric({
       });
     }
 
-    // Recompute daily summary for the current observation date.
-    const obsDate = formatDateInTimezone(reading.observedAtUtc, timeZone);
-    await ctx.runMutation("nzwnWeather:recomputeDailySummary", {
-      stationIcao,
-      date: obsDate,
-    });
+    // Recompute every local date touched by the live reading or 48h backfill.
+    for (const date of Array.from(touchedDates).sort()) {
+      await ctx.runMutation("nzwnWeather:recomputeDailySummary", {
+        stationIcao,
+        date,
+      });
+    }
 
     return {
       status: "ok",
@@ -900,7 +906,17 @@ const recomputeDailySummary = internalMutationGeneric({
       )
       .collect();
 
+    const existing = await ctx.db
+      .query("nzwnDailySummaries")
+      .withIndex("by_station_date", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .first();
+
     if (observations.length === 0) {
+      if (existing) {
+        await ctx.db.delete(existing._id);
+      }
       return { updated: false, obsCount: 0 };
     }
 
@@ -944,13 +960,6 @@ const recomputeDailySummary = internalMutationGeneric({
       updatedAt: Date.now(),
     };
 
-    const existing = await ctx.db
-      .query("nzwnDailySummaries")
-      .withIndex("by_station_date", (query) =>
-        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
-      )
-      .first();
-
     if (existing) {
       await ctx.db.patch(existing._id, summaryFields);
     } else {
@@ -976,6 +985,9 @@ export const getForecastAccuracy = queryGeneric({
     const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
     const trailingDays = Math.max(1, Math.min(90, args.trailingDays ?? 30));
     const todayDate = formatDateInTimezone(Date.now(), AUCKLAND_TIMEZONE);
+    const actualSource = "official_preflight";
+    const actualSourceLabel = "Official NZWN max (PreFlight METAR/SPECI)";
+    const selectionPolicy = "earliest_capture_per_lead_day";
 
     // Build date range: from (today - trailingDays) to yesterday
     const dates = [];
@@ -998,7 +1010,7 @@ export const getForecastAccuracy = queryGeneric({
     for (const date of dates) {
       const [summary, predictions] = await Promise.all([
         ctx.db
-          .query("nzwnDailySummaries")
+          .query("preflightDailySummaries")
           .withIndex("by_station_date", (q) =>
             q.eq("stationIcao", stationIcao).eq("date", date),
           )
@@ -1023,11 +1035,11 @@ export const getForecastAccuracy = queryGeneric({
         predictions: [],
       };
 
-      // Deduplicate predictions: keep the latest capturedAt per leadDays
+      // Deduplicate predictions: keep the earliest stored capture per leadDays.
       const byLead = new Map();
       for (const pred of predictions) {
         const existing = byLead.get(pred.leadDays);
-        if (!existing || pred.capturedAt > existing.capturedAt) {
+        if (!existing || pred.capturedAt < existing.capturedAt) {
           byLead.set(pred.leadDays, pred);
         }
       }
@@ -1099,6 +1111,9 @@ export const getForecastAccuracy = queryGeneric({
       stationIcao,
       trailingDays,
       todayDate,
+      actualSource,
+      actualSourceLabel,
+      selectionPolicy,
       leadDayMetrics,
       dateDetails,
     };
@@ -1116,6 +1131,8 @@ export const getForecastTrend = queryGeneric({
   },
   handler: async (ctx, args) => {
     const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
+    const actualSource = "official_preflight";
+    const actualLabel = "Official NZWN max (PreFlight METAR/SPECI)";
 
     const [predictions, summary] = await Promise.all([
       ctx.db
@@ -1128,7 +1145,7 @@ export const getForecastTrend = queryGeneric({
         )
         .collect(),
       ctx.db
-        .query("nzwnDailySummaries")
+        .query("preflightDailySummaries")
         .withIndex("by_station_date", (q) =>
           q.eq("stationIcao", stationIcao).eq("date", args.targetDate),
         )
@@ -1169,6 +1186,8 @@ export const getForecastTrend = queryGeneric({
     return {
       stationIcao,
       targetDate: args.targetDate,
+      actualSource,
+      actualLabel,
       actualMaxC,
       actualMinC,
       obsCount: summary?.obsCount ?? 0,

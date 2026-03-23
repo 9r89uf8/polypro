@@ -15,7 +15,7 @@ import annotationPlugin from "chartjs-plugin-annotation";
 import Link from "next/link";
 import { Bar, Line } from "react-chartjs-2";
 import { useQuery } from "convex/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 ChartJS.register(
   CategoryScale,
@@ -82,6 +82,8 @@ function formatStoredLocalDateTime(localStr) {
 function AccuracyByLeadTime({ data, trailingDays }) {
   const metrics = data?.leadDayMetrics ?? [];
   const hasData = metrics.some((m) => m.sampleSize > 0);
+  const actualSourceLabel =
+    data?.actualSourceLabel ?? "Official NZWN max (PreFlight METAR/SPECI)";
 
   const bestLead = useMemo(() => {
     let best = null;
@@ -170,11 +172,15 @@ function AccuracyByLeadTime({ data, trailingDays }) {
       <p className="mt-1 text-sm text-black/55">
         MetService max temperature forecast accuracy over the last {trailingDays} days
       </p>
+      <p className="mt-1 text-sm text-black/55">
+        Benchmark: {actualSourceLabel}. Each lead-day bucket keeps the earliest
+        stored capture.
+      </p>
 
       {!hasData ? (
         <p className="mt-6 text-center text-black/55">
           No forecast accuracy data available yet. Data will appear after forecast
-          snapshots and observations accumulate.
+          snapshots and official NZWN summaries accumulate.
         </p>
       ) : (
         <>
@@ -216,8 +222,8 @@ function AccuracyByLeadTime({ data, trailingDays }) {
                   <th className="px-3 py-2 font-semibold">Lead</th>
                   <th className="px-3 py-2 font-semibold">MAE</th>
                   <th className="px-3 py-2 font-semibold">Bias</th>
-                  <th className="px-3 py-2 font-semibold">{"<"}1°C</th>
-                  <th className="px-3 py-2 font-semibold">{"<"}2°C</th>
+                  <th className="px-3 py-2 font-semibold">≤1°C</th>
+                  <th className="px-3 py-2 font-semibold">≤2°C</th>
                   <th className="px-3 py-2 font-semibold">n</th>
                 </tr>
               </thead>
@@ -256,10 +262,16 @@ function AccuracyByLeadTime({ data, trailingDays }) {
 
 // ── Section 2: Forecast Progression for a Date ──────────────────────────────
 
-function ForecastProgression({ stationIcao }) {
-  const today = aucklandTodayKey();
-  const yesterday = addDays(today, -1);
-  const [selectedDate, setSelectedDate] = useState(yesterday);
+function ForecastProgression({ stationIcao, defaultDate }) {
+  const fallbackDate = addDays(aucklandTodayKey(), -1);
+  const [selectedDate, setSelectedDate] = useState(defaultDate ?? fallbackDate);
+  const [isDateDirty, setIsDateDirty] = useState(false);
+
+  useEffect(() => {
+    if (!isDateDirty && defaultDate && defaultDate !== selectedDate) {
+      setSelectedDate(defaultDate);
+    }
+  }, [defaultDate, isDateDirty, selectedDate]);
 
   const trendData = useQuery(
     "nzwnWeather:getForecastTrend",
@@ -270,6 +282,8 @@ function ForecastProgression({ stationIcao }) {
 
   const rows = trendData?.rows ?? [];
   const actualMaxC = trendData?.actualMaxC ?? null;
+  const actualLabel =
+    trendData?.actualLabel ?? "Official NZWN max (PreFlight METAR/SPECI)";
 
   const chartData = useMemo(() => {
     if (rows.length === 0) return null;
@@ -305,7 +319,7 @@ function ForecastProgression({ stationIcao }) {
                 borderDash: [6, 4],
                 label: {
                   display: true,
-                  content: `Actual: ${actualMaxC}°C`,
+                  content: `Official: ${actualMaxC}°C`,
                   position: "start",
                   backgroundColor: "rgba(239,68,68,0.8)",
                   color: "white",
@@ -333,7 +347,10 @@ function ForecastProgression({ stationIcao }) {
       </h2>
       <p className="mt-1 text-sm text-black/55">
         How MetService&apos;s predicted max changed over successive captures for a
-        single date
+        single date. Errors are scored against the official NZWN max.
+      </p>
+      <p className="mt-1 text-sm text-black/55">
+        Defaults to the latest completed NZWN date with stored forecast history.
       </p>
 
       <div className="mt-4 flex items-center gap-3">
@@ -341,7 +358,10 @@ function ForecastProgression({ stationIcao }) {
         <input
           type="date"
           value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
+          onChange={(e) => {
+            setSelectedDate(e.target.value);
+            setIsDateDirty(true);
+          }}
           className="rounded-lg border border-black/15 bg-white px-3 py-1.5 text-sm"
         />
       </div>
@@ -366,7 +386,7 @@ function ForecastProgression({ stationIcao }) {
                   <th className="px-3 py-2 font-semibold">Lead</th>
                   <th className="px-3 py-2 font-semibold">Max °C</th>
                   <th className="px-3 py-2 font-semibold">Change</th>
-                  <th className="px-3 py-2 font-semibold">Error</th>
+                  <th className="px-3 py-2 font-semibold">Err vs official</th>
                 </tr>
               </thead>
               <tbody>
@@ -407,8 +427,8 @@ function ForecastProgression({ stationIcao }) {
 
           {actualMaxC !== null && (
             <p className="mt-3 text-sm text-black/55">
-              Actual observed max: <span className="font-semibold text-red-700">{actualMaxC}°C</span>
-              {" "}({trendData?.obsCount ?? 0} observations)
+              {actualLabel}: <span className="font-semibold text-red-700">{actualMaxC}°C</span>
+              {" "}({trendData?.obsCount ?? 0} official reports)
             </p>
           )}
         </>
@@ -429,7 +449,8 @@ function RecentPredictionsTable({ data }) {
         Recent Predictions
       </h2>
       <p className="mt-1 text-sm text-black/55">
-        Predicted vs actual max temperature by date and lead time
+        Earliest stored capture in each lead-day bucket, scored against the
+        official NZWN max
       </p>
 
       {details.length === 0 ? (
@@ -440,7 +461,7 @@ function RecentPredictionsTable({ data }) {
             <thead>
               <tr className="border-b border-black/10 text-black/55">
                 <th className="px-2 py-2 font-semibold">Date</th>
-                <th className="px-2 py-2 font-semibold">Actual</th>
+                <th className="px-2 py-2 font-semibold">Official Max</th>
                 {LEAD_DAYS_COLS.map((ld) => (
                   <th key={ld} className="px-2 py-2 font-semibold text-center">
                     {ld}d
@@ -515,6 +536,19 @@ export default function NzwnForecastAccuracyPage() {
     stationIcao: STATION_ICAO,
     trailingDays,
   });
+  const fallbackTrendDate = addDays(
+    accuracyData?.todayDate ?? aucklandTodayKey(),
+    -1,
+  );
+  const defaultTrendDate = useMemo(() => {
+    const details = accuracyData?.dateDetails ?? [];
+    return (
+      details.find((row) => row.actualMaxC !== null && row.predictions.length > 0)
+        ?.date ??
+      details.find((row) => row.predictions.length > 0)?.date ??
+      fallbackTrendDate
+    );
+  }, [accuracyData?.dateDetails, fallbackTrendDate]);
 
   const isLoading = accuracyData === undefined;
 
@@ -526,7 +560,8 @@ export default function NzwnForecastAccuracyPage() {
             NZWN Forecast Accuracy
           </h1>
           <p className="mt-1 text-sm text-black/55">
-            MetService Wellington max temperature forecast accuracy
+            MetService Wellington max temperature forecast accuracy against the
+            official NZWN day max
           </p>
         </div>
 
@@ -564,7 +599,10 @@ export default function NzwnForecastAccuracyPage() {
       ) : (
         <div className="flex flex-col gap-6">
           <AccuracyByLeadTime data={accuracyData} trailingDays={trailingDays} />
-          <ForecastProgression stationIcao={STATION_ICAO} />
+          <ForecastProgression
+            stationIcao={STATION_ICAO}
+            defaultDate={defaultTrendDate}
+          />
           <RecentPredictionsTable data={accuracyData} />
         </div>
       )}
