@@ -191,6 +191,26 @@ function formatChicagoDateTimeSeconds(epochMs) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
 }
 
+function formatParisClock(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return "—";
+  }
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: PARIS_TIMEZONE,
+    weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  });
+  const parts = getDateParts(formatter, new Date(epochMs));
+  return `${parts.weekday} ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""} ${parts.timeZoneName ?? ""}`.trim();
+}
+
 function formatRaceWinner(winner) {
   if (winner === "aeroweb") {
     return "AEROWEB";
@@ -432,6 +452,7 @@ export default function ParisDayPage() {
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isOfficialRefreshing, setIsOfficialRefreshing] = useState(false);
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const [weatherPanel, setWeatherPanel] = useState(null);
   const [weatherPanelError, setWeatherPanelError] = useState("");
   const [isWeatherLoading, setIsWeatherLoading] = useState(false);
@@ -553,6 +574,15 @@ export default function ParisDayPage() {
   useEffect(() => {
     setInputDate(date);
   }, [date]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setClockNowMs(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isDateValid) {
@@ -935,6 +965,13 @@ export default function ParisDayPage() {
                 Historical capture only
               </span>
             )}
+          </div>
+
+          <div className="mt-4 inline-flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-sky-950">
+            <span className="font-semibold uppercase tracking-[0.16em] text-sky-800">
+              Paris Time
+            </span>
+            <span className="font-medium">{formatParisClock(clockNowMs)}</span>
           </div>
 
           <p className="mt-4 text-sm text-black/70">

@@ -15,7 +15,7 @@ export default function Home() {
         </h1>
         <p className="mt-4 max-w-2xl text-base leading-7 text-black/70">
           Compare KORD monthly manual vs METAR highs, open live airport day charts,
-          track forecast snapshots, review NZWN, Paris, Seoul, and Madrid METAR
+          track forecast snapshots, review NZWN, Paris, Seoul, Madrid, and Ankara METAR
           history, and keep notes in one place.
         </p>
         <div className="mt-8 flex flex-wrap gap-3">
@@ -66,6 +66,12 @@ export default function Home() {
             className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-5 py-2.5 text-sm font-semibold text-rose-900 transition hover:-translate-y-0.5 hover:border-rose-400"
           >
             Open Madrid Official Day Chart
+          </Link>
+          <Link
+            href="/ankara/today"
+            className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-semibold text-blue-900 transition hover:-translate-y-0.5 hover:border-blue-400"
+          >
+            Open Ankara Official Day Chart
           </Link>
           <Link
             href="/polymarket/chicago-weather"
