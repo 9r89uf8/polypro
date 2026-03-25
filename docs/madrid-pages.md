@@ -41,7 +41,7 @@ across:
 Official AEMET polling uses a short publish-race watch:
 
 - start at `:03` and `:33`
-- poll every `10s`
+- poll every `1s`
 - run for `6m`
 
 NOAA `tgftp` is sampled every minute so delayed mirrors are still recorded.

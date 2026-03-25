@@ -121,14 +121,14 @@ crons.cron(
 );
 
 // Starts one minute before the expected LEMD release and then polls both AEMET
-// AMA and NOAA every 10 seconds for six minutes. Madrid METAR usually shows up
+// AMA and NOAA every second for six minutes. Madrid METAR usually shows up
 // around :04 and :34, so this gives the publish-race table finer resolution
 // than the older 1-minute sampling.
 crons.cron(
     "madrid_publish_race_watch_minute_03_33",
     "3,33 * * * *",
     api.madrid.watchStationPublishRaceWindow,
-    { stationIcao: "LEMD", intervalMs: 10 * 1000, durationMs: 6 * 60 * 1000 },
+    { stationIcao: "LEMD", intervalMs: 1000, durationMs: 6 * 60 * 1000 },
 );
 
 // Runs every minute so the NOAA side of the Madrid publish-race experiment is

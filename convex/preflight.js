@@ -8,6 +8,7 @@ import { fetchLatestAerowebMessage } from "./aerowebShared.js";
 
 const AUCKLAND_TIMEZONE = "Pacific/Auckland";
 const PREFLIGHT_FETCH_TIMEOUT_MS = 25000;
+const PREFLIGHT_FETCH_RETRY_DELAYS_MS = [400, 1200, 2500];
 const PREFLIGHT_DEFAULT_BASE_URL = "https://gopreflight.co.nz";
 const NOAA_LATEST_METAR_BASE_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
@@ -500,41 +501,95 @@ async function fetchWithTimeout(url, init = {}) {
   }
 }
 
-async function fetchPreflightPayload(stationIcao) {
-  const response = await fetchWithTimeout(buildStationUrl(stationIcao), {
-    headers: {
-      Accept: "application/json",
-      Authorization: getPreflightAuthHeader(),
-      "Cache-Control": "no-cache",
-    },
-  });
-  if (!response.ok) {
+function isRetryablePreflightStatus(status) {
+  return [408, 425, 429, 500, 502, 503, 504].includes(status);
+}
+
+function formatPreflightFetchError(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function isRetryablePreflightError(error) {
+  if (error instanceof Error && error.name === "AbortError") {
+    return true;
+  }
+
+  const message = formatPreflightFetchError(error).toLowerCase();
+  return [
+    "http2",
+    "connection error",
+    "sendrequest",
+    "socket",
+    "timeout",
+    "timed out",
+    "econnreset",
+    "reset by peer",
+    "network error",
+  ].some((fragment) => message.includes(fragment));
+}
+
+async function fetchPreflightJson(url, label) {
+  for (let attempt = 0; attempt <= PREFLIGHT_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+    let response;
+    try {
+      response = await fetchWithTimeout(url, {
+        headers: {
+          Accept: "application/json",
+          Authorization: getPreflightAuthHeader(),
+          "Cache-Control": "no-cache",
+        },
+      });
+    } catch (error) {
+      const retryable =
+        attempt < PREFLIGHT_FETCH_RETRY_DELAYS_MS.length &&
+        isRetryablePreflightError(error);
+      if (retryable) {
+        await sleep(PREFLIGHT_FETCH_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      const attemptText = attempt > 0 ? ` after ${attempt + 1} attempts` : "";
+      throw new Error(
+        `${label} request error${attemptText}: ${formatPreflightFetchError(error).slice(0, 220)}`,
+      );
+    }
+
+    if (response.ok) {
+      return await response.json();
+    }
+
     const text = await response.text();
+    const retryable =
+      attempt < PREFLIGHT_FETCH_RETRY_DELAYS_MS.length &&
+      isRetryablePreflightStatus(response.status);
+    if (retryable) {
+      await sleep(PREFLIGHT_FETCH_RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+
+    const attemptText = attempt > 0 ? ` after ${attempt + 1} attempts` : "";
     throw new Error(
-      `PreFlight station fetch failed (${response.status}): ${text.slice(0, 200)}`,
+      `${label} failed (${response.status})${attemptText}: ${text.slice(0, 200)}`,
     );
   }
-  return await response.json();
+
+  throw new Error(`${label} failed: retry loop exited unexpectedly.`);
+}
+
+async function fetchPreflightPayload(stationIcao) {
+  return await fetchPreflightJson(
+    buildStationUrl(stationIcao),
+    "PreFlight station fetch",
+  );
 }
 
 async function fetchPreflightStatus() {
-  const response = await fetchWithTimeout(
+  return await fetchPreflightJson(
     `${getPreflightBaseUrl()}/source/status`,
-    {
-      headers: {
-        Accept: "application/json",
-        Authorization: getPreflightAuthHeader(),
-        "Cache-Control": "no-cache",
-      },
-    },
+    "PreFlight status fetch",
   );
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `PreFlight status fetch failed (${response.status}): ${text.slice(0, 200)}`,
-    );
-  }
-  return await response.json();
 }
 
 function findStatusRows(statusPayload) {

@@ -745,7 +745,7 @@ export default function MadridDayPage() {
               <p className="mt-1 text-sm text-black/60">
                 Recent routine half-hour LEMD METAR first-seen timing across the
                 official AEMET AMA portal and NOAA `tgftp`. Times in this table
-                are shown in America/Chicago. A 10-second watch starts at `:03`
+                are shown in America/Chicago. A 1-second watch starts at `:03`
                 and `:33` each hour and runs for six minutes, because the new
                 Madrid METAR typically appears around `:04` and `:34` rather
                 than exactly on the hour or half-hour boundary.

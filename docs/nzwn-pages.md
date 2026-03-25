@@ -104,6 +104,9 @@ Behavior details:
   route date is today, reloads that weather sidecar, and stores a fresh
   MetService daily-forecast snapshot so `Forecast History` can update without
   waiting for the 6-hour cron.
+- PreFlight station/status fetches retry transient transport failures and
+  `5xx` responses a few times before surfacing an error, which reduces noisy
+  NZWN refresh failures caused by short upstream hiccups.
 - The NZWN notes panel is lazy-loaded:
   - it only queries station-tagged notes after `Show NZWN Notes` is clicked
   - notes come from the shared `notes` table and must be saved with
