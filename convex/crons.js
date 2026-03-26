@@ -141,6 +141,25 @@ crons.cron(
     { stationIcao: "LEMD" },
 );
 
+// Runs every minute so the public MeteoAM Deda LIMC endpoint is sampled
+// continuously. The Italian public publication lag is wide enough that a
+// narrow half-hour watch window is less useful than steady minute polling.
+crons.cron(
+    "milan_meteoam_latest_every_minute",
+    "* * * * *",
+    api.milan.pollLatestStationMetar,
+    { stationIcao: "LIMC" },
+);
+
+// Runs every minute so the NOAA side of the LIMC publish-race logger stays in
+// sync with the MeteoAM minute samples.
+crons.cron(
+    "milan_tgftp_publish_race_every_minute",
+    "* * * * *",
+    api.milan.pollLatestNoaaPublishRace,
+    { stationIcao: "LIMC" },
+);
+
 // Polls AEMET OpenData hourly forecast for Madrid (municipio 28079) every hour.
 // The forecast covers ~48 hours and updates a few times per day.
 crons.cron(
