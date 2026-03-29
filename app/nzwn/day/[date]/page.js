@@ -22,6 +22,14 @@ const STATION_NAME = "Wellington International";
 const AUCKLAND_TIMEZONE = "Pacific/Auckland";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CLEAR_SKY_TOKENS = new Set(["SKC", "CLR", "NSC", "NCD", "CAVOK"]);
+const CLOUD_COVER_PRIORITY = {
+  FEW: 1,
+  SCT: 2,
+  BKN: 3,
+  OVC: 4,
+  VV: 5,
+};
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -278,6 +286,256 @@ function formatLeadMs(leadMs) {
     return `${(leadMs / 1000).toFixed(1)}s`;
   }
   return `${(leadMs / 60000).toFixed(1)} min`;
+}
+
+function compareCloudLayers(a, b) {
+  const priorityDelta =
+    (CLOUD_COVER_PRIORITY[b.coverage] ?? 0) - (CLOUD_COVER_PRIORITY[a.coverage] ?? 0);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const aBase = Number.isFinite(a.baseFt) ? a.baseFt : Number.POSITIVE_INFINITY;
+  const bBase = Number.isFinite(b.baseFt) ? b.baseFt : Number.POSITIVE_INFINITY;
+  return aBase - bBase;
+}
+
+function formatCloudBaseFeet(baseFt) {
+  if (!Number.isFinite(baseFt)) {
+    return null;
+  }
+  return `${baseFt.toLocaleString("en-US")} ft`;
+}
+
+function buildCloudVisualMeta({ fillClassName, coverLevel, coverLabel, baseFt }) {
+  let baseVisual = null;
+  if (Number.isFinite(baseFt)) {
+    if (baseFt <= 1000) {
+      baseVisual = {
+        tierIndex: 0,
+        label: "Low base",
+        className: "border-rose-200 bg-rose-50 text-rose-800",
+      };
+    } else if (baseFt <= 3000) {
+      baseVisual = {
+        tierIndex: 1,
+        label: "Mid base",
+        className: "border-amber-200 bg-amber-50 text-amber-900",
+      };
+    } else {
+      baseVisual = {
+        tierIndex: 2,
+        label: "Higher base",
+        className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+      };
+    }
+  }
+
+  return {
+    showVisuals: true,
+    fillClassName,
+    coverLevel,
+    coverLabel,
+    baseVisual,
+  };
+}
+
+function parseMetarCloudToken(token) {
+  const normalized = String(token ?? "").toUpperCase().replace(/=+$/, "");
+  if (!normalized) {
+    return null;
+  }
+  if (CLEAR_SKY_TOKENS.has(normalized)) {
+    return { kind: "clear" };
+  }
+
+  const match =
+    /^(FEW|SCT|BKN|OVC|VV)(\d{3}|\/\/\/)?(?:\/\/\/)?(?:[A-Z]{2,3})?$/.exec(
+      normalized,
+    );
+  if (!match) {
+    return null;
+  }
+
+  return {
+    kind: "layer",
+    coverage: match[1],
+    baseFt: match[2] && match[2] !== "///" ? Number(match[2]) * 100 : null,
+  };
+}
+
+function summarizeMetarClouds(rawMetar) {
+  if (typeof rawMetar !== "string" || !rawMetar.trim()) {
+    return null;
+  }
+
+  const tokens = rawMetar
+    .toUpperCase()
+    .replace(/=/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  const layers = [];
+  let sawClearToken = false;
+
+  for (const token of tokens) {
+    const parsed = parseMetarCloudToken(token);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.kind === "clear") {
+      sawClearToken = true;
+      continue;
+    }
+    layers.push(parsed);
+  }
+
+  if (!layers.length && sawClearToken) {
+    return {
+      badgeLabel: "Clear",
+      badgeClassName: "border-emerald-200 bg-emerald-50 text-emerald-800",
+      headline: "Open sky",
+      detail: "No significant cloud was reported in the latest official METAR.",
+      ...buildCloudVisualMeta({
+        fillClassName: "bg-emerald-400",
+        coverLevel: 0,
+        coverLabel: "Clear",
+        baseFt: null,
+      }),
+    };
+  }
+
+  if (!layers.length) {
+    return {
+      badgeLabel: "Unknown",
+      badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
+      headline: "Clouds not reported",
+      detail: "The latest official METAR did not include a cloud layer I can summarize.",
+      showVisuals: false,
+    };
+  }
+
+  const sortedLayers = [...layers].sort(compareCloudLayers);
+  const headlineLayer = sortedLayers[0];
+  const ceilingLayer =
+    sortedLayers.find((layer) => ["BKN", "OVC", "VV"].includes(layer.coverage)) ?? null;
+  const layerBaseLabel = formatCloudBaseFeet(headlineLayer.baseFt);
+  const ceilingBaseLabel = formatCloudBaseFeet(ceilingLayer?.baseFt);
+
+  switch (headlineLayer.coverage) {
+    case "FEW":
+      return {
+        badgeLabel: "Few Clouds",
+        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
+        headline: "Mostly open sky",
+        detail: layerBaseLabel
+          ? `Only a small amount of cloud was reported, based around ${layerBaseLabel} above the airport.`
+          : "Only a small amount of cloud was reported in the latest official METAR.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-sky-400",
+          coverLevel: 1,
+          coverLabel: "A little cloud",
+          baseFt: headlineLayer.baseFt,
+        }),
+      };
+    case "SCT":
+      return {
+        badgeLabel: "Partly Cloudy",
+        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
+        headline: "Patches of cloud around the airport",
+        detail: layerBaseLabel
+          ? `Part of the sky is covered by cloud, with bases around ${layerBaseLabel} above the airport.`
+          : "Part of the sky is covered by cloud in the latest official METAR.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-sky-500",
+          coverLevel: 2,
+          coverLabel: "Partial cover",
+          baseFt: headlineLayer.baseFt,
+        }),
+      };
+    case "BKN":
+      return {
+        badgeLabel: "Mostly Cloudy",
+        badgeClassName: "border-amber-200 bg-amber-50 text-amber-900",
+        headline: "Clouds covering most of the sky",
+        detail: ceilingBaseLabel
+          ? `Most of the sky is under cloud. The main cloud deck starts around ${ceilingBaseLabel} above the airport.`
+          : "Most of the sky is under cloud. The METAR did not include a usable cloud-base height.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-amber-400",
+          coverLevel: 4,
+          coverLabel: "Mostly covered",
+          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
+        }),
+      };
+    case "OVC":
+      return {
+        badgeLabel: "Overcast",
+        badgeClassName: "border-slate-200 bg-slate-100 text-slate-800",
+        headline: "Gray sky overhead",
+        detail: ceilingBaseLabel
+          ? `The sky is fully covered by cloud. The cloud deck starts around ${ceilingBaseLabel} above the airport.`
+          : "The sky is fully covered by cloud. The METAR did not include a usable cloud-base height.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-slate-500",
+          coverLevel: 5,
+          coverLabel: "Full cover",
+          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
+        }),
+      };
+    case "VV":
+      return {
+        badgeLabel: "Obscured",
+        badgeClassName: "border-rose-200 bg-rose-50 text-rose-800",
+        headline: "Sky hidden by low cloud or fog",
+        detail: ceilingBaseLabel
+          ? `The sky is obscured. Vertical visibility is around ${ceilingBaseLabel} above the airport.`
+          : "The sky is obscured in the latest official METAR.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-rose-400",
+          coverLevel: 5,
+          coverLabel: "Obscured",
+          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
+        }),
+      };
+    default:
+      return {
+        badgeLabel: "Unknown",
+        badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
+        headline: "Clouds not reported",
+        detail: "The latest official METAR did not include a cloud layer I can summarize.",
+        showVisuals: false,
+      };
+  }
+}
+
+function selectLatestLiveCloudMetar(raceRows, summary, isToday) {
+  for (const row of raceRows) {
+    const rawMetar =
+      row?.rawMetar ??
+      row?.preflightRawMetar ??
+      row?.aerowebRawMetar ??
+      row?.tgftpRawMetar ??
+      null;
+    if (typeof rawMetar === "string" && rawMetar.trim()) {
+      return {
+        rawMetar,
+        observedAtUtc: Number.isFinite(row?.reportTsUtc) ? row.reportTsUtc : null,
+        reportType: row?.reportType ?? null,
+      };
+    }
+  }
+
+  if (isToday && typeof summary?.latestRawMetar === "string" && summary.latestRawMetar.trim()) {
+    return {
+      rawMetar: summary.latestRawMetar,
+      observedAtUtc: Number.isFinite(summary?.latestObsTimeUtc)
+        ? summary.latestObsTimeUtc
+        : null,
+      reportType: summary?.latestReportType ?? null,
+    };
+  }
+
+  return null;
 }
 
 function computeDisplayedRaceState(row) {
@@ -636,6 +894,14 @@ export default function NzwnDayPage() {
   const weatherHourly = weatherPanel?.hourly ?? null;
   const weatherHourlyRows = weatherHourly?.rows ?? [];
   const selectedDateForecast = weatherPanel?.selectedDateForecast ?? null;
+  const latestLiveCloudMetar = useMemo(
+    () => selectLatestLiveCloudMetar(raceRows, summary, isToday),
+    [raceRows, summary, isToday],
+  );
+  const liveCloudSummary = useMemo(
+    () => summarizeMetarClouds(latestLiveCloudMetar?.rawMetar),
+    [latestLiveCloudMetar],
+  );
 
   useEffect(() => {
     setInputDate(date);
@@ -1303,8 +1569,78 @@ export default function NzwnDayPage() {
                   )}`
                 : "Unofficial airport-current feed not loaded yet."}
             </p>
+            {liveCloudSummary ? (
+              <>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${liveCloudSummary.badgeClassName}`}
+                  >
+                    {liveCloudSummary.badgeLabel}
+                  </span>
+                  <span className="text-sm font-semibold text-black/85">
+                    {liveCloudSummary.headline}
+                  </span>
+                </div>
+                {liveCloudSummary.showVisuals ? (
+                  <div className="mt-3 rounded-2xl border border-black/10 bg-[linear-gradient(180deg,rgba(224,242,254,0.8),rgba(255,255,255,0.95))] p-3">
+                    <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
+                      <span>Sky Cover</span>
+                      <span>{liveCloudSummary.coverLabel}</span>
+                    </div>
+                    <div className="mt-2 flex gap-1.5">
+                      {Array.from({ length: 5 }).map((_, index) => (
+                        <span
+                          key={`cloud-cover-${index}`}
+                          className={`h-2.5 flex-1 rounded-full ${
+                            index < liveCloudSummary.coverLevel
+                              ? liveCloudSummary.fillClassName
+                              : "bg-white/80"
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    {liveCloudSummary.baseVisual ? (
+                      <>
+                        <div className="mt-3 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
+                          <span>Cloud Base</span>
+                          <span>{liveCloudSummary.baseVisual.label}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-3 gap-1.5">
+                          {["Low", "Mid", "High"].map((label, index) => {
+                            const isActive = index === liveCloudSummary.baseVisual.tierIndex;
+                            return (
+                              <span
+                                key={`cloud-base-${label}`}
+                                className={`rounded-full border px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.08em] ${
+                                  isActive
+                                    ? liveCloudSummary.baseVisual.className
+                                    : "border-black/10 bg-white/80 text-black/45"
+                                }`}
+                              >
+                                {label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                <p className="mt-2 text-sm text-black/65">
+                  {liveCloudSummary.detail}
+                </p>
+              </>
+            ) : (
+              <p className="mt-3 text-sm text-black/65">
+                Cloud conditions not available yet from the latest official METAR.
+              </p>
+            )}
             <p className="mt-2 text-xs text-black/55">
-              Unofficial. Independent of the selected historical date.
+              Temperature is unofficial MetService current. Cloud label comes from
+              the latest official NZWN {latestLiveCloudMetar?.reportType ?? "METAR"}
+              {Number.isFinite(latestLiveCloudMetar?.observedAtUtc)
+                ? ` at ${formatAucklandDateTimeSeconds(latestLiveCloudMetar.observedAtUtc)}.`
+                : "."}
             </p>
           </div>
         </section>

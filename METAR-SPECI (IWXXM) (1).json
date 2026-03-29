@@ -1,0 +1,504 @@
+{
+    "informationService": {
+        "descriptionInformation": {
+            "descriptionIdentification": {
+                "title": "METAR-SPECI (IWXXM)",
+                "edition": "1.0",
+                "referenceDate": "2025-12-17"
+            },
+            "abbreviations": [
+                {
+                    "name": "AIRM",
+                    "description": " ATM Information Reference Model "
+                },
+                {
+                    "name": "AMQP",
+                    "description": " Advanced Queueing Message Protocol "
+                },
+                {
+                    "name": "AMQPS",
+                    "description": " Advanced Queueing Message Protocol Secured "
+                },
+                {
+                    "name": "ANSSI",
+                    "description": " Agence Nationale de la Securite des Systemes d'Information "
+                },
+                {
+                    "name": "API",
+                    "description": " Application Program Interface "
+                },
+                {
+                    "name": "ATC",
+                    "description": " Air Traffic Control "
+                },
+                {
+                    "name": "ATM",
+                    "description": " Air Traffic Management "
+                },
+                {
+                    "name": "HTTP",
+                    "description": " Hypertext Transfer Protocol "
+                },
+                {
+                    "name": "ICAO",
+                    "description": " International Civil Aviation Organization "
+                },
+                {
+                    "name": "IER",
+                    "description": "Information Exchange Requirement"
+                },
+                {
+                    "name": "IR",
+                    "description": "Implementation Rules"
+                },
+                {
+                    "name": "ISRM",
+                    "description": "Information Service Reference Model"
+                },
+                {
+                    "name": "IWXXM",
+                    "description": " ICAO Meteorological Information Exchange Model "
+                },
+                {
+                    "name": "JWT",
+                    "description": " JSON Web Token "
+                },
+                {
+                    "name": "NWSP",
+                    "description": "National Weather Service Provider"
+                },
+                {
+                    "name": "OGC",
+                    "description": " Open Geospatial Consortium "
+                },
+                {
+                    "name": "OPMET",
+                    "description": "OPerational METeorological information"
+                },
+                {
+                    "name": "ROC",
+                    "description": "Regional OPMET Center"
+                },
+                {
+                    "name": "SSL",
+                    "description": "Secure Sockets Layer"
+                },
+                {
+                    "name": "SWIM",
+                    "description": "System Wide Information Management"
+                },
+                {
+                    "name": "TCAC",
+                    "description": "Tropical Cyclone Advisory Center"
+                },
+                {
+                    "name": "URL",
+                    "description": "Uniform Resource Locator "
+                },
+                {
+                    "name": "VAAC",
+                    "description": "Volcanic Ash Advisory Center"
+                },
+                {
+                    "name": "WFS",
+                    "description": "Web Feature Service"
+                },
+                {
+                    "name": "WCS",
+                    "description": "Web Coverage Service"
+                },
+                {
+                    "name": "WMO",
+                    "description": "World Meteorological Organization"
+                },
+                {
+                    "name": "XML",
+                    "description": " eXtensible Markup Language "
+                }
+            ]
+        },
+        "serviceIdentification": {
+            "name": "METAR-SPECI (IWXXM)",
+            "version": "1.0"
+        },
+        "serviceAbstract": "<p>Access the OPMETs for <strong>METEO FRANCE's area of responsibility as a NWSP, ANSP, ROC, VAAC and TCAC. </strong></p><p>--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</p><p>By providing a wide range of OPMETs in IWXXM format, METEO FRANCE contributes to the <strong>safety, efficiency and regularity of air navigation</strong>, in accordance with Annex 3 of the Chicago Convention (ICAO) and the Single European Sky EU regulations.</p><p>Available IWXXM OPMETs are : <strong>AIRMET, METAR, SIGMET, SIGMET for TC, SIGMET for VA, SPECI, TAF</strong>.</p><p>&nbsp;----------------------------------------------------------------------------------</p><p>Retrieval of information and data can be done :&nbsp;</p><ul><li>On a regular basis (subscription) via AMQP 1.0 whereby the message contains the whole IWXXM dataset.</li><li>By request/Reply using a WFS whereby the IWXXM-dataset is wrapped into a GML-FeatureType.</li></ul>",
+        "serviceProvider": {
+            "providerType": [
+                "REGULATED_METEOROLOGICAL_SERVICE_PROVIDER"
+            ],
+            "pointOfContact": [
+                {
+                    "name": "MF Aviation Customer Service",
+                    "contactInformation": [
+                        {
+                            "type": "EMAIL",
+                            "address": "contact.metgate_mf@meteo.fr"
+                        }
+                    ],
+                    "role": "Data Provider"
+                }
+            ],
+            "provider": "METEO-FRANCE",
+            "providerDescription": "<p>METEO FRANCE is the French national meteorological service provider, an ISO 9001 certified public sector body.</p><p>METEO FRANCE has been designated by executive order as the exclusive Air Navigation Service Provider (ANSP) for meteorological services over the French national territory, including overseas<strong>, in accordance with Annex 3 of the Chicago Convention (ICAO) and the Single European Sky EU regulations.</strong></p><p>In this context, METEO FRANCE\u2019s main goals are:</p><ul type=\"disc\"><li>To produce and provide a wide range of aeronautical products and services, in compliance with its obligations as an ANSP in France, Regional OPMET Center (ROC) in Europe, Volcanic Ash Advisory Center (VAAC) over Europe, Africa, Asia and Tropical Cyclone Advisory Center (TCAC) over the West Indian Ocean.</li><li>To <strong>integrate meteorological innovation</strong> to improve safety and regularity of \u00abEn-route\u00bb traffic</li><li>To <strong>develop decision-making tools</strong> on major hubs, such as Collaborative Decision Making.</li></ul><p>METEO FRANCE <strong>operates a 24/24 7/7 service to air navigation</strong> by providing legacy products as well as innovative MET solutions to the aviation community at local, regional and global scales.</p><p>To support this service, METEO FRANCE<strong> runs an ambitious and wide-ranging R&amp;D program driven by aviation meteorology</strong> applications (e.g. nowcasting, numerical weather prediction systems including ensemble prediction system, information systems), and studies climate change and its foreseeable impacts.</p><p>The overall goal is to <strong>improve air transportation in terms of safety, efficiency and environmental and climatic impact</strong>.</p><p>METEO FRANCE has been and still is involved in a number of international and European projects (e.g. SESAR projects) and has regular exchanges with other MET ANSP at European and international levels. METEO FRANCE will continue to contribute to the definition and subsequent implementation of new services currently under discussion such as the Aerodrome Meteorological Observational Information Service (AMOIS), the Aerodrome Meteorological Forecast Information Service (AMFIS) or the Hazardous Weather Information Service (HWIS),.</p><p>In addition, METEO FRANCE is highly involved in research work aimed at&nbsp;<strong>making progress on the key aeronautical parameters&nbsp;</strong>derived from numerical weather prediction, mainly in nowcasting.</p>"
+        },
+        "serviceCategorisation": {
+            "serviceType": "SWIM_COMPLIANT",
+            "businessActivityType": [
+                "AERODROME_OPERATION",
+                "AIRSPACE_ORGANISATION_AND_MANAGEMENT",
+                "INFORMATION_MANAGEMENT",
+                "SERVICE_DELIVERY_MANAGEMENT"
+            ],
+            "intendedConsumer": [
+                "AIR_TRAFFIC_SERVICE_PROVIDER",
+                "AIRPORT_OPERATOR",
+                "AIRSIDE_GROUND_HANDLER",
+                "CIVIL_AIR_NAVIGATION_SERVICE_PROVIDER",
+                "CIVIL_AIRSPACE_USER",
+                "COMMUNICATION_NAVIGATION_AND_SURVEILLANCE_SERVICE_PROVIDER",
+                "MILITARY_AIR_NAVIGATION_SERVICE_PROVIDER",
+                "MILITARY_AIRSPACE_USER",
+                "PROVIDER_OF_DATA_SERVICES",
+                "REGULATED_METEOROLOGICAL_SERVICE_PROVIDER"
+            ],
+            "informationCategory": [
+                "METEOROLOGICAL_INFORMATION_EXCHANGE"
+            ],
+            "applicationMessageExchangePattern": [
+                {
+                    "name": "Request/Reply"
+                },
+                {
+                    "name": "Publish/Subscribe with Push Mechanism"
+                }
+            ],
+            "geospatialCategorisation": {
+                "countryCode": [
+                    "LF"
+                ],
+                "description": "The dataset corresponds to METEO FRANCE's area of responsibility as a NWSP, ANSP, ROC, VAAC and TCAC."
+            },
+            "other": [
+                {
+                    "name": "Service Type: METEOROLOGICAL_FEATURE_ACCESS_SERVICE",
+                    "value": "METEOROLOGICAL_FEATURE_ACCESS_SERVICE",
+                    "categorisationScheme": {
+                        "url": "http://reference.swim.aero/information-services/service-categories/CodeServiceType.html"
+                    }
+                },
+                {
+                    "name": "Service Type: METEOROLOGICAL_INFORMATION_SUBSCRIPTION_SERVICE",
+                    "value": "METEOROLOGICAL_INFORMATION_SUBSCRIPTION_SERVICE",
+                    "categorisationScheme": {
+                        "url": "http://reference.swim.aero/information-services/service-categories/CodeServiceType.html"
+                    }
+                }
+            ],
+            "lifeCycle": [
+                {
+                    "lifeCycleStage": "OPERATIONAL",
+                    "from": "2025-12-15"
+                }
+            ]
+        },
+        "generalDescription": {
+            "operationalEnvironment": {
+                "operationalNeeds": [
+                    {
+                        "name": "Operational Needs",
+                        "description": "A list of operational needs that this service contributes to satisfying is available in the service definition. This service satisfies these by offering meteorological information as regulated by Commission Implementing Regulation (EU) 2017/373 of 1 March 2017 and ICAO Annex 3. The scope of the meteorological information satisfies the EU Implementing Regulation 2021/116 - Common Project One."
+                    },
+                    {
+                        "name": "Information Exchange Requirements",
+                        "description": "IER 1 - The information currently included in the reports as defined in Commission Implementing Regulation (EU) 2017/373, ICAO Annex 3 Amdt 82 and PANS-MET."
+                    }
+                ],
+                "capabilities": [
+                    {
+                        "name": "Capabilities",
+                        "description": "The service provides high quality, up-to-date, trusted, regulated meteorological information in digital form for use by service consumers within the aviation domain."
+                    }
+                ]
+            },
+            "functionality": [
+                {
+                    "name": "Distribute Data",
+                    "description": "The service distributes the data according to the stored subscriptions and topics.",
+                    "realWorldEffect": "Information has been shared; the service consumer gets the requested data."
+                },
+                {
+                    "name": "Request Data",
+                    "description": "The consumer is able to request the data provided in the service using an OGC WFS",
+                    "realWorldEffect": "Information has been shared; the service consumer gets the requested data."
+                },
+                {
+                    "name": "Subscribe to Data",
+                    "description": "The user is able to subscribe to data via AMQP while contacting METEO FRANCE customer support.",
+                    "realWorldEffect": "subscription was done"
+                }
+            ],
+            "qualitiesOfService": {
+                "performance": [
+                    {
+                        "name": "Time Behaviour",
+                        "description": " less than 2 seconds in 99% of cases"
+                    },
+                    {
+                        "name": "Capacity",
+                        "description": "20 requests per second (WFS), 10 requests per second (WCS)"
+                    }
+                ],
+                "reliability": [
+                    {
+                        "name": "Availability",
+                        "description": "Monthly rate superior to 99.5% (max. 3 hours of downtime per month)"
+                    },
+                    {
+                        "name": "Maximum Interruption Duration",
+                        "description": "less than 48 hours in case of force majeure"
+                    },
+                    {
+                        "name": "Recoverability",
+                        "description": "There exists a fallback system which ensures recovery after incidents."
+                    }
+                ],
+                "security": [
+                    {
+                        "name": "Integrity",
+                        "description": " less than 1 corrupted message per million"
+                    },
+                    {
+                        "name": "Confidentiality",
+                        "description": "The service ensures confidentiality by using SWIM Technical Infrastructure (TI) Yellow Profile bindings.Data delivery is only available for registered users. Additionally, users have their own subscriptions which are only readable by themselves to ensure confidentiality and completeness of the data."
+                    }
+                ]
+            },
+            "accessAndUseConditions": [
+                {
+                    "name": "General Terms and Conditions of Business",
+                    "type": "LEGAL_CONSTRAINT",
+                    "description": "METEO FRANCE service level agreement and client agreement form can be obtained by contacting our customer service"
+                },
+                {
+                    "name": "Customization",
+                    "type": "SERVICE_POLICY",
+                    "description": "Within the given constraints the user can customize the service to individual needs if applicable. METEO FRANCE provides the service delivery from begin to the end of the subscription. If no start time is given, the subscription will be processed immediately. If no end time is given the subscription will be processed infinitely or up to the time when the service reaches the lifecycle status 'retired'."
+                },
+                {
+                    "name": "Information Retainment",
+                    "type": "SERVICE_CONSUMPTION_CONSTRAINT",
+                    "description": "According to ICAO Annex 3 the meteorological information is retained for a period of at least 30 days from the date of issue. This relates to the information itself and not the request time of the customer!"
+                },
+                {
+                    "name": "Subscription",
+                    "type": "SERVICE_CONSUMPTION_CONSTRAINT",
+                    "description": "To subscribe, customers need to contact METEO FRANCE customer service and request access to the service. Multiple services may be combined into a single subscription if desired."
+                },
+                {
+                    "name": "Authentication",
+                    "type": "SECURITY_CONSTRAINT",
+                    "description": "The service ensures consumer authentication in accordance with EUROCONTROL Specification for SWIM Technical Infrastructure (TI) Yellow Profile requirement SWIM-TIYP-0042. The service ensures provider authentication in accordance with EUROCONTROL Specification for SWIM Technical Infrastructure (TI) Yellow Profile requirement SWIM-TIYP-0042."
+                },
+                {
+                    "name": "Authorisation",
+                    "type": "SECURITY_CONSTRAINT",
+                    "description": "The service ensures that satisfactory authorisation is put in place according to EUROCONTROL Specification for SWIM Technical Infrastructure (TI) Yellow Profile requirement SWIM-TIYP-0070."
+                },
+                {
+                    "name": "Confidentiality",
+                    "type": "SECURITY_CONSTRAINT",
+                    "description": "The service ensures point-to-point confidentiality in accordance with EUROCONTROL Specification for SWIM Technical Infrastructure (TI) Yellow Profile through the use of Transport Layer Security (TLS) 1.2 or above.The communication is encrypted by TLS with a certificate issued by the EACP."
+                },
+                {
+                    "name": "Integrity",
+                    "type": "SECURITY_CONSTRAINT",
+                    "description": "The service ensures point-to-point integrity in accordance with EUROCONTROL Specification for SWIM Technical Infrastructure (TI) Yellow Profile through the use of Transport Layer Security (TLS) 1.2 or above.The requested information may contain a signature using SHA256."
+                }
+            ],
+            "validation": [
+                {
+                    "type": "SELF_VALIDATION",
+                    "description": {
+                        "evidence": "Service tested by METEO FRANCE"
+                    }
+                }
+            ],
+            "dateInOperation": "2025-12-15"
+        },
+        "informationDescription": {
+            "filtering": {
+                "capability": [
+                    {
+                        "name": "Filtering Capabilities WFS",
+                        "description": "It is possible to add filters for the data which was extracted of the IWXXM data into the data scheme of the WFS service. At the moment this is: filename in WMO naming convention scheme ; incoming date of the file ; ICAO code of the aerodrome ; ICAO name of the aerodrome ; A hanbook of how to use filters with WFS could be found on the OGC Website https://www.ogc.org/standards/filter/ .",
+                        "reference": {
+                            "url": "https://confluence-meteofrance.atlassian.net/wiki/spaces/METGATE/overview"
+                        }
+                    },
+                    {
+                        "name": "Filtering Capabilities AMQP",
+                        "description": "At the moment its possible to have a simple filtering using the topic structure of the broker. It will be also possible at the moment upon request to have a private queue with self defined filters."
+                    }
+                ]
+            },
+            "sourceOfInformation": "The service provider ensures that the data offered within this service is created by METEO FRANCE, a REGULATED_METEOROLOGICAL_SERVICE_PROVIDER",
+            "informationDefinition": {
+                "reference": [
+                    {
+                        "url": "https://airm.aero/developers/icao-wxxm-3.0.0-to-airm-1.0.0-index"
+                    }
+                ]
+            }
+        },
+        "technicalDescription": {
+            "serviceMonitoring": {
+                "monitoringDescription": "METEO FRANCE IT components are monitored by 24/7 maintanance. A status page is also available for an overview of service status at https://metgate.meteo.fr/services_status "
+            },
+            "behaviour": [
+                {
+                    "name": "Typical Request/Reply Behaviour",
+                    "description": "The typical behaviour for REQUEST_REPLY is as follows:The request message is sent from the service consumer to the service ; The service consumer remains blocked while awaiting the reply ; The service remains blocked while processing the reply ; The reply message is sent from the service to the service consumer. ; In this case the service is based on a WFS METEO FRANCE platform and follows its behaviour.",
+                    "reference": {
+                        "description": "METEO FRANCE SWIM services documentation\r\n",
+                        "url": "https://confluence-meteofrance.atlassian.net/wiki/spaces/METGATE/overview"
+                    }
+                },
+                {
+                    "name": "Typical Data Distribution Behaviour",
+                    "description": "The service sends the data to subscribers when they are available and match their subscription (topic or queue) using the AMQP protocol."
+                },
+                {
+                    "name": "Typical Data Subscription Behaviour",
+                    "description": "For subscribing to data the consumer needs to contact the METEO FRANCE Customer Service and needs to request the credentials. After registration the consumer gets the endpoint to all METEO FRANCE SWIM services."
+                }
+            ]
+        },
+        "serviceInterface": [
+            {
+                "name": "Request/Reply Interface",
+                "description": "The interface is used to receive the data via OGC WFS. Note: This interface is used to group the operations offered by the chosen OGC WFS standard.",
+                "provisionSide": "PROVIDER_SIDE",
+                "endpoints": [
+                    {
+                        "name": "WFS Services",
+                        "description": "This is the connection between the service provider and the customer via WFS. You need to contact the METEO FRANCE customer service for getting the credentials to retreive the specific layer which is described in this sevice description.",
+                        "url": "https://metgate.meteo.fr/"
+                    }
+                ],
+                "serviceInterfaceBinding": {
+                    "name": "SWIM_TI_YP_1_1_WS_LIGHT",
+                    "description": "An OGC WFS is bound for the REST architectural style.\r\n"
+                },
+                "networkInterfaceBinding": {
+                    "name": "IPV4_SECURE_UNICAST",
+                    "description": "The Service implementation conforms with&nbsp;IPV4_SECURE_UNICAST as part of SWIM Yellow Profile requirements.\r\n"
+                },
+                "operations": [
+                    {
+                        "name": "WFS operations",
+                        "description": "Returns a selection of features from Metgate_MF including geometry and attribute values",
+                        "idempotency": "IDEMPOTENT",
+                        "messages": [
+                            {
+                                "name": "WFS Request",
+                                "direction": "IN"
+                            },
+                            {
+                                "name": "WFS Response",
+                                "direction": "OUT"
+                            }
+                        ]
+                    }
+                ],
+                "messageExchangePattern": "SYNCHRONOUS_REQUEST_RESPONSE"
+            },
+            {
+                "name": "AMQP Distribution Interface",
+                "description": "The interface is used to receive the data which are subscribed to.",
+                "provisionSide": "PROVIDER_SIDE",
+                "endpoints": [
+                    {
+                        "name": "AMQP Services",
+                        "description": "This is the connection between the service provider and the customer via AMQP1.0 to receive notification related to the customer's subscription.",
+                        "url": "amqps://metgate-mf-amqp.meteo.fr:5671/metgate"
+                    }
+                ],
+                "serviceInterfaceBinding": {
+                    "name": "AMQP Messaging",
+                    "description": "The AMQP_MESSAGING Interface Binding as detailed in the EUROCONTROL Specification for SWIM Technical Infrastructure Yellow Profile,\r\n"
+                },
+                "operations": [
+                    {
+                        "name": "dataDelivery",
+                        "description": "The requested information is contained directly in the AMQP message.",
+                        "idempotency": "IDEMPOTENT",
+                        "messages": [
+                            {
+                                "name": "getData",
+                                "direction": "OUT"
+                            }
+                        ]
+                    }
+                ],
+                "messageExchangePattern": "FIRE_AND_FORGET"
+            },
+            {
+                "name": "SubscriptionManagement",
+                "description": "The following section describes details how to subscribe and unsubscribe to this service.",
+                "provisionSide": "PROVIDER_SIDE",
+                "operations": [
+                    {
+                        "name": "Contact",
+                        "description": "At the moment subscribing, subscribing or unsubscribing to this service is only possible by contacting METEO FRANCE Customer Service.",
+                        "idempotency": "NON_IDEMPOTENT",
+                        "messages": [
+                            {
+                                "name": "email to METEO FRANCE",
+                                "direction": "IN"
+                            }
+                        ]
+                    }
+                ],
+                "messageExchangePattern": "SYNCHRONOUS_REQUEST_RESPONSE"
+            }
+        ],
+        "references": {
+            "serviceDocument": [
+                {
+                    "documentType": "POLICY_DOCUMENT",
+                    "title": "Appendix A: References",
+                    "version": "-",
+                    "description": "Consult the service definition."
+                },
+                {
+                    "documentType": "POLICY_DOCUMENT",
+                    "title": "Operational Needs",
+                    "version": "-",
+                    "description": "Consult the service definition."
+                },
+                {
+                    "documentType": "SERVICE_STANDARD",
+                    "title": "Meteorological SWIM Services Subscription Interface Standard",
+                    "version": "-",
+                    "description": "https://swim-eurocontrol.atlassian.net/wiki/spaces/MSS/pages/60162052/Meteorological+SWIM+Services+Subscription+Interface+Standard/"
+                }
+            ],
+            "implementedStandard": [
+                {
+                    "title": "WFS",
+                    "standardType": "EUROCONTROL_SPECIFICATION_FOR_SWIM_TECHNICAL_INFRASTRUCTURE",
+                    "conformanceStatement": "is conformant",
+                    "version": "2.0.0",
+                    "description": "OGC Web Feature Service"
+                },
+                {
+                    "title": "AMQP",
+                    "standardType": "EUROCONTROL_SPECIFICATION_FOR_SWIM_TECHNICAL_INFRASTRUCTURE",
+                    "conformanceStatement": "is conformant",
+                    "version": "true",
+                    "description": "Advanced Message Queuing Protocol"
+                }
+            ]
+        }
+    }
+}
