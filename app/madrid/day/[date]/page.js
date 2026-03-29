@@ -22,6 +22,14 @@ const STATION_NAME = "Adolfo Suarez Madrid-Barajas";
 const MADRID_TIMEZONE = "Europe/Madrid";
 const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CLEAR_SKY_TOKENS = new Set(["SKC", "CLR", "NSC", "NCD", "CAVOK"]);
+const CLOUD_COVER_PRIORITY = {
+  FEW: 1,
+  SCT: 2,
+  BKN: 3,
+  OVC: 4,
+  VV: 5,
+};
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -221,6 +229,260 @@ function formatLeadMs(leadMs) {
   return `${(leadMs / 60000).toFixed(1)} min`;
 }
 
+function compareCloudLayers(a, b) {
+  const priorityDelta =
+    (CLOUD_COVER_PRIORITY[b.coverage] ?? 0) - (CLOUD_COVER_PRIORITY[a.coverage] ?? 0);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const aBase = Number.isFinite(a.baseFt) ? a.baseFt : Number.POSITIVE_INFINITY;
+  const bBase = Number.isFinite(b.baseFt) ? b.baseFt : Number.POSITIVE_INFINITY;
+  return aBase - bBase;
+}
+
+function formatCloudBaseFeet(baseFt) {
+  if (!Number.isFinite(baseFt)) {
+    return null;
+  }
+  return `${baseFt.toLocaleString("en-US")} ft`;
+}
+
+function buildCloudVisualMeta({ fillClassName, coverLevel, coverLabel, baseFt }) {
+  let baseVisual = null;
+  if (Number.isFinite(baseFt)) {
+    if (baseFt <= 1000) {
+      baseVisual = {
+        tierIndex: 0,
+        label: "Low base",
+        className: "border-rose-200 bg-rose-50 text-rose-800",
+      };
+    } else if (baseFt <= 3000) {
+      baseVisual = {
+        tierIndex: 1,
+        label: "Mid base",
+        className: "border-amber-200 bg-amber-50 text-amber-900",
+      };
+    } else {
+      baseVisual = {
+        tierIndex: 2,
+        label: "Higher base",
+        className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+      };
+    }
+  }
+
+  return {
+    showVisuals: true,
+    fillClassName,
+    coverLevel,
+    coverLabel,
+    baseVisual,
+  };
+}
+
+function parseMetarCloudToken(token) {
+  const normalized = String(token ?? "").toUpperCase().replace(/=+$/, "");
+  if (!normalized) {
+    return null;
+  }
+  if (CLEAR_SKY_TOKENS.has(normalized)) {
+    return { kind: "clear" };
+  }
+
+  const match =
+    /^(FEW|SCT|BKN|OVC|VV)(\d{3}|\/\/\/)?(?:\/\/\/)?(?:[A-Z]{2,3})?$/.exec(
+      normalized,
+    );
+  if (!match) {
+    return null;
+  }
+
+  return {
+    kind: "layer",
+    coverage: match[1],
+    baseFt: match[2] && match[2] !== "///" ? Number(match[2]) * 100 : null,
+  };
+}
+
+function summarizeMetarClouds(rawMetar) {
+  if (typeof rawMetar !== "string" || !rawMetar.trim()) {
+    return null;
+  }
+
+  const tokens = rawMetar
+    .toUpperCase()
+    .replace(/=/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  const layers = [];
+  let sawClearToken = false;
+
+  for (const token of tokens) {
+    const parsed = parseMetarCloudToken(token);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.kind === "clear") {
+      sawClearToken = true;
+      continue;
+    }
+    layers.push(parsed);
+  }
+
+  if (!layers.length && sawClearToken) {
+    return {
+      badgeLabel: "Clear",
+      badgeClassName: "border-emerald-200 bg-emerald-50 text-emerald-800",
+      headline: "Open sky",
+      detail: "No significant cloud was reported in the latest official METAR.",
+      ...buildCloudVisualMeta({
+        fillClassName: "bg-emerald-400",
+        coverLevel: 0,
+        coverLabel: "Clear",
+        baseFt: null,
+      }),
+    };
+  }
+
+  if (!layers.length) {
+    return {
+      badgeLabel: "Unknown",
+      badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
+      headline: "Clouds not reported",
+      detail: "The latest official METAR did not include a cloud layer I can summarize.",
+      showVisuals: false,
+    };
+  }
+
+  const sortedLayers = [...layers].sort(compareCloudLayers);
+  const headlineLayer = sortedLayers[0];
+  const ceilingLayer =
+    sortedLayers.find((layer) => ["BKN", "OVC", "VV"].includes(layer.coverage)) ?? null;
+  const layerBaseLabel = formatCloudBaseFeet(headlineLayer.baseFt);
+  const ceilingBaseLabel = formatCloudBaseFeet(ceilingLayer?.baseFt);
+
+  switch (headlineLayer.coverage) {
+    case "FEW":
+      return {
+        badgeLabel: "Few Clouds",
+        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
+        headline: "Mostly open sky",
+        detail: layerBaseLabel
+          ? `Only a small amount of cloud was reported, based around ${layerBaseLabel} above the airport.`
+          : "Only a small amount of cloud was reported in the latest official METAR.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-sky-400",
+          coverLevel: 1,
+          coverLabel: "A little cloud",
+          baseFt: headlineLayer.baseFt,
+        }),
+      };
+    case "SCT":
+      return {
+        badgeLabel: "Partly Cloudy",
+        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
+        headline: "Patches of cloud around the airport",
+        detail: layerBaseLabel
+          ? `Part of the sky is covered by cloud, with bases around ${layerBaseLabel} above the airport.`
+          : "Part of the sky is covered by cloud in the latest official METAR.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-sky-500",
+          coverLevel: 2,
+          coverLabel: "Partial cover",
+          baseFt: headlineLayer.baseFt,
+        }),
+      };
+    case "BKN":
+      return {
+        badgeLabel: "Mostly Cloudy",
+        badgeClassName: "border-amber-200 bg-amber-50 text-amber-900",
+        headline: "Clouds covering most of the sky",
+        detail: ceilingBaseLabel
+          ? `Most of the sky is under cloud. The main cloud deck starts around ${ceilingBaseLabel} above the airport.`
+          : "Most of the sky is under cloud. The METAR did not include a usable cloud-base height.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-amber-400",
+          coverLevel: 4,
+          coverLabel: "Mostly covered",
+          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
+        }),
+      };
+    case "OVC":
+      return {
+        badgeLabel: "Overcast",
+        badgeClassName: "border-slate-200 bg-slate-100 text-slate-800",
+        headline: "Gray sky overhead",
+        detail: ceilingBaseLabel
+          ? `The sky is fully covered by cloud. The cloud deck starts around ${ceilingBaseLabel} above the airport.`
+          : "The sky is fully covered by cloud. The METAR did not include a usable cloud-base height.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-slate-500",
+          coverLevel: 5,
+          coverLabel: "Full cover",
+          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
+        }),
+      };
+    case "VV":
+      return {
+        badgeLabel: "Obscured",
+        badgeClassName: "border-rose-200 bg-rose-50 text-rose-800",
+        headline: "Sky hidden by low cloud or fog",
+        detail: ceilingBaseLabel
+          ? `The sky is obscured. Vertical visibility is around ${ceilingBaseLabel} above the airport.`
+          : "The sky is obscured in the latest official METAR.",
+        ...buildCloudVisualMeta({
+          fillClassName: "bg-rose-400",
+          coverLevel: 5,
+          coverLabel: "Obscured",
+          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
+        }),
+      };
+    default:
+      return {
+        badgeLabel: "Unknown",
+        badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
+        headline: "Clouds not reported",
+        detail: "The latest official METAR did not include a cloud layer I can summarize.",
+        showVisuals: false,
+      };
+  }
+}
+
+function selectLatestLiveCloudMetar(raceRows, latestRow, summary, isToday) {
+  if (isToday && typeof latestRow?.rawMetar === "string" && latestRow.rawMetar.trim()) {
+    return {
+      rawMetar: latestRow.rawMetar,
+      observedAtUtc: Number.isFinite(latestRow?.obsTimeUtc) ? latestRow.obsTimeUtc : null,
+      reportType: latestRow?.reportType ?? null,
+    };
+  }
+
+  for (const row of raceRows) {
+    const rawMetar =
+      row?.rawMetar ?? row?.aemetRawMetar ?? row?.tgftpRawMetar ?? null;
+    if (typeof rawMetar === "string" && rawMetar.trim()) {
+      return {
+        rawMetar,
+        observedAtUtc: Number.isFinite(row?.reportTsUtc) ? row.reportTsUtc : null,
+        reportType: row?.reportType ?? null,
+      };
+    }
+  }
+
+  if (isToday && typeof summary?.latestRawMetar === "string" && summary.latestRawMetar.trim()) {
+    return {
+      rawMetar: summary.latestRawMetar,
+      observedAtUtc: Number.isFinite(summary?.latestObsTimeUtc)
+        ? summary.latestObsTimeUtc
+        : null,
+      reportType: summary?.latestReportType ?? null,
+    };
+  }
+
+  return null;
+}
+
 function formatLivePollMessage(result) {
   if (!result?.ok) {
     return "Latest official poll skipped.";
@@ -303,6 +565,78 @@ function buildAemetForecastDataset(forecastRows, unit) {
   };
 }
 
+function buildAemetStationObsDataset(obsRows, unit) {
+  const points = obsRows
+    .map((row) => {
+      const x = parseMinute(row.obsTimeLocal);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    label: "AEMET Station (0.1°C)",
+    data: points,
+    borderColor: "#16a34a",
+    backgroundColor: "#16a34a",
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    pointHitRadius: 18,
+    pointStyle: "rect",
+    pointBorderColor: "#15803d",
+    pointBorderWidth: 1.5,
+    borderWidth: 2,
+    tension: 0.2,
+    showLine: true,
+  };
+}
+
+function buildSynopDataset(synopRows, unit) {
+  const points = synopRows
+    .map((row) => {
+      const x = parseMinute(row.obsTimeLocal);
+      if (x === null) {
+        return null;
+      }
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter(Boolean);
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    label: "SYNOP (0.1°C)",
+    data: points,
+    borderColor: "#7c3aed",
+    backgroundColor: "#7c3aed",
+    pointRadius: 4,
+    pointHoverRadius: 6,
+    pointHitRadius: 18,
+    pointStyle: "crossRot",
+    pointBorderColor: "#6d28d9",
+    pointBorderWidth: 2,
+    borderWidth: 2,
+    tension: 0.2,
+    showLine: true,
+  };
+}
+
 export default function MadridDayPage() {
   const params = useParams();
   const router = useRouter();
@@ -311,7 +645,7 @@ export default function MadridDayPage() {
   const [inputDate, setInputDate] = useState(date);
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const [clockNowMs, setClockNowMs] = useState(null);
   const inFlightRef = useRef(false);
 
   const isDateValid = isValidDate(date);
@@ -320,6 +654,8 @@ export default function MadridDayPage() {
   const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
 
   const pollLatest = useAction("madrid:pollLatestStationMetar");
+  const pollStationObs = useAction("madrid:pollAemetStationObservations");
+  const pollSynop = useAction("madrid:pollSynopObservations");
 
   const dayData = useQuery(
     "madrid:getDayStationRows",
@@ -339,6 +675,24 @@ export default function MadridDayPage() {
         }
       : "skip",
   );
+  const aemetStationObsData = useQuery(
+    "madrid:getAemetStationObservations",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
+  const synopData = useQuery(
+    "madrid:getSynopObservations",
+    isDateValid
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+        }
+      : "skip",
+  );
   const raceData = useQuery("madrid:getRecentPublishRaceReports", {
     stationIcao: STATION_ICAO,
     limit: 12,
@@ -348,17 +702,28 @@ export default function MadridDayPage() {
   const rows = dayData?.rows ?? [];
   const summary = dayData?.summary ?? null;
   const aemetForecastRows = aemetForecastData?.rows ?? [];
+  const aemetStationObsRows = aemetStationObsData?.rows ?? [];
+  const synopRows = synopData?.rows ?? [];
   const raceRows = raceData?.rows ?? [];
   const latestRow = rows.length ? rows[rows.length - 1] : null;
   const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
   const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
   const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
+  const latestLiveCloudMetar = useMemo(
+    () => selectLatestLiveCloudMetar(raceRows, latestRow, summary, isToday),
+    [raceRows, latestRow, summary, isToday],
+  );
+  const liveCloudSummary = useMemo(
+    () => summarizeMetarClouds(latestLiveCloudMetar?.rawMetar),
+    [latestLiveCloudMetar],
+  );
 
   useEffect(() => {
     setInputDate(date);
   }, [date]);
 
   useEffect(() => {
+    setClockNowMs(Date.now());
     const intervalId = window.setInterval(() => {
       setClockNowMs(Date.now());
     }, 1000);
@@ -387,7 +752,11 @@ export default function MadridDayPage() {
       }
       inFlightRef.current = true;
       try {
-        const result = await pollLatest({ stationIcao: STATION_ICAO });
+        const [result] = await Promise.all([
+          pollLatest({ stationIcao: STATION_ICAO }),
+          pollStationObs({ stationIcao: STATION_ICAO }).catch(() => {}),
+          pollSynop({ stationIcao: STATION_ICAO }).catch(() => {}),
+        ]);
         if (!cancelled) {
           setLiveMessage(formatLivePollMessage(result));
         }
@@ -407,7 +776,7 @@ export default function MadridDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, pollLatest]);
+  }, [date, isDateValid, isToday, pollLatest, pollStationObs, pollSynop]);
 
   async function handleRefreshNow() {
     if (!isDateValid || !isToday || inFlightRef.current) {
@@ -417,7 +786,11 @@ export default function MadridDayPage() {
     setIsRefreshing(true);
     inFlightRef.current = true;
     try {
-      const result = await pollLatest({ stationIcao: STATION_ICAO });
+      const [result] = await Promise.all([
+        pollLatest({ stationIcao: STATION_ICAO }),
+        pollStationObs({ stationIcao: STATION_ICAO }).catch(() => {}),
+        pollSynop({ stationIcao: STATION_ICAO }).catch(() => {}),
+      ]);
       setLiveMessage(formatLivePollMessage(result));
     } catch (error) {
       console.error(error);
@@ -443,13 +816,21 @@ export default function MadridDayPage() {
       if (rows.length) {
         datasets.push(buildOfficialLineDataset(rows, displayUnit));
       }
+      const stationDs = buildAemetStationObsDataset(aemetStationObsRows, displayUnit);
+      if (stationDs) {
+        datasets.push(stationDs);
+      }
+      const synopDs = buildSynopDataset(synopRows, displayUnit);
+      if (synopDs) {
+        datasets.push(synopDs);
+      }
       const fcDs = buildAemetForecastDataset(aemetForecastRows, displayUnit);
       if (fcDs) {
         datasets.push(fcDs);
       }
       return { datasets };
     },
-    [rows, displayUnit, aemetForecastRows],
+    [rows, displayUnit, aemetStationObsRows, synopRows, aemetForecastRows],
   );
 
   const chartOptions = useMemo(
@@ -692,19 +1073,134 @@ export default function MadridDayPage() {
 
           <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Latest AEMET Seen
+              Near-Live Sky
             </p>
-            <p className="mt-2 text-xl font-semibold text-foreground">
-              {latestRow?.aemetFirstSeenAt
-                ? formatMadridDateTimeSeconds(latestRow.aemetFirstSeenAt)
-                : "—"}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              {latestRow?.rawMetar
-                ? "First-seen timestamp from the authenticated AMA poll."
-                : "No stored AEMET first-seen timestamp yet for this date."}
-            </p>
+            {liveCloudSummary ? (
+              <>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${liveCloudSummary.badgeClassName}`}
+                  >
+                    {liveCloudSummary.badgeLabel}
+                  </span>
+                  <span className="text-sm font-semibold text-black/85">
+                    {liveCloudSummary.headline}
+                  </span>
+                </div>
+                {liveCloudSummary.showVisuals ? (
+                  <div className="mt-3 rounded-2xl border border-black/10 bg-[linear-gradient(180deg,rgba(224,242,254,0.8),rgba(255,255,255,0.95))] p-3">
+                    <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
+                      <span>Sky Cover</span>
+                      <span>{liveCloudSummary.coverLabel}</span>
+                    </div>
+                    <div className="mt-2 flex gap-1.5">
+                      {Array.from({ length: 5 }).map((_, index) => (
+                        <span
+                          key={`madrid-cloud-cover-${index}`}
+                          className={`h-2.5 flex-1 rounded-full ${
+                            index < liveCloudSummary.coverLevel
+                              ? liveCloudSummary.fillClassName
+                              : "bg-white/80"
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    {liveCloudSummary.baseVisual ? (
+                      <>
+                        <div className="mt-3 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
+                          <span>Cloud Base</span>
+                          <span>{liveCloudSummary.baseVisual.label}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-3 gap-1.5">
+                          {["Low", "Mid", "High"].map((label, index) => {
+                            const isActive = index === liveCloudSummary.baseVisual.tierIndex;
+                            return (
+                              <span
+                                key={`madrid-cloud-base-${label}`}
+                                className={`rounded-full border px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.08em] ${
+                                  isActive
+                                    ? liveCloudSummary.baseVisual.className
+                                    : "border-black/10 bg-white/80 text-black/45"
+                                }`}
+                              >
+                                {label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                <p className="mt-3 text-sm text-black/65">
+                  {liveCloudSummary.detail}
+                </p>
+                <p className="mt-2 text-xs text-black/55">
+                  From the latest official LEMD{" "}
+                  {latestLiveCloudMetar?.reportType ?? "METAR"}
+                  {Number.isFinite(latestLiveCloudMetar?.observedAtUtc)
+                    ? ` at ${formatMadridDateTimeSeconds(latestLiveCloudMetar.observedAtUtc)}.`
+                    : "."}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-xl font-semibold text-foreground">—</p>
+                <p className="mt-2 text-sm text-black/65">
+                  Cloud conditions not available yet from the latest official LEMD METAR.
+                </p>
+              </>
+            )}
           </div>
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2">
+          {(() => {
+            const latestStn = aemetStationObsRows.length
+              ? aemetStationObsRows[aemetStationObsRows.length - 1]
+              : null;
+            const stnTemp = latestStn
+              ? displayUnit === "C" ? latestStn.tempC : latestStn.tempF
+              : null;
+            return (
+              <div className="rounded-3xl border border-emerald-200/70 bg-emerald-50/40 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/70">
+                  AEMET Station 3129 (0.1°C)
+                </p>
+                <p className="mt-2 text-3xl font-semibold text-emerald-900">
+                  {stnTemp !== null ? formatTemp(stnTemp, displayUnit) : "—"}
+                </p>
+                <p className="mt-2 text-sm text-emerald-900/65">
+                  {latestStn
+                    ? `at ${formatStoredLocalDateTime(latestStn.obsTimeLocal)}`
+                    : "No station observations yet"}
+                </p>
+              </div>
+            );
+          })()}
+          {(() => {
+            const latestSyn = synopRows.length
+              ? synopRows[synopRows.length - 1]
+              : null;
+            const synTemp = latestSyn
+              ? displayUnit === "C" ? latestSyn.tempC : latestSyn.tempF
+              : null;
+            return (
+              <div className="rounded-3xl border border-violet-200/70 bg-violet-50/40 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700/70">
+                  SYNOP 08221 (0.1°C)
+                </p>
+                <p className="mt-2 text-3xl font-semibold text-violet-900">
+                  {synTemp !== null ? formatTemp(synTemp, displayUnit) : "—"}
+                </p>
+                <p className="mt-2 text-sm text-violet-900/65">
+                  {latestSyn
+                    ? `at ${formatStoredLocalDateTime(latestSyn.obsTimeLocal)}`
+                    : "No SYNOP observations yet"}
+                </p>
+              </div>
+            );
+          })()}
         </section>
 
         <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">

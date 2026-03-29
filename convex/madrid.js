@@ -12,6 +12,9 @@ const AEMET_OPENDATA_BASE_URL = "https://opendata.aemet.es/opendata";
 // Paracuellos de Jarama — closest municipality to Barajas airport (~4.9 km).
 // Madrid city (28079) runs 2-3°C warmer overnight due to urban heat island.
 const MADRID_MUNICIPIO = "28104";
+const MADRID_AEMET_STATION_ID = "3129";
+const MADRID_WMO_BLOCK = "08221";
+const OGIMET_SYNOP_BASE_URL = "https://www.ogimet.com/cgi-bin/getsynop";
 const NOAA_LATEST_METAR_BASE_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
 const RACE_SOURCE = {
@@ -1641,6 +1644,383 @@ export const getAemetHourlyForecasts = queryGeneric({
       )
       .collect();
     rows.sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc);
+    return { rows };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// AEMET Station 3129 hourly observations (0.1°C precision)
+// ---------------------------------------------------------------------------
+
+async function fetchAemetStationObservations({ stationId, apiKey }) {
+  const metaUrl = `${AEMET_OPENDATA_BASE_URL}/api/observacion/convencional/datos/estacion/${stationId}?api_key=${apiKey}`;
+  const metaResponse = await fetch(metaUrl, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (!metaResponse.ok) {
+    const text = await metaResponse.text();
+    throw new Error(
+      `AEMET station obs meta failed (${metaResponse.status}): ${text.slice(0, 220)}`,
+    );
+  }
+  const meta = await metaResponse.json();
+  const datosUrl = toNonEmptyString(meta?.datos);
+  if (!datosUrl) {
+    throw new Error("AEMET station obs meta missing datos URL.");
+  }
+
+  const dataResponse = await fetch(datosUrl, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (!dataResponse.ok) {
+    const text = await dataResponse.text();
+    throw new Error(
+      `AEMET station obs data failed (${dataResponse.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  const payload = await dataResponse.json();
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+
+  const rows = [];
+  for (const entry of payload) {
+    const fint = entry.fint;
+    const ta = entry.ta;
+    if (!fint || !Number.isFinite(ta)) {
+      continue;
+    }
+    // fint is UTC ISO string like "2026-03-29T14:00:00UTC"
+    const cleanFint = fint.replace(/UTC$/, "Z");
+    const epochMs = new Date(cleanFint).getTime();
+    if (!Number.isFinite(epochMs)) {
+      continue;
+    }
+    const dateStr = formatMadridDate(epochMs);
+    const localStr = formatMadridDateTime(epochMs);
+
+    rows.push({
+      date: dateStr,
+      obsTimeUtc: epochMs,
+      obsTimeLocal: localStr,
+      tempC: roundToTenth(ta),
+      tempF: toFahrenheit(ta),
+      humidity: Number.isFinite(entry.hr) ? roundToTenth(entry.hr) : undefined,
+      dewPointC: Number.isFinite(entry.tpr) ? roundToTenth(entry.tpr) : undefined,
+      windSpeedKmh: Number.isFinite(entry.vv) ? roundToTenth(entry.vv * 3.6) : undefined,
+      windDirection: Number.isFinite(entry.dv) ? entry.dv : undefined,
+      pressureHpa: Number.isFinite(entry.pres) ? roundToTenth(entry.pres) : undefined,
+      precipMm: Number.isFinite(entry.prec) ? roundToTenth(entry.prec) : undefined,
+    });
+  }
+
+  return rows;
+}
+
+const storeAemetStationObservationBatch = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    rows: v.array(
+      v.object({
+        date: v.string(),
+        obsTimeUtc: v.number(),
+        obsTimeLocal: v.string(),
+        tempC: v.number(),
+        tempF: v.number(),
+        humidity: v.optional(v.number()),
+        dewPointC: v.optional(v.number()),
+        windSpeedKmh: v.optional(v.number()),
+        windDirection: v.optional(v.number()),
+        pressureHpa: v.optional(v.number()),
+        precipMm: v.optional(v.number()),
+      }),
+    ),
+    capturedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    let upserted = 0;
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("madridAemetStationObservations")
+        .withIndex("by_station_date_ts", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("date", row.date)
+            .eq("obsTimeUtc", row.obsTimeUtc),
+        )
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          tempC: row.tempC,
+          tempF: row.tempF,
+          humidity: row.humidity,
+          dewPointC: row.dewPointC,
+          windSpeedKmh: row.windSpeedKmh,
+          windDirection: row.windDirection,
+          pressureHpa: row.pressureHpa,
+          precipMm: row.precipMm,
+          capturedAt: args.capturedAt,
+        });
+      } else {
+        await ctx.db.insert("madridAemetStationObservations", {
+          stationIcao: args.stationIcao,
+          ...row,
+          source: "aemet-opendata-3129",
+          capturedAt: args.capturedAt,
+        });
+      }
+      upserted += 1;
+    }
+    return { upserted };
+  },
+});
+
+export { storeAemetStationObservationBatch };
+
+export const pollAemetStationObservations = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? "LEMD";
+    const apiKey = getAemetOpenDataKey();
+    if (!apiKey) {
+      return { status: "error", error: "Missing OPENDATA_AEMET_KEY." };
+    }
+
+    const rows = await fetchAemetStationObservations({
+      stationId: MADRID_AEMET_STATION_ID,
+      apiKey,
+    });
+
+    if (rows.length > 0) {
+      await ctx.runMutation("madrid:storeAemetStationObservationBatch", {
+        stationIcao,
+        rows,
+        capturedAt: Date.now(),
+      });
+    }
+
+    return {
+      status: "ok",
+      observationRows: rows.length,
+    };
+  },
+});
+
+export const getAemetStationObservations = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+    const rows = await ctx.db
+      .query("madridAemetStationObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    rows.sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
+    return { rows };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// SYNOP observations via OGIMET (0.1°C precision, hourly at :00Z)
+// ---------------------------------------------------------------------------
+
+function parseSynopTemp(group) {
+  if (!group || group.length < 4) {
+    return null;
+  }
+  const sign = group[0] === "1" ? -1 : 1;
+  const tenths = parseInt(group.slice(1), 10);
+  if (!Number.isFinite(tenths)) {
+    return null;
+  }
+  return sign * tenths / 10;
+}
+
+function parseSynopRow(csvLine) {
+  // Format: WMOIND,YEAR,MONTH,DAY,HOUR,MIN,REPORT
+  const match = /^(\d{5}),(\d{4}),(\d{2}),(\d{2}),(\d{2}),(\d{2}),(.+)$/.exec(
+    csvLine.trim(),
+  );
+  if (!match) {
+    return null;
+  }
+  const [, , year, month, day, hour, min, report] = match;
+  const isoUtc = `${year}-${month}-${day}T${hour}:${min}:00Z`;
+  const epochMs = new Date(isoUtc).getTime();
+  if (!Number.isFinite(epochMs)) {
+    return null;
+  }
+
+  // Extract temperature (1sTTT) and dewpoint (2sTTT) groups from section 1.
+  // Stop at section 3 marker "333" — after that, 1sTTT means max temp, not current.
+  const tokens = report.split(/\s+/);
+  let tempC = null;
+  let dewPointC = null;
+  for (const token of tokens) {
+    if (token === "333" || token === "444" || token === "555") {
+      break;
+    }
+    if (/^1[01]\d{3}$/.test(token)) {
+      tempC = parseSynopTemp(token.slice(1));
+    } else if (/^2[01]\d{3}$/.test(token)) {
+      dewPointC = parseSynopTemp(token.slice(1));
+    }
+  }
+
+  return { epochMs, rawSynop: report, tempC, dewPointC };
+}
+
+async function fetchOgimetSynop({ wmoBlock, beginUtc, endUtc }) {
+  const fmt = (d) => {
+    const s = new Date(d).toISOString();
+    return s.slice(0, 4) + s.slice(5, 7) + s.slice(8, 10) + s.slice(11, 13) + "00";
+  };
+  const url = `${OGIMET_SYNOP_BASE_URL}?block=${wmoBlock}&begin=${fmt(beginUtc)}&end=${fmt(endUtc)}`;
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { "User-Agent": DEFAULT_BROWSER_USER_AGENT },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `OGIMET SYNOP fetch failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+  const text = await response.text();
+  const lines = text.split("\n").filter((l) => /^\d{5},/.test(l.trim()));
+  const rows = [];
+  for (const line of lines) {
+    const parsed = parseSynopRow(line);
+    if (parsed && parsed.tempC !== null) {
+      const dateStr = formatMadridDate(parsed.epochMs);
+      const localStr = formatMadridDateTime(parsed.epochMs);
+      rows.push({
+        date: dateStr,
+        obsTimeUtc: parsed.epochMs,
+        obsTimeLocal: localStr,
+        tempC: roundToTenth(parsed.tempC),
+        tempF: toFahrenheit(parsed.tempC),
+        dewPointC: parsed.dewPointC !== null
+          ? roundToTenth(parsed.dewPointC)
+          : undefined,
+        rawSynop: parsed.rawSynop,
+      });
+    }
+  }
+  return rows;
+}
+
+const storeSynopObservationBatch = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    rows: v.array(
+      v.object({
+        date: v.string(),
+        obsTimeUtc: v.number(),
+        obsTimeLocal: v.string(),
+        tempC: v.number(),
+        tempF: v.number(),
+        dewPointC: v.optional(v.number()),
+        rawSynop: v.string(),
+      }),
+    ),
+    capturedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    let upserted = 0;
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("madridSynopObservations")
+        .withIndex("by_station_date_ts", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("date", row.date)
+            .eq("obsTimeUtc", row.obsTimeUtc),
+        )
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          tempC: row.tempC,
+          tempF: row.tempF,
+          dewPointC: row.dewPointC,
+          rawSynop: row.rawSynop,
+          capturedAt: args.capturedAt,
+        });
+      } else {
+        await ctx.db.insert("madridSynopObservations", {
+          stationIcao: args.stationIcao,
+          ...row,
+          source: "ogimet-synop-08221",
+          capturedAt: args.capturedAt,
+        });
+      }
+      upserted += 1;
+    }
+    return { upserted };
+  },
+});
+
+export { storeSynopObservationBatch };
+
+export const pollSynopObservations = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = args.stationIcao ?? "LEMD";
+    // Fetch the last 13 hours to ensure overlap and no missed reports.
+    const now = Date.now();
+    const beginUtc = now - 13 * 60 * 60 * 1000;
+    const endUtc = now;
+
+    const rows = await fetchOgimetSynop({
+      wmoBlock: MADRID_WMO_BLOCK,
+      beginUtc,
+      endUtc,
+    });
+
+    if (rows.length > 0) {
+      await ctx.runMutation("madrid:storeSynopObservationBatch", {
+        stationIcao,
+        rows,
+        capturedAt: now,
+      });
+    }
+
+    return {
+      status: "ok",
+      synopRows: rows.length,
+    };
+  },
+});
+
+export const getSynopObservations = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
+    }
+    const rows = await ctx.db
+      .query("madridSynopObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      )
+      .collect();
+    rows.sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
     return { rows };
   },
 });

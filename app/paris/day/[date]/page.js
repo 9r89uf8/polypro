@@ -488,7 +488,7 @@ export default function ParisDayPage() {
   const [liveMessage, setLiveMessage] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isOfficialRefreshing, setIsOfficialRefreshing] = useState(false);
-  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const [clockNowMs, setClockNowMs] = useState(null);
   const [weatherPanel, setWeatherPanel] = useState(null);
   const [weatherPanelError, setWeatherPanelError] = useState("");
   const [isWeatherLoading, setIsWeatherLoading] = useState(false);
@@ -623,6 +623,7 @@ export default function ParisDayPage() {
   }, [date]);
 
   useEffect(() => {
+    setClockNowMs(Date.now());
     const intervalId = window.setInterval(() => {
       setClockNowMs(Date.now());
     }, 1000);

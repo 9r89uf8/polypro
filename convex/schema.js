@@ -719,6 +719,36 @@ export default defineSchema({
     capturedAt: v.number(),
   }).index("by_station_date_ts", ["stationIcao", "date", "forecastTimeUtc"]),
 
+  madridAemetStationObservations: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    obsTimeUtc: v.number(),
+    obsTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    humidity: v.optional(v.number()),
+    dewPointC: v.optional(v.number()),
+    windSpeedKmh: v.optional(v.number()),
+    windDirection: v.optional(v.number()),
+    pressureHpa: v.optional(v.number()),
+    precipMm: v.optional(v.number()),
+    source: v.string(),
+    capturedAt: v.number(),
+  }).index("by_station_date_ts", ["stationIcao", "date", "obsTimeUtc"]),
+
+  madridSynopObservations: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    obsTimeUtc: v.number(),
+    obsTimeLocal: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    dewPointC: v.optional(v.number()),
+    rawSynop: v.string(),
+    source: v.string(),
+    capturedAt: v.number(),
+  }).index("by_station_date_ts", ["stationIcao", "date", "obsTimeUtc"]),
+
   nzwnMetServiceObservations: defineTable({
     stationIcao: v.string(),
     date: v.string(),

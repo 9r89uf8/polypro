@@ -169,6 +169,24 @@ crons.cron(
     { stationIcao: "LEMD" },
 );
 
+// Polls AEMET OpenData station 3129 observations (0.1°C precision) every 10 min.
+// The API returns the last 12 hours; frequent polling ensures no readings are missed.
+crons.cron(
+    "madrid_aemet_station_obs_every_10_min",
+    "*/10 * * * *",
+    api.madrid.pollAemetStationObservations,
+    { stationIcao: "LEMD" },
+);
+
+// Polls OGIMET for SYNOP messages (WMO 08221) every 10 min.
+// SYNOP is hourly at :00Z with 0.1°C precision temperature in the 1sTTT group.
+crons.cron(
+    "madrid_synop_obs_every_10_min",
+    "*/10 * * * *",
+    api.madrid.pollSynopObservations,
+    { stationIcao: "LEMD" },
+);
+
 // Polls MGM sondurumlar for LTAC every minute to catch the latest METAR
 // as fast as possible (MGM publishes ~2 min after observation).
 crons.cron(
