@@ -803,7 +803,7 @@ export default function NzwnDayPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isNotesOpen, setIsNotesOpen] = useState(false);
   const [deletingNoteId, setDeletingNoteId] = useState(null);
-  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const [clockNowMs, setClockNowMs] = useState(null);
   const [weatherPanel, setWeatherPanel] = useState(null);
   const [weatherPanelError, setWeatherPanelError] = useState("");
   const [isWeatherLoading, setIsWeatherLoading] = useState(false);
@@ -908,6 +908,7 @@ export default function NzwnDayPage() {
   }, [date]);
 
   useEffect(() => {
+    setClockNowMs(Date.now());
     const intervalId = window.setInterval(() => {
       setClockNowMs(Date.now());
     }, 1000);
