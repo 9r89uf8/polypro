@@ -138,15 +138,8 @@ function parseSignedMetarTemp(tempToken) {
 }
 
 function extractTempInfo(rawMetar, reportedTempC) {
-  // If a numeric reported temp was provided (e.g., from MGM sondurumlar),
-  // prefer that because it carries 0.1 C precision.
-  if (reportedTempC !== null && reportedTempC !== undefined && Number.isFinite(reportedTempC)) {
-    return {
-      tempC: roundToTenth(reportedTempC),
-      source: "reported_temp",
-    };
-  }
-
+  // Always prefer the METAR integer so the official line matches the
+  // publish-race card.  MGM sondurumlar (0.1 C) is shown separately.
   const mainTempMatch = String(rawMetar ?? "").match(
     /\b(M?\d{2})\/(M?\d{2}|\/\/)\b/,
   );
@@ -158,6 +151,14 @@ function extractTempInfo(rawMetar, reportedTempC) {
         source: "metar_integer",
       };
     }
+  }
+
+  // Fall back to MGM reported temp only if METAR parsing failed.
+  if (reportedTempC !== null && reportedTempC !== undefined && Number.isFinite(reportedTempC)) {
+    return {
+      tempC: roundToTenth(reportedTempC),
+      source: "reported_temp",
+    };
   }
 
   return null;
