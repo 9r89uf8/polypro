@@ -158,15 +158,6 @@ function addUtcDays(dateIso, days) {
   return `${year}-${month}-${day}`;
 }
 
-function diffDateKeysInDays(targetDate, captureDate) {
-  const targetEpoch = Date.parse(`${targetDate}T00:00:00Z`);
-  const captureEpoch = Date.parse(`${captureDate}T00:00:00Z`);
-  if (!Number.isFinite(targetEpoch) || !Number.isFinite(captureEpoch)) {
-    return 0;
-  }
-  return Math.round((targetEpoch - captureEpoch) / DAY_MS);
-}
-
 function extractIsoDate(rawValue) {
   const rawString = String(rawValue ?? "");
   if (/^\d{4}-\d{2}-\d{2}/.test(rawString)) {
@@ -1025,57 +1016,6 @@ const storeMeteoFranceObservation = internalMutationGeneric({
 
 export { storeMeteoFranceObservation };
 
-const storeForecastPredictionBatch = internalMutationGeneric({
-  args: {
-    rows: v.array(
-      v.object({
-        stationIcao: v.string(),
-        provider: v.literal("meteofrance"),
-        targetDate: v.string(),
-        capturedAt: v.number(),
-        capturedAtLocal: v.string(),
-        captureDate: v.string(),
-        leadDays: v.number(),
-        minTempC: v.optional(v.number()),
-        minTempF: v.optional(v.number()),
-        maxTempC: v.optional(v.number()),
-        maxTempF: v.optional(v.number()),
-        dayPhrase: v.optional(v.string()),
-      }),
-    ),
-  },
-  handler: async (ctx, args) => {
-    let inserted = 0;
-    let skipped = 0;
-    const now = Date.now();
-    for (const row of args.rows) {
-      const existing = await ctx.db
-        .query("parisForecastPredictions")
-        .withIndex("by_station_provider_target_capturedAt", (query) =>
-          query
-            .eq("stationIcao", row.stationIcao)
-            .eq("provider", row.provider)
-            .eq("targetDate", row.targetDate)
-            .eq("capturedAt", row.capturedAt),
-        )
-        .first();
-      if (existing) {
-        skipped += 1;
-        continue;
-      }
-      await ctx.db.insert("parisForecastPredictions", {
-        ...row,
-        createdAt: now,
-        updatedAt: now,
-      });
-      inserted += 1;
-    }
-    return { inserted, skipped };
-  },
-});
-
-export { storeForecastPredictionBatch };
-
 const storeMeteoFranceHourlyForecastBatch = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
@@ -1205,36 +1145,12 @@ export const pollMeteoFranceForecast = actionGeneric({
       });
     }
 
-    let predictionResult = { inserted: 0, skipped: 0 };
-    if (daily.length > 0) {
-      predictionResult = await ctx.runMutation(
-        "parisWeather:storeForecastPredictionBatch",
-        {
-          rows: daily.map((day) => ({
-            stationIcao,
-            provider: "meteofrance",
-            targetDate: day.date,
-            capturedAt,
-            capturedAtLocal,
-            captureDate,
-            leadDays: diffDateKeysInDays(day.date, captureDate),
-            ...(day.minTempC !== undefined ? { minTempC: day.minTempC } : {}),
-            ...(day.minTempF !== undefined ? { minTempF: day.minTempF } : {}),
-            ...(day.maxTempC !== undefined ? { maxTempC: day.maxTempC } : {}),
-            ...(day.maxTempF !== undefined ? { maxTempF: day.maxTempF } : {}),
-            ...(day.dayPhrase ? { dayPhrase: day.dayPhrase } : {}),
-          })),
-        },
-      );
-    }
-
     return {
       status: "ok",
       forecastRows: hourly.length,
       forecastDays: daily.length,
       capturedAt,
       capturedAtLocal,
-      ...predictionResult,
     };
   },
 });
@@ -1279,94 +1195,3 @@ export const getMeteoFranceHourlyForecasts = queryGeneric({
   },
 });
 
-export const getForecastTrend = queryGeneric({
-  args: {
-    stationIcao: v.optional(v.string()),
-    targetDate: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const stationIcao = args.stationIcao ?? PARIS_STATION.stationIcao;
-
-    const [predictions, summary] = await Promise.all([
-      ctx.db
-        .query("parisForecastPredictions")
-        .withIndex("by_station_provider_target_capturedAt", (query) =>
-          query
-            .eq("stationIcao", stationIcao)
-            .eq("provider", "meteofrance")
-            .eq("targetDate", args.targetDate),
-        )
-        .order("asc")
-        .collect(),
-      ctx.db
-        .query("aerowebDailySummaries")
-        .withIndex("by_station_date", (query) =>
-          query.eq("stationIcao", stationIcao).eq("date", args.targetDate),
-        )
-        .first(),
-    ]);
-
-    const actualMaxC = summary?.maxTempC ?? null;
-    const actualMaxF = summary?.maxTempF ?? null;
-    let previousMaxC = null;
-    let previousMaxF = null;
-    let changeCount = 0;
-
-    const rows = predictions.map((row) => {
-      const deltaMaxC =
-        Number.isFinite(row.maxTempC) && previousMaxC !== null
-          ? roundToTenth(row.maxTempC - previousMaxC)
-          : null;
-      const deltaMaxF =
-        Number.isFinite(row.maxTempF) && previousMaxF !== null
-          ? roundToTenth(row.maxTempF - previousMaxF)
-          : null;
-
-      if (Number.isFinite(row.maxTempC)) {
-        previousMaxC = row.maxTempC;
-      }
-      if (Number.isFinite(row.maxTempF)) {
-        previousMaxF = row.maxTempF;
-      }
-      if (deltaMaxC !== null && deltaMaxC !== 0) {
-        changeCount += 1;
-      }
-
-      return {
-        ...row,
-        deltaMaxC,
-        deltaMaxF,
-        errorC:
-          Number.isFinite(row.maxTempC) && actualMaxC !== null
-            ? roundToTenth(row.maxTempC - actualMaxC)
-            : null,
-        errorF:
-          Number.isFinite(row.maxTempF) && actualMaxF !== null
-            ? roundToTenth(row.maxTempF - actualMaxF)
-            : null,
-        changeDirection:
-          deltaMaxC === null
-            ? "initial"
-            : deltaMaxC > 0
-              ? "up"
-              : deltaMaxC < 0
-                ? "down"
-                : "same",
-      };
-    });
-
-    return {
-      stationIcao,
-      provider: "meteofrance",
-      targetDate: args.targetDate,
-      actualLabel: "Official LFPG max",
-      actualMaxC,
-      actualMaxF,
-      actualMaxAtLocal: summary?.maxTempAtLocal ?? null,
-      obsCount: summary?.obsCount ?? 0,
-      count: rows.length,
-      changeCount,
-      rows,
-    };
-  },
-});
