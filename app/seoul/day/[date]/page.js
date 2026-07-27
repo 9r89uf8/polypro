@@ -148,6 +148,11 @@ function formatTemperature(row, unit) {
   return Number.isFinite(value) ? `${value.toFixed(1)}°` : "—";
 }
 
+function temperatureTickLabel(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? `${numericValue.toFixed(1)}°` : "";
+}
+
 function captureOffset(row) {
   if (!Number.isFinite(row?.updatedAt)) {
     return "waiting for tagged capture";
@@ -424,7 +429,7 @@ export default function SeoulDayPage() {
           },
           ticks: {
             color: "#64748b",
-            stepSize: 180,
+            stepSize: 60,
             padding: 8,
             font: {
               family: "IBM Plex Mono, monospace",
@@ -441,14 +446,14 @@ export default function SeoulDayPage() {
           grid: { color: "rgba(148, 163, 184, 0.09)" },
           ticks: {
             color: "#64748b",
+            maxTicksLimit: 8,
             padding: 8,
+            precision: 1,
             font: {
               family: "IBM Plex Mono, monospace",
               size: 10,
             },
-            callback(value) {
-              return `${Number(value).toFixed(0)}°`;
-            },
+            callback: temperatureTickLabel,
           },
           title: {
             display: true,
@@ -732,8 +737,13 @@ export default function SeoulDayPage() {
             </p>
           </div>
 
-          <div className="relative min-h-[560px] flex-1 overflow-x-auto border border-white/10 bg-[#07111f]/85 shadow-[0_30px_100px_rgba(0,0,0,0.38)]">
-            <div className="h-[68vh] min-h-[560px] min-w-[900px] p-3 md:h-[72vh] md:max-h-[900px] md:p-5">
+          <div
+            aria-label="Scrollable 24-hour temperature chart"
+            className="relative min-h-[560px] flex-1 overflow-x-auto overscroll-x-contain border border-white/10 bg-[#07111f]/85 shadow-[0_30px_100px_rgba(0,0,0,0.38)]"
+            role="region"
+            tabIndex={0}
+          >
+            <div className="h-[68vh] min-h-[560px] w-[2400px] min-w-[2400px] p-3 md:h-[72vh] md:max-h-[900px] md:p-5">
               <Line data={chartData} options={chartOptions} />
             </div>
             {dayData !== undefined && !hasChartData && (

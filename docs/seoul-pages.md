@@ -31,7 +31,11 @@ full-day chart with exactly three series:
   - cyan high-resolution line
 
 The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
-is marked when the selected date is today.
+is marked when the selected date is today. The chart uses a 2,400-pixel
+horizontal timeline inside a scrollable region, with an x-axis label every hour
+so the full-day series remain legible. Y-axis labels retain one decimal place,
+matching the AMOS sensor resolution instead of rounding several fractional
+ticks to the same whole degree.
 
 The rest of the interface is deliberately compact:
 
