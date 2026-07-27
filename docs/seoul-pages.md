@@ -15,20 +15,18 @@ current `Asia/Seoul` date.
 Example: `/seoul/day/2026-07-27`.
 
 The route is a single-purpose temperature console. Its dominant element is one
-full-day chart with exactly three series:
+full-day chart with exactly two visible series:
 
 - `Actual METAR`
   - parsed RKSI temperature from the NOAA `tgftp` latest-METAR file
   - normally one report every 30 minutes
   - white line with prominent report markers
-- `AMOS · 5 minute`
-  - representative row `rwyNo=2`, `rwyDir=15L`
-  - collected by the complete AMOS display-row audit every five minutes
-  - amber dashed line with diamond markers
 - `AMOS · 1 minute`
   - representative row `rwyNo=2`, `rwyDir=15L`
   - captured by the AMOS minute-rollover watcher
   - cyan high-resolution line
+  - silently uses a five-minute audit snapshot only when the matching
+    one-minute timestamp is missing
 
 The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
 is marked when the selected date is today. The chart uses a 2,400-pixel
@@ -44,7 +42,7 @@ The rest of the interface is deliberately compact:
 - Celsius/Fahrenheit toggle
 - manual live-source synchronization
 - one status card per plotted series
-- capture-second status for the newest one-minute AMOS row
+- capture-second or audit-fallback status for the newest displayed AMOS row
 
 The previous forecast, correlation, publish-race, raw-METAR, and raw-observation
 panels are no longer part of the primary Seoul page.
@@ -76,16 +74,17 @@ row:
 Cadence is part of the new
 `by_station_date_ts_rwy_cadence` identity index. This intentionally permits a
 one-minute and a five-minute capture for the same sensor timestamp to coexist.
-It prevents the chart from presenting a visual subsample of the one-minute
-series as though it were the separately collected five-minute feed.
+The five-minute capture is a separate poll of the same upstream minute value,
+not an average or independent temperature product, so it is not presented as a
+separate chart series.
 
 Rows stored before cadence tagging remain valid because the schema field is
-optional. Production's legacy AMOS history came from the five-minute full-row
-collector, so the page uses those rows only for the five-minute series and only
-before the first cadence-tagged five-minute row:
+optional. The displayed AMOS line starts with legacy/five-minute audit rows and
+then replaces every matching timestamp with its one-minute capture:
 
-- the one-minute line contains only rows explicitly tagged `one_minute`
-- legacy representative rows seed the five-minute history
+- normal live coverage therefore shows only the one-minute observations
+- a five-minute or legacy row appears only where no one-minute row exists
+- fallback points are identified as audit fallbacks in the tooltip
 
 ## Fast one-minute AMOS collector
 
@@ -126,11 +125,12 @@ beating the former fixed request time. The following 11:51 row arrived at
 `seoul:pollLatestAmosRunways`.
 
 It stores all display rows with `collectionCadence="five_minute"`. The chart
-plots only the exact representative `rwyNo=2`, `rwyDir=15L` row, while the
-remaining runway-shaped records are retained for auditing.
+does not plot these snapshots as a separate series. Its exact representative
+`rwyNo=2`, `rwyDir=15L` row can fill a missing timestamp in the single AMOS
+line, while the remaining runway-shaped records are retained for auditing.
 
 Production verification stored separate `one_minute` and `five_minute` rows for
-the same 11:50 KST sensor timestamp.
+the same 11:50 KST sensor timestamp with the same temperature.
 
 ## Actual METAR collector
 

@@ -73,9 +73,11 @@ chart path:
   continues across consecutive minutes.
 - The five-minute collector independently stored its cadence-tagged 11:50 AMOS
   row at second `:16.660`.
-- Both cadence rows coexist for the same sensor timestamp, proving that the
-  chart's five-minute series is not a client-side resample of the one-minute
-  series.
+- Both cadence rows coexist for the same sensor timestamp and carry the same
+  upstream temperature. The five-minute collector is a separate polling
+  snapshot, not an average or independent product, so the chart presents only
+  the one-minute AMOS line and uses five-minute rows solely to fill missing
+  timestamps.
 
 ## Ranked findings
 
