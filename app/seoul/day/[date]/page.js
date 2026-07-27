@@ -196,6 +196,19 @@ function buildCadenceRows(amosRows, cadence) {
   return dedupeRowsByObservationTime([...legacyRows, ...taggedRows]);
 }
 
+function mergeAmosDisplayRows(oneMinuteRows, auditRows) {
+  const byTime = new Map(
+    auditRows.map((row) => [
+      row.obsTimeUtc,
+      { ...row, displayCadence: "audit_fallback" },
+    ]),
+  );
+  for (const row of oneMinuteRows) {
+    byTime.set(row.obsTimeUtc, { ...row, displayCadence: "one_minute" });
+  }
+  return [...byTime.values()].sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
+}
+
 function toChartPoints(rows, unit, extra = () => ({})) {
   return rows
     .map((row) => {
@@ -215,9 +228,10 @@ function toChartPoints(rows, unit, extra = () => ({})) {
     .filter(Boolean);
 }
 
-function buildChartData(metarRows, fiveMinuteRows, oneMinuteRows, unit) {
-  const oneMinutePoints = toChartPoints(oneMinuteRows, unit);
-  const fiveMinutePoints = toChartPoints(fiveMinuteRows, unit);
+function buildChartData(metarRows, amosDisplayRows, unit) {
+  const amosPoints = toChartPoints(amosDisplayRows, unit, (row) => ({
+    displayCadence: row.displayCadence,
+  }));
   const metarPoints = toChartPoints(metarRows, unit, (row) => ({
     reportType: row.reportType,
     rawMetar: row.rawMetar,
@@ -227,7 +241,7 @@ function buildChartData(metarRows, fiveMinuteRows, oneMinuteRows, unit) {
     datasets: [
       {
         label: "AMOS · 1 minute",
-        data: oneMinutePoints,
+        data: amosPoints,
         borderColor: "#22d3ee",
         backgroundColor: "#22d3ee",
         borderWidth: 2.25,
@@ -235,20 +249,6 @@ function buildChartData(metarRows, fiveMinuteRows, oneMinuteRows, unit) {
         pointHitRadius: 8,
         pointHoverRadius: 4,
         tension: 0.18,
-        spanGaps: false,
-        order: 3,
-      },
-      {
-        label: "AMOS · 5 minute",
-        data: fiveMinutePoints,
-        borderColor: "#fbbf24",
-        backgroundColor: "#fbbf24",
-        borderWidth: 1.5,
-        borderDash: [3, 5],
-        pointStyle: "rectRot",
-        pointRadius: 4,
-        pointHoverRadius: 6,
-        tension: 0.15,
         spanGaps: false,
         order: 2,
       },
@@ -331,10 +331,13 @@ export default function SeoulDayPage() {
     () => buildCadenceRows(amosRows, "five_minute"),
     [amosRows],
   );
+  const amosDisplayRows = useMemo(
+    () => mergeAmosDisplayRows(oneMinuteRows, fiveMinuteRows),
+    [fiveMinuteRows, oneMinuteRows],
+  );
 
   const latestMetar = metarRows.at(-1) ?? null;
-  const latestOneMinute = oneMinuteRows.at(-1) ?? null;
-  const latestFiveMinute = fiveMinuteRows.at(-1) ?? null;
+  const latestAmos = amosDisplayRows.at(-1) ?? null;
   const currentSeoulMinute = useMemo(() => {
     if (!isToday) {
       return null;
@@ -352,8 +355,8 @@ export default function SeoulDayPage() {
   }, [clockNowMs, isToday]);
 
   const chartData = useMemo(
-    () => buildChartData(metarRows, fiveMinuteRows, oneMinuteRows, unit),
-    [fiveMinuteRows, metarRows, oneMinuteRows, unit],
+    () => buildChartData(metarRows, amosDisplayRows, unit),
+    [amosDisplayRows, metarRows, unit],
   );
 
   const chartOptions = useMemo(
@@ -404,9 +407,13 @@ export default function SeoulDayPage() {
               const reportType = item.raw?.reportType
                 ? ` · ${item.raw.reportType}`
                 : "";
+              const auditFallback =
+                item.raw?.displayCadence === "audit_fallback"
+                  ? " · five-minute audit fallback"
+                  : "";
               return `${item.dataset.label}: ${item.parsed.y.toFixed(
                 1,
-              )}°${unit}${reportType}`;
+              )}°${unit}${reportType}${auditFallback}`;
             },
           },
         },
@@ -552,8 +559,7 @@ export default function SeoulDayPage() {
     );
   }
 
-  const hasChartData =
-    metarRows.length + fiveMinuteRows.length + oneMinuteRows.length > 0;
+  const hasChartData = metarRows.length + amosDisplayRows.length > 0;
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#050b14] text-slate-100">
@@ -590,8 +596,8 @@ export default function SeoulDayPage() {
               Seoul temperature pulse
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-              Actual RKSI METAR against distinct five-minute and fastest
-              one-minute AMOS captures, aligned on Seoul local time.
+              Actual RKSI METAR against the fastest one-minute AMOS temperature,
+              aligned on Seoul local time.
             </p>
           </div>
 
@@ -665,7 +671,7 @@ export default function SeoulDayPage() {
           </div>
         </header>
 
-        <section className="grid grid-cols-2 gap-y-5 border-b border-white/10 py-5 md:grid-cols-4">
+        <section className="grid grid-cols-1 gap-y-5 border-b border-white/10 py-5 md:grid-cols-3">
           <SourceCard
             accent="#f8fafc"
             label="Actual METAR"
@@ -681,28 +687,20 @@ export default function SeoulDayPage() {
             count={metarRows.length}
           />
           <SourceCard
-            accent="#fbbf24"
-            label="AMOS 5 minute"
-            value={formatTemperature(latestFiveMinute, unit)}
-            unit={unit}
-            detail={
-              latestFiveMinute
-                ? `15L · ${formatClock(latestFiveMinute.obsTimeUtc)}`
-                : "awaiting capture"
-            }
-            count={fiveMinuteRows.length}
-          />
-          <SourceCard
             accent="#22d3ee"
-            label="AMOS 1 minute"
-            value={formatTemperature(latestOneMinute, unit)}
+            label="AMOS · 1 minute"
+            value={formatTemperature(latestAmos, unit)}
             unit={unit}
             detail={
-              latestOneMinute
-                ? `15L · ${formatClock(latestOneMinute.obsTimeUtc)}`
+              latestAmos
+                ? `15L · ${formatClock(latestAmos.obsTimeUtc)}${
+                    latestAmos.displayCadence === "audit_fallback"
+                      ? " · audit fallback"
+                      : ""
+                  }`
                 : "awaiting capture"
             }
-            count={oneMinuteRows.length}
+            count={amosDisplayRows.length}
           />
           <div className="border-l border-white/10 px-4 md:px-6">
             <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">
@@ -712,8 +710,10 @@ export default function SeoulDayPage() {
               {formatClock(clockNowMs, true)}
             </p>
             <p className="mt-1 truncate font-mono text-[10px] text-slate-500">
-              {latestOneMinute
-                ? captureOffset(latestOneMinute)
+              {latestAmos
+                ? latestAmos.displayCadence === "audit_fallback"
+                  ? "five-minute audit fallback"
+                  : captureOffset(latestAmos)
                 : refreshState.message || "Asia/Seoul"}
             </p>
           </div>
@@ -733,7 +733,7 @@ export default function SeoulDayPage() {
               {dayData === undefined
                 ? "Loading telemetry…"
                 : refreshState.message ||
-                  `${metarRows.length + fiveMinuteRows.length + oneMinuteRows.length} plotted observations`}
+                  `${metarRows.length + amosDisplayRows.length} plotted observations`}
             </p>
           </div>
 
@@ -763,8 +763,8 @@ export default function SeoulDayPage() {
 
         <footer className="flex flex-col gap-2 py-4 font-mono text-[10px] leading-5 text-slate-600 md:flex-row md:items-center md:justify-between">
           <p>
-            AMOS uses the feed row designated 15L. Cadence tags preserve the
-            one-minute and five-minute capture paths separately.
+            AMOS uses the feed row designated 15L. Five-minute snapshots remain
+            available only as an audit fallback for missed minute captures.
           </p>
           <p>NOAA TGFTP METAR · KMA AMOS MOBILE FEED</p>
         </footer>
