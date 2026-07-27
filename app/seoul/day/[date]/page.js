@@ -191,7 +191,7 @@ function buildCadenceRows(amosRows, cadence) {
   return dedupeRowsByObservationTime([...legacyRows, ...taggedRows]);
 }
 
-function toChartPoints(rows, unit, extra = {}) {
+function toChartPoints(rows, unit, extra = () => ({})) {
   return rows
     .map((row) => {
       const x = parseMinute(row.obsTimeLocal);
