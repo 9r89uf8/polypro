@@ -1,16 +1,42 @@
 import {
   actionGeneric,
+  internalActionGeneric,
   internalMutationGeneric,
   queryGeneric,
 } from "convex/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 
 const SEOUL_TIMEZONE = "Asia/Seoul";
 const AMO_FETCH_TIMEOUT_MS = 25000;
+const AMOS_BURST_FETCH_TIMEOUT_MS = 3000;
+const AMOS_BURST_START_SECOND = 12;
+const AMOS_BURST_INTERVAL_MS = 1000;
+const AMOS_BURST_MAX_ATTEMPTS = 8;
 const DEFAULT_AMO_API_BASE_URL = "http://amoapi.kma.go.kr";
 const GLOBAL_AMO_API_BASE_URL = "https://global.amo.go.kr/mobileApi/global_api/v1";
 const NOAA_LATEST_METAR_BASE_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
+const RKSI_REPRESENTATIVE_AMOS_DIRECTION = "15L";
+const RKSI_SECONDARY_AMOS_DIRECTION = "16L";
+const RKSI_TEMPERATURE_SITE_RUNWAYS = new Map([
+  [RKSI_REPRESENTATIVE_AMOS_DIRECTION, "2"],
+  [RKSI_SECONDARY_AMOS_DIRECTION, "3"],
+]);
+const AMOS_COLLECTION_CADENCE = {
+  ONE_MINUTE: "one_minute",
+  FIVE_MINUTE: "five_minute",
+};
+
+function getNextAmosTemperatureBurst(now = Date.now()) {
+  const targetObsTimeUtc = Math.floor(now / 60000) * 60000 + 60000;
+  const scheduledAt = targetObsTimeUtc + AMOS_BURST_START_SECOND * 1000;
+  return {
+    targetObsTimeUtc,
+    scheduledAt,
+    delayMs: Math.max(0, scheduledAt - now),
+  };
+}
 const RACE_SOURCE = {
   AMO: "amo",
   TGFTP: "tgftp",
@@ -244,6 +270,12 @@ function parseHttpTimestamp(value) {
   return Number.isFinite(epochMs) ? epochMs : null;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function parseSeoulLocalTimestamp(value) {
   const match =
     /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
@@ -387,6 +419,7 @@ function inferPublishRaceReportType(row) {
 function amosObservationChanged(existing, candidate) {
   const fields = [
     "obsTimeLocal",
+    "collectionCadence",
     "rwyUse",
     "rwyMain",
     "tempC",
@@ -558,9 +591,9 @@ function buildGlobalAmoAmosInfoUrl(stationIcao) {
   return url.toString();
 }
 
-async function fetchWithTimeout(url, init = {}) {
+async function fetchWithTimeout(url, init = {}, timeoutMs = AMO_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), AMO_FETCH_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, {
       cache: "no-store",
@@ -617,10 +650,12 @@ function parseAmoRunwayRow(item, stationIcao) {
     obsTimeUtc,
     obsTimeLocal,
     rwyNo: toNonEmptyString(item?.rwy_no) ?? "?",
-    rwyDir: toNonEmptyString(item?.rwy_dir) ?? "?",
-    ...(toNonEmptyString(item?.rwy_use) ? { rwyUse: toNonEmptyString(item?.rwy_use) } : {}),
+    rwyDir: (toNonEmptyString(item?.rwy_dir) ?? "?").toUpperCase(),
+    ...(toNonEmptyString(item?.rwy_use)
+      ? { rwyUse: toNonEmptyString(item?.rwy_use).toUpperCase() }
+      : {}),
     ...(toNonEmptyString(item?.rwy_main)
-      ? { rwyMain: toNonEmptyString(item?.rwy_main) }
+      ? { rwyMain: toNonEmptyString(item?.rwy_main).toUpperCase() }
       : {}),
     ...(tempC !== null ? { tempC: roundToTenth(tempC), tempF: toFahrenheit(tempC) } : {}),
     ...(dewpointC !== null
@@ -648,14 +683,17 @@ function parseAmoRunwayRow(item, stationIcao) {
   };
 }
 
-async function fetchLatestAmoRunwayRows(stationIcao) {
+async function fetchLatestAmoRunwayRows(
+  stationIcao,
+  timeoutMs = AMO_FETCH_TIMEOUT_MS,
+) {
   const response = await fetchWithTimeout(buildGlobalAmoAmosInfoUrl(stationIcao), {
     headers: {
       Accept: "application/json,*/*",
       "Cache-Control": "no-cache",
       "User-Agent": "Mozilla/5.0",
     },
-  });
+  }, timeoutMs);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
@@ -679,6 +717,38 @@ async function fetchLatestAmoRunwayRows(stationIcao) {
   }
 
   return rows;
+}
+
+function selectRksiTemperatureSiteRows(sourceRows) {
+  const latestByDirection = new Map();
+  for (const row of sourceRows) {
+    const expectedRunwayNo = RKSI_TEMPERATURE_SITE_RUNWAYS.get(row.rwyDir);
+    if (row.rwyNo !== expectedRunwayNo || !Number.isFinite(row.tempC)) {
+      continue;
+    }
+    const existing = latestByDirection.get(row.rwyDir);
+    if (!existing || row.obsTimeUtc > existing.obsTimeUtc) {
+      latestByDirection.set(row.rwyDir, row);
+    }
+  }
+
+  const representative15L =
+    latestByDirection.get(RKSI_REPRESENTATIVE_AMOS_DIRECTION) ?? null;
+  const secondary16L =
+    latestByDirection.get(RKSI_SECONDARY_AMOS_DIRECTION) ?? null;
+
+  return {
+    representative15L,
+    secondary16L,
+    rows: [representative15L, secondary16L].filter(Boolean),
+  };
+}
+
+function withAmosCollectionCadence(rows, collectionCadence) {
+  return rows.map((row) => ({
+    ...row,
+    collectionCadence,
+  }));
 }
 
 async function fetchLatestTgftpRaceHit(stationIcao) {
@@ -705,6 +775,20 @@ async function fetchLatestTgftpRaceHit(stationIcao) {
     rawMetar: parsed.rawMetar,
     lastModifiedAt: parseHttpTimestamp(response.headers.get("last-modified")),
   };
+}
+
+function buildTgftpObservationRow(hit, stationIcao) {
+  const row = buildObservationRow({
+    stationIcao,
+    rawMetar: hit.rawMetar,
+    obsTimeUtc: hit.reportTsUtc,
+    sourcePrefix: "noaa_tgftp",
+    fallbackReportType: "METAR",
+  });
+  if (!row) {
+    throw new Error("NOAA tgftp METAR did not include a parseable temperature.");
+  }
+  return row;
 }
 
 export const upsertStationRowsBatch = internalMutationGeneric({
@@ -804,6 +888,10 @@ export const upsertAmosRowsBatch = internalMutationGeneric({
         date: v.string(),
         obsTimeUtc: v.number(),
         obsTimeLocal: v.string(),
+        collectionCadence: v.union(
+          v.literal(AMOS_COLLECTION_CADENCE.ONE_MINUTE),
+          v.literal(AMOS_COLLECTION_CADENCE.FIVE_MINUTE),
+        ),
         rwyNo: v.string(),
         rwyDir: v.string(),
         rwyUse: v.optional(v.string()),
@@ -843,13 +931,14 @@ export const upsertAmosRowsBatch = internalMutationGeneric({
 
       const existing = await ctx.db
         .query("seoulAmosObservations")
-        .withIndex("by_station_date_ts_rwy", (query) =>
+        .withIndex("by_station_date_ts_rwy_cadence", (query) =>
           query
             .eq("stationIcao", row.stationIcao)
             .eq("date", row.date)
             .eq("obsTimeUtc", row.obsTimeUtc)
             .eq("rwyNo", row.rwyNo)
-            .eq("rwyDir", row.rwyDir),
+            .eq("rwyDir", row.rwyDir)
+            .eq("collectionCadence", row.collectionCadence),
         )
         .first();
 
@@ -990,6 +1079,43 @@ export const recordPublishRaceHit = internalMutationGeneric({
   },
 });
 
+async function ingestLatestTgftpMetar(ctx, stationIcao) {
+  const hit = await fetchLatestTgftpRaceHit(stationIcao);
+  const row = buildTgftpObservationRow(hit, stationIcao);
+  const [result, raceRow] = await Promise.all([
+    ctx.runMutation("seoul:upsertStationRowsBatch", {
+      stationIcao,
+      rows: [row],
+    }),
+    ctx.runMutation("seoul:recordPublishRaceHit", {
+      stationIcao,
+      reportTsUtc: hit.reportTsUtc,
+      reportType: row.reportType,
+      source: RACE_SOURCE.TGFTP,
+      rawMetar: hit.rawMetar,
+      seenAt: hit.seenAt,
+      ...(Number.isFinite(hit.lastModifiedAt)
+        ? { sourceLastModifiedAt: hit.lastModifiedAt }
+        : {}),
+    }),
+  ]);
+
+  return {
+    ok: true,
+    stationIcao,
+    row,
+    reportTsUtc: hit.reportTsUtc,
+    reportType: row.reportType,
+    rawMetar: hit.rawMetar,
+    tgftpFirstSeenAt: raceRow?.tgftpFirstSeenAt ?? hit.seenAt,
+    tgftpLastModifiedAt: hit.lastModifiedAt,
+    winner: raceRow?.winner ?? null,
+    leadMs: raceRow?.leadMs ?? null,
+    availabilityLagMs: Math.max(0, hit.seenAt - hit.reportTsUtc),
+    ...result,
+  };
+}
+
 export const pollLatestStationMetar = actionGeneric({
   args: {
     stationIcao: v.string(),
@@ -1038,29 +1164,21 @@ export const pollLatestNoaaPublishRace = actionGeneric({
       throw new Error("stationIcao is required.");
     }
 
-    const hit = await fetchLatestTgftpRaceHit(stationIcao);
-    const raceRow = await ctx.runMutation("seoul:recordPublishRaceHit", {
-      stationIcao,
-      reportTsUtc: hit.reportTsUtc,
-      source: RACE_SOURCE.TGFTP,
-      rawMetar: hit.rawMetar,
-      seenAt: hit.seenAt,
-      ...(Number.isFinite(hit.lastModifiedAt)
-        ? { sourceLastModifiedAt: hit.lastModifiedAt }
-        : {}),
-    });
+    return await ingestLatestTgftpMetar(ctx, stationIcao);
+  },
+});
 
-    return {
-      ok: true,
-      stationIcao,
-      reportTsUtc: hit.reportTsUtc,
-      reportType: raceRow?.reportType ?? null,
-      rawMetar: hit.rawMetar,
-      tgftpFirstSeenAt: raceRow?.tgftpFirstSeenAt ?? hit.seenAt,
-      tgftpLastModifiedAt: hit.lastModifiedAt,
-      winner: raceRow?.winner ?? null,
-      leadMs: raceRow?.leadMs ?? null,
-    };
+export const pollLatestNoaaStationMetar = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (!stationIcao) {
+      throw new Error("stationIcao is required.");
+    }
+
+    return await ingestLatestTgftpMetar(ctx, stationIcao);
   },
 });
 
@@ -1074,7 +1192,11 @@ export const pollLatestAmosRunways = actionGeneric({
       throw new Error("stationIcao is required.");
     }
 
-    const rows = await fetchLatestAmoRunwayRows(stationIcao);
+    const sourceRows = await fetchLatestAmoRunwayRows(stationIcao);
+    const rows = withAmosCollectionCadence(
+      sourceRows,
+      AMOS_COLLECTION_CADENCE.FIVE_MINUTE,
+    );
     const result = await ctx.runMutation("seoul:upsertAmosRowsBatch", {
       stationIcao,
       rows,
@@ -1090,6 +1212,176 @@ export const pollLatestAmosRunways = actionGeneric({
       sampleTimeLocal: rows[0]?.obsTimeLocal ?? null,
       latest15L,
       ...result,
+    };
+  },
+});
+
+export const pollLatestAmosTemperatureSites = actionGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (stationIcao !== "RKSI") {
+      throw new Error("The AMOS temperature-site selector currently supports RKSI only.");
+    }
+
+    const sourceRows = await fetchLatestAmoRunwayRows(stationIcao);
+    const selected = selectRksiTemperatureSiteRows(sourceRows);
+
+    if (!selected.representative15L) {
+      throw new Error(
+        "AMO runway info response did not include the RKSI representative 15L temperature.",
+      );
+    }
+
+    const rows = withAmosCollectionCadence(
+      selected.rows,
+      AMOS_COLLECTION_CADENCE.ONE_MINUTE,
+    );
+    const representative15L =
+      rows.find((row) => row.rwyDir === RKSI_REPRESENTATIVE_AMOS_DIRECTION) ??
+      null;
+    const secondary16L =
+      rows.find((row) => row.rwyDir === RKSI_SECONDARY_AMOS_DIRECTION) ?? null;
+    const result = await ctx.runMutation("seoul:upsertAmosRowsBatch", {
+      stationIcao,
+      rows,
+    });
+
+    return {
+      ok: true,
+      stationIcao,
+      sourceRowCount: sourceRows.length,
+      rowCount: rows.length,
+      sampleTimeUtc: representative15L.obsTimeUtc,
+      sampleTimeLocal: representative15L.obsTimeLocal,
+      representative15L,
+      secondary16L,
+      ...result,
+    };
+  },
+});
+
+export const captureLatestAmosTemperatureMinute = internalActionGeneric({
+  args: {
+    stationIcao: v.string(),
+    targetObsTimeUtc: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (stationIcao !== "RKSI") {
+      throw new Error("The AMOS temperature burst currently supports RKSI only.");
+    }
+
+    const targetObsTimeUtc =
+      Math.floor(Number(args.targetObsTimeUtc) / 60000) * 60000;
+    if (!Number.isFinite(targetObsTimeUtc)) {
+      throw new Error("targetObsTimeUtc must be a finite epoch timestamp.");
+    }
+
+    const startedAt = Date.now();
+    let attemptCount = 0;
+    let lastObservedTimeUtc = null;
+    let lastError = null;
+
+    while (attemptCount < AMOS_BURST_MAX_ATTEMPTS) {
+      const attemptStartedAt = Date.now();
+      attemptCount += 1;
+
+      try {
+        const sourceRows = await fetchLatestAmoRunwayRows(
+          stationIcao,
+          AMOS_BURST_FETCH_TIMEOUT_MS,
+        );
+        const selected = selectRksiTemperatureSiteRows(sourceRows);
+        if (!selected.representative15L) {
+          throw new Error(
+            "AMO runway info response did not include the RKSI representative 15L temperature.",
+          );
+        }
+
+        lastObservedTimeUtc = selected.representative15L.obsTimeUtc;
+        if (lastObservedTimeUtc >= targetObsTimeUtc) {
+          const rows = withAmosCollectionCadence(
+            selected.rows,
+            AMOS_COLLECTION_CADENCE.ONE_MINUTE,
+          );
+          const result = await ctx.runMutation("seoul:upsertAmosRowsBatch", {
+            stationIcao,
+            rows,
+          });
+          const capturedAt = Date.now();
+
+          return {
+            ok: true,
+            stationIcao,
+            targetObsTimeUtc,
+            sampleTimeUtc: lastObservedTimeUtc,
+            sampleTimeLocal: selected.representative15L.obsTimeLocal,
+            capturedAt,
+            captureLagMs: Math.max(0, capturedAt - lastObservedTimeUtc),
+            attemptCount,
+            sourceRowCount: sourceRows.length,
+            representative15L: rows.find(
+              (row) => row.rwyDir === RKSI_REPRESENTATIVE_AMOS_DIRECTION,
+            ),
+            secondary16L:
+              rows.find(
+                (row) => row.rwyDir === RKSI_SECONDARY_AMOS_DIRECTION,
+              ) ?? null,
+            ...result,
+          };
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+
+      if (attemptCount >= AMOS_BURST_MAX_ATTEMPTS) {
+        break;
+      }
+      const elapsedMs = Date.now() - attemptStartedAt;
+      await sleep(Math.max(0, AMOS_BURST_INTERVAL_MS - elapsedMs));
+    }
+
+    return {
+      ok: false,
+      stationIcao,
+      targetObsTimeUtc,
+      startedAt,
+      finishedAt: Date.now(),
+      attemptCount,
+      lastObservedTimeUtc,
+      lastError,
+    };
+  },
+});
+
+export const scheduleLatestAmosTemperatureSites = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(args.stationIcao ?? "").trim().toUpperCase();
+    if (stationIcao !== "RKSI") {
+      throw new Error("The AMOS temperature-site scheduler currently supports RKSI only.");
+    }
+
+    const burst = getNextAmosTemperatureBurst();
+    const scheduledFunctionId = await ctx.scheduler.runAt(
+      burst.scheduledAt,
+      internal.seoul.captureLatestAmosTemperatureMinute,
+      {
+        stationIcao,
+        targetObsTimeUtc: burst.targetObsTimeUtc,
+      },
+    );
+
+    return {
+      ok: true,
+      stationIcao,
+      ...burst,
+      scheduledFunctionId,
     };
   },
 });

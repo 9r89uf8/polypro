@@ -220,29 +220,26 @@ crons.cron(
     { stationIcao: "LTAC" },
 );
 
-// Runs only around the expected RKSI routine publication windows so the
-// official AMO latest METAR endpoint stays fresh without minute-by-minute
-// background polling all day.
+// Keeps the actual RKSI METAR series current from NOAA and preserves NOAA
+// first-seen timing for the historical publish-race data.
 crons.cron(
-    "seoul_amo_latest_window_minutes",
-    "0-1,29-31,58-59 * * * *",
-    api.seoul.pollLatestStationMetar,
-    { stationIcao: "RKSI" },
-);
-
-// Runs every minute so the NOAA side of the RKSI publish-race experiment is
-// always sampled, even when mirrored publication drifts past the nominal
-// half-hour boundaries.
-crons.cron(
-    "seoul_tgftp_publish_race_every_minute",
+    "seoul_noaa_metar_every_minute",
     "* * * * *",
-    api.seoul.pollLatestNoaaPublishRace,
+    api.seoul.pollLatestNoaaStationMetar,
     { stationIcao: "RKSI" },
 );
 
-// Runs every 5 minutes so all RKSI AMOS runway-complex sensor rows are stored.
-// The Seoul page overlays 15L by default, but the full runway set is kept so
-// we can compare which complex best tracks the official METAR temperature.
+// Starts a bounded one-second AMOS rollover watch at second :12. It exits as
+// soon as the new minute appears, normally around second :14-15.
+crons.cron(
+    "seoul_amos_temperature_sites_every_minute",
+    "* * * * *",
+    internal.seoul.scheduleLatestAmosTemperatureSites,
+    { stationIcao: "RKSI" },
+);
+
+// Retains a cadence-tagged five-minute snapshot of every AMOS display row.
+// The chart uses its representative 15L row as the separate 5-minute series.
 crons.cron(
     "seoul_amos_runways_every_5_min",
     "*/5 * * * *",

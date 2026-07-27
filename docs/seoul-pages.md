@@ -1,167 +1,184 @@
-# Seoul RKSI Pages
+# Seoul RKSI live-temperature page
 
-This document describes the Seoul/Incheon routes and the RKSI official ingest
-used by those pages.
+This document describes the focused RKSI temperature view and the collectors
+that feed it.
 
-## `/seoul/today`
+## Routes
 
-Purpose: stable entrypoint for the current Seoul local day.
+### `/seoul/today`
 
-What this route does:
+This stable entrypoint redirects server-side to `/seoul/day/[date]`, using the
+current `Asia/Seoul` date.
 
-- Server-side redirect to `/seoul/day/[date]` where `[date]` is the current
-  `Asia/Seoul` date in `YYYY-MM-DD`.
-- Avoids client-side date flicker and gives one bookmarkable URL for "today".
+### `/seoul/day/[date]`
 
-## `/seoul/day/[date]`
+Example: `/seoul/day/2026-07-27`.
 
-Example route: `/seoul/day/2026-03-18`
+The route is a single-purpose temperature console. Its dominant element is one
+full-day chart with exactly three series:
 
-Purpose: official RKSI METAR day chart plus AMOS runway correlation data and a
-publish-race view, with a separate Weather.com 5-day forecast panel.
+- `Actual METAR`
+  - parsed RKSI temperature from the NOAA `tgftp` latest-METAR file
+  - normally one report every 30 minutes
+  - white line with prominent report markers
+- `AMOS · 5 minute`
+  - representative row `rwyNo=2`, `rwyDir=15L`
+  - collected by the complete AMOS display-row audit every five minutes
+  - amber dashed line with diamond markers
+- `AMOS · 1 minute`
+  - representative row `rwyNo=2`, `rwyDir=15L`
+  - captured by the AMOS minute-rollover watcher
+  - cyan high-resolution line
 
-What this page displays:
+The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
+is marked when the selected date is today.
 
-- Header with date navigation:
-  - `Home`
-  - `Current Date YYYY-MM-DD` for the current Seoul local date
-  - two quick previous-day links
-  - date picker + `Go`
-- Unit toggle (`C` / `F`)
-- `Refresh Current Data` button
-- Live badge when viewing the current Seoul local date
-- Summary cards:
-  - `Latest`
-  - `Day Range`
-  - `Messages`
-  - `Latest AMOS 15L`
-- One line chart:
-  - official RKSI `METAR`
-  - stored RKSI AMOS runway temperature for `15L`
-  - off-hour `SPECI` points if the official AMO feed exposes them
-  - solid blue for official `METAR`/`SPECI`
-  - dashed orange for the stored 5-minute `15L` AMOS feed
-  - x-axis is `Asia/Seoul` local time
-- `15L Correlation Check` table:
-  - nearest stored `15L` AMOS sample for each official `METAR`/`SPECI`
-  - shows official temp, AMOS temp, time gap, and delta
-- `Weather.com 5-Day Forecast` table:
-  - current 5-day forecast for RKSI/Incheon from Weather.com
-  - shows min/max temperature plus day/night narrative
-  - highlights the selected route date when it falls inside the current
-    5-day forecast window
-- `Latest Raw METAR` panel
-- `Publish Race` table showing recent first-seen timing across the official
-  AMO/KMA latest-METAR API and NOAA `tgftp`
-  - publish-race timestamps are displayed in `America/Chicago`
-  - the UI shows AMO seen time, NOAA `tgftp` seen time, and NOAA `tgftp`
-    `Last-Modified`
-- Raw observations table:
-  - `Local Time`
-  - `Type`
-  - `Temp`
-  - `First Seen`
-  - `Source`
-  - `Raw METAR`
+The rest of the interface is deliberately compact:
 
-Behavior details:
+- RKSI/live status and Seoul clock
+- previous day, next day, date picker, and today navigation
+- Celsius/Fahrenheit toggle
+- manual live-source synchronization
+- one status card per plotted series
+- capture-second status for the newest one-minute AMOS row
 
-- Page expects a `YYYY-MM-DD` date segment.
-- If viewing today in `Asia/Seoul`:
-  - runs `seoul:pollLatestStationMetar` on first load
-  - also runs `seoul:pollLatestAmosRunways` on first load
-  - also loads the Weather.com 5-day forecast on first load
-  - manual refresh reruns the official poll, the AMOS runway pull, and the
-    Weather.com forecast fetch
-  - the page shows the stored AMO first-seen time for any row captured from the
-    latest official endpoint
-  - the page also shows the latest stored `15L` runway temperature captured
-    from `amos_info.do`
-- If viewing a historical date:
-  - no official or AMOS history backfill is attempted
-  - the page only shows rows already captured live and stored earlier
-- Observations are deduped by `(stationIcao, date, obsTimeUtc)` in
-  `seoulMetarObservations`.
-- AMOS runway observations are deduped by `(stationIcao, date, obsTimeUtc,
-  rwyNo, rwyDir)` in `seoulAmosObservations`.
-- Recent publish-race rows are loaded from `seoulPublishRaceReports`.
-- The publish-race logger is separate from the day-chart ingest:
-  - official first-seen times are written by `seoul:pollLatestStationMetar`
-  - NOAA `tgftp` first-seen times are written by
-    `seoul:pollLatestNoaaPublishRace`
-  - winner/lead are computed from the earliest two sources seen for the same
-    `reportTsUtc`
-- The AMOS runway collector is also separate from the official METAR ingest:
-  - `seoul:pollLatestAmosRunways` stores all RKSI runway rows from
-    `amos_info.do` every 5 minutes
-  - the UI overlays only `15L` by default, but the full runway set is kept in
-    storage so other complexes can be compared later
-- The publish-race table defaults to routine reports only, so captured `SPECI`
-  rows do not crowd the comparison view.
+The previous forecast, correlation, publish-race, raw-METAR, and raw-observation
+panels are no longer part of the primary Seoul page.
 
-## Official Source
+## Client behavior
 
-Official latest RKSI METAR XML:
+The page subscribes to `seoul:getDayStationRows`, so chart data updates
+reactively after the collectors write to Convex.
 
-- `http://amoapi.kma.go.kr/amoApi/metar?icao=RKSI`
+For the current Seoul date, the first page load and `Sync now` request:
 
-NOAA comparison source:
+- `seoul:pollLatestNoaaStationMetar`
+- `seoul:pollLatestAmosTemperatureSites`
 
-- `https://tgftp.nws.noaa.gov/data/observations/metar/stations/RKSI.TXT`
+The manual AMOS request is a single immediate fetch. The scheduled rollover
+watch remains the lowest-latency path.
 
-Live AMOS runway-sensor source:
+Historical routes only display already-captured rows. There is no historical
+backfill from these latest-value endpoints.
 
-- `https://global.amo.go.kr/mobileApi/global_api/v1/amos_info.do?air_code=RKSI`
+## Truthful cadence separation
 
-Weather.com forecast source:
+`seoulAmosObservations.collectionCadence` records which collector produced a
+row:
 
-- `https://api.weather.com/v3/wx/forecast/daily/5day`
+- `one_minute`
+- `five_minute`
 
-Research note used while choosing the Seoul source:
+Cadence is part of the new
+`by_station_date_ts_rwy_cadence` identity index. This intentionally permits a
+one-minute and a five-minute capture for the same sensor timestamp to coexist.
+It prevents the chart from presenting a visual subsample of the one-minute
+series as though it were the separately collected five-minute feed.
 
-- [docs/seoul.md](/mnt/c/Users/alexa/WebstormProjects/polypro2/docs/seoul.md)
+Rows stored before cadence tagging remain valid because the schema field is
+optional. Production's legacy AMOS history came from the five-minute full-row
+collector, so the page uses those rows only for the five-minute series and only
+before the first cadence-tagged five-minute row:
 
-Known limitation:
+- the one-minute line contains only rows explicitly tagged `one_minute`
+- legacy representative rows seed the five-minute history
 
-- The official endpoint wired here is a latest-message lookup, not a confirmed
-  date-bounded history search.
-- That means older dates are accurate only if those rows were already captured
-  live by the cron or by an earlier page visit.
+## Fast one-minute AMOS collector
 
-## Data Model
+Source:
 
-- `seoulMetarObservations`
-  - one row per official RKSI `METAR` or `SPECI`
-  - stores local date, UTC timestamp, local timestamp, raw METAR, parsed temp,
-    source, and optional `amoFirstSeenAt`
-- `seoulDailySummaries`
-  - one row per station/date
-  - stores obs count, latest row fields, min/max temps, and min/max times
-- `seoulAmosObservations`
-  - one row per stored RKSI AMOS runway sample
-  - stores local date/time, runway identifiers, temp, dewpoint, QNH, wind
-    fields, visibility fields, and the raw JSON row
-- `seoulPublishRaceReports`
-  - one row per station/report timestamp
-  - stores AMO first-seen time, NOAA `tgftp` first-seen time, optional NOAA
-    `tgftp` `Last-Modified`, winner, and lead
+```text
+https://global.amo.go.kr/mobileApi/global_api/v1/amos_info.do?air_code=RKSI
+```
 
-## Scheduled Ingest
+The source publishes one new observation minute around second `:14–:16`; it
+does not provide a push stream.
 
-Convex crons:
+`seoul_amos_temperature_sites_every_minute` invokes the internal
+`seoul:scheduleLatestAmosTemperatureSites` mutation. The mutation schedules
+`seoul:captureLatestAmosTemperatureMinute` for second `:12` of the next minute.
 
-- `seoul_amo_latest_window_minutes`
-  - calls `seoul:pollLatestStationMetar`
-  - station argument is `RKSI`
-  - runs at minute `29`, `30`, `31`, `58`, `59`, `00`, and `01`
-- `seoul_tgftp_publish_race_every_minute`
-  - calls `seoul:pollLatestNoaaPublishRace`
-  - station argument is `RKSI`
-- `seoul_amos_runways_every_5_min`
-  - calls `seoul:pollLatestAmosRunways`
-  - station argument is `RKSI`
-  - stores all runway-complex AMOS rows every 5 minutes
+The internal action:
 
-Seoul does not use a 1-second publish-race watch. The official AMO side is
-sampled only in the routine half-hour windows so the app avoids excessive RKSI
-API traffic while still capturing who usually publishes first.
+1. receives the expected observation-minute timestamp;
+2. sends sequential requests no more often than once per second;
+3. uses a three-second timeout for each request;
+4. accepts freshness when the representative 15L `obsTimeUtc` reaches the
+   expected minute, even if temperature did not change;
+5. stops immediately and performs one idempotent batch upsert for 15L and 16L;
+6. stops after eight attempts if the source remains stale or unavailable.
+
+A measured rollover became fresh on the third request at `:14.753`, about five
+seconds earlier than the former fixed `:20` fetch.
+
+The production cron subsequently stored the 11:50 KST one-minute row at
+`:16.410`. This includes scheduler and Convex mutation latency, while still
+beating the former fixed request time. The following 11:51 row arrived at
+`:15.412`, confirming consecutive automatic captures.
+
+## Five-minute AMOS collector
+
+`seoul_amos_runways_every_5_min` invokes
+`seoul:pollLatestAmosRunways`.
+
+It stores all display rows with `collectionCadence="five_minute"`. The chart
+plots only the exact representative `rwyNo=2`, `rwyDir=15L` row, while the
+remaining runway-shaped records are retained for auditing.
+
+Production verification stored separate `one_minute` and `five_minute` rows for
+the same 11:50 KST sensor timestamp.
+
+## Actual METAR collector
+
+Source:
+
+```text
+https://tgftp.nws.noaa.gov/data/observations/metar/stations/RKSI.TXT
+```
+
+`seoul_noaa_metar_every_minute` invokes
+`seoul:pollLatestNoaaStationMetar`. The action:
+
+- parses the current NOAA RKSI METAR temperature;
+- upserts it into `seoulMetarObservations`;
+- recomputes the local-day summary;
+- continues recording NOAA first-seen timing in `seoulPublishRaceReports`.
+
+This replaces the chart's dependency on the retired AMO latest-METAR endpoint.
+METAR is still the official coded comparison, not the fastest current
+temperature.
+
+## Data model
+
+### `seoulMetarObservations`
+
+One row per `(stationIcao, date, obsTimeUtc)` with report type, parsed
+temperature, raw METAR, source, and ingest metadata.
+
+### `seoulDailySummaries`
+
+One row per station/date with latest, minimum, and maximum METAR fields.
+
+### `seoulAmosObservations`
+
+One row per station/date/observation time/runway/direction/cadence. It preserves
+temperature, dew point, QNH, wind, visibility, precipitation, runway metadata,
+raw JSON, and the collection cadence.
+
+### `seoulPublishRaceReports`
+
+Historical AMO/NOAA first-seen timing. It remains available in Convex even
+though the redesigned page no longer renders the diagnostic table.
+
+## Operational notes
+
+- The mobile AMOS URL is publicly reachable without authentication but is an
+  undocumented application endpoint. It has no published rate-limit or
+  stability contract.
+- Access is server-side because the response does not advertise a cross-origin
+  browser contract.
+- The 15L label is the feed's representative row designation; it should not be
+  described as proof that the physical thermometer is at the 15L threshold.
+- The old `http://amoapi.kma.go.kr/amoApi/metar` service was retired on
+  2026-07-20 and is not used by the live chart collector.
+- Research and source comparisons are in [seoul.md](./seoul.md).

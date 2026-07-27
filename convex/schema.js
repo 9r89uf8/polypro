@@ -922,6 +922,9 @@ export default defineSchema({
     date: v.string(),
     obsTimeUtc: v.number(),
     obsTimeLocal: v.string(),
+    collectionCadence: v.optional(
+      v.union(v.literal("one_minute"), v.literal("five_minute")),
+    ),
     rwyNo: v.string(),
     rwyDir: v.string(),
     rwyUse: v.optional(v.string()),
@@ -952,6 +955,13 @@ export default defineSchema({
     "obsTimeUtc",
     "rwyNo",
     "rwyDir",
+  ]).index("by_station_date_ts_rwy_cadence", [
+    "stationIcao",
+    "date",
+    "obsTimeUtc",
+    "rwyNo",
+    "rwyDir",
+    "collectionCadence",
   ]),
 
   seoulPublishRaceReports: defineTable({

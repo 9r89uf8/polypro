@@ -6,21 +6,55 @@ import {
   LinearScale,
   LineElement,
   PointElement,
-  Title,
   Tooltip,
 } from "chart.js";
+import { useAction, useQuery } from "convex/react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
-import { useAction, useQuery } from "convex/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
+const nowLinePlugin = {
+  id: "seoulNowLine",
+  afterDatasetsDraw(chart, _args, options) {
+    if (!options?.display || !Number.isFinite(options.minute)) {
+      return;
+    }
+
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x.getPixelForValue(options.minute);
+    if (x < chartArea.left || x > chartArea.right) {
+      return;
+    }
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(103, 232, 249, 0.42)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.stroke();
+
+    ctx.fillStyle = "#67e8f9";
+    ctx.font = "500 10px IBM Plex Mono, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("NOW", x, chartArea.top + 12);
+    ctx.restore();
+  },
+};
+
+ChartJS.register(
+  LinearScale,
+  PointElement,
+  LineElement,
+  Tooltip,
+  Legend,
+  nowLinePlugin,
+);
 
 const STATION_ICAO = "RKSI";
-const STATION_NAME = "Incheon International";
 const SEOUL_TIMEZONE = "Asia/Seoul";
-const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isValidDate(value) {
@@ -28,9 +62,8 @@ function isValidDate(value) {
 }
 
 function getDateParts(formatter, date) {
-  const parts = formatter.formatToParts(date);
   const values = {};
-  for (const part of parts) {
+  for (const part of formatter.formatToParts(date)) {
     if (part.type !== "literal") {
       values[part.type] = part.value;
     }
@@ -39,18 +72,20 @@ function getDateParts(formatter, date) {
 }
 
 function seoulTodayKey() {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: SEOUL_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = getDateParts(formatter, new Date());
+  const parts = getDateParts(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: SEOUL_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }),
+    new Date(),
+  );
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function parseDateKeyParts(dateKey) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey || "");
+function parseDateKey(dateKey) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey ?? "");
   if (!match) {
     return null;
   }
@@ -61,47 +96,25 @@ function parseDateKeyParts(dateKey) {
   };
 }
 
-function pad2(value) {
-  return String(value).padStart(2, "0");
-}
-
-function formatDateKeyFromUtcDate(date) {
-  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(
-    date.getUTCDate(),
-  )}`;
-}
-
 function shiftDateKey(dateKey, deltaDays) {
-  const parts = parseDateKeyParts(dateKey);
+  const parts = parseDateKey(dateKey);
   if (!parts) {
     return null;
   }
-  const utcMs = Date.UTC(parts.year, parts.month - 1, parts.day);
-  return formatDateKeyFromUtcDate(new Date(utcMs + deltaDays * DAY_MS));
+  const shifted = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day) + deltaDays * DAY_MS,
+  );
+  return `${shifted.getUTCFullYear()}-${String(
+    shifted.getUTCMonth() + 1,
+  ).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`;
 }
 
-function buildPreviousDateKeys(dateKey, count) {
-  const keys = [];
-  for (let offset = 1; offset <= count; offset += 1) {
-    const previousDate = shiftDateKey(dateKey, -offset);
-    if (previousDate) {
-      keys.push(previousDate);
-    }
-  }
-  return keys;
-}
-
-function parseMinute(tsLocal) {
-  const match = /(\d{2}):(\d{2})(?::\d{2})?$/.exec(tsLocal || "");
+function parseMinute(localTimestamp) {
+  const match = /(\d{2}):(\d{2})(?::\d{2})?$/.exec(localTimestamp ?? "");
   if (!match) {
     return null;
   }
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
-  }
-  return hour * 60 + minute;
+  return Number(match[1]) * 60 + Number(match[2]);
 }
 
 function minuteLabel(totalMinutes) {
@@ -111,566 +124,290 @@ function minuteLabel(totalMinutes) {
   const normalized = Math.max(0, Math.min(1439, Math.round(totalMinutes)));
   const hour24 = Math.floor(normalized / 60);
   const minute = normalized % 60;
-  const period = hour24 >= 12 ? "PM" : "AM";
   const hour12 = hour24 % 12 || 12;
-  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${
+    hour24 >= 12 ? "PM" : "AM"
+  }`;
 }
 
-function formatTemp(value, unit) {
-  if (value === undefined || value === null) {
-    return "—";
-  }
-  return `${value.toFixed(1)}°${unit}`;
-}
-
-function formatStoredLocalDateTime(tsLocal) {
-  const match =
-    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(tsLocal || "");
-  if (!match) {
-    return tsLocal || "—";
-  }
-  const hour24 = Number(match[2]);
-  const minute = Number(match[3]);
-  if (!Number.isFinite(hour24) || !Number.isFinite(minute)) {
-    return tsLocal;
-  }
-  const period = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 || 12;
-  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
-}
-
-function formatSeoulDateTimeSeconds(epochMs) {
+function formatClock(epochMs, includeSeconds = false) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
-  const formatter = new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("en-US", {
     timeZone: SEOUL_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-    second: "2-digit",
+    ...(includeSeconds ? { second: "2-digit" } : {}),
     hour12: true,
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
+  }).format(new Date(epochMs));
 }
 
-function formatChicagoDateTimeSeconds(epochMs) {
-  if (!Number.isFinite(epochMs)) {
-    return "—";
-  }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: CHICAGO_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
+function formatTemperature(row, unit) {
+  const value = unit === "C" ? row?.tempC : row?.tempF;
+  return Number.isFinite(value) ? `${value.toFixed(1)}°` : "—";
 }
 
-function formatSeoulClock(epochMs) {
-  if (!Number.isFinite(epochMs)) {
-    return "—";
+function captureOffset(row) {
+  if (!Number.isFinite(row?.updatedAt)) {
+    return "waiting for tagged capture";
   }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: SEOUL_TIMEZONE,
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-    timeZoneName: "short",
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.weekday} ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""} ${parts.timeZoneName ?? ""}`.trim();
+  return `captured at :${String(
+    Math.floor((row.updatedAt % 60000) / 1000),
+  ).padStart(2, "0")}`;
 }
 
-function formatRaceWinner(winner) {
-  if (winner === "amo") {
-    return "AMO/KMA";
-  }
-  if (winner === "tgftp") {
-    return "NOAA tgftp";
-  }
-  if (winner === "tie") {
-    return "Tie";
-  }
-  return "Pending";
+function isRepresentativeAmosRow(row) {
+  return (
+    row?.rwyNo === "2" && row?.rwyDir === "15L" && Number.isFinite(row?.tempC)
+  );
 }
 
-function formatLeadMs(leadMs) {
-  if (!Number.isFinite(leadMs)) {
-    return "—";
+function dedupeRowsByObservationTime(rows) {
+  const byTime = new Map();
+  for (const row of rows) {
+    byTime.set(row.obsTimeUtc, row);
   }
-  if (leadMs > 0 && leadMs < 1000) {
-    return "<1s";
-  }
-  if (leadMs < 120000) {
-    return `${(leadMs / 1000).toFixed(1)}s`;
-  }
-  return `${(leadMs / 60000).toFixed(1)} min`;
+  return [...byTime.values()].sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
 }
 
-function formatLivePollMessage(result) {
-  if (!result?.ok) {
-    return "Latest official poll skipped.";
+function buildCadenceRows(amosRows, cadence) {
+  const representativeRows = amosRows.filter(isRepresentativeAmosRow);
+  const taggedRows = representativeRows.filter(
+    (row) => row.collectionCadence === cadence,
+  );
+  if (cadence === "one_minute") {
+    return dedupeRowsByObservationTime(taggedRows);
   }
 
-  const firstSeenText = Number.isFinite(result.row?.amoFirstSeenAt)
-    ? formatSeoulDateTimeSeconds(result.row.amoFirstSeenAt)
-    : null;
-  const lagText = Number.isFinite(result.availabilityLagMs)
-    ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
-    : null;
+  const firstTaggedTime = taggedRows.length
+    ? Math.min(...taggedRows.map((row) => row.obsTimeUtc))
+    : Number.POSITIVE_INFINITY;
 
-  return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
-}
-
-function formatAmosPollMessage(result) {
-  if (!result?.ok) {
-    return "AMOS runway sync skipped.";
-  }
-  const fifteenL = result.latest15L ?? null;
-  return `AMOS runway sync: ${result.insertedCount > 0 || result.patchedCount > 0 ? "saved" : "no new rows"} ${result.rowCount ?? 0} runway rows for ${result.sampleTimeLocal ?? "the latest sample"}.${Number.isFinite(fifteenL?.tempC) ? ` 15L ${fifteenL.tempC.toFixed(1)}°C.` : ""}`;
-}
-
-function buildOfficialLineDataset(rows, unit) {
-  const points = rows
-    .map((row) => {
-      const x = parseMinute(row.obsTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return {
-        x,
-        y,
-        reportType: row.reportType,
-      };
-    })
-    .filter(Boolean);
-
-  return {
-    label: "Official AMO/KMA",
-    data: points,
-    borderColor: "#0f4c81",
-    backgroundColor: "#0f4c81",
-    pointRadius: points.map((point) => (point.reportType === "SPECI" ? 4.5 : 2.5)),
-    pointHoverRadius: points.map((point) => (point.reportType === "SPECI" ? 6 : 4)),
-    tension: 0.2,
-  };
-}
-
-function buildAmosRunwayDataset(rows, unit, runwayDir) {
-  const points = rows
-    .map((row) => {
-      if (row.rwyDir !== runwayDir) {
-        return null;
-      }
-      const x = parseMinute(row.obsTimeLocal);
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (x === null || !Number.isFinite(y)) {
-        return null;
-      }
-      return {
-        x,
-        y,
-        rwyDir: row.rwyDir,
-        qnhHpa: row.qnhHpa,
-      };
-    })
-    .filter(Boolean);
-
-  return {
-    label: `AMOS ${runwayDir} (5 min)`,
-    data: points,
-    borderColor: "#d97706",
-    backgroundColor: "#d97706",
-    borderDash: [8, 4],
-    pointRadius: 2,
-    pointHoverRadius: 4,
-    tension: 0.15,
-  };
-}
-
-function formatSignedGap(gapMs) {
-  if (!Number.isFinite(gapMs)) {
-    return "—";
-  }
-  if (Math.abs(gapMs) < 30000) {
-    return "same time";
-  }
-  const minutes = Math.abs(gapMs) / 60000;
-  const minutesText =
-    minutes < 10 ? `${minutes.toFixed(1)} min` : `${minutes.toFixed(0)} min`;
-  return gapMs < 0 ? `${minutesText} earlier` : `${minutesText} later`;
-}
-
-function buildNearestAmosComparisons(officialRows, amosRows, runwayDir) {
-  const runwayRows = amosRows.filter(
-    (row) => row.rwyDir === runwayDir && Number.isFinite(row.tempC),
+  const legacyRows = representativeRows.filter(
+    (row) => !row.collectionCadence && row.obsTimeUtc < firstTaggedTime,
   );
 
-  return officialRows
-    .map((officialRow) => {
-      let bestRow = null;
-      let bestGapMs = Number.POSITIVE_INFINITY;
+  return dedupeRowsByObservationTime([...legacyRows, ...taggedRows]);
+}
 
-      for (const amosRow of runwayRows) {
-        const gapMs = amosRow.obsTimeUtc - officialRow.obsTimeUtc;
-        const absGapMs = Math.abs(gapMs);
-        if (absGapMs > 10 * 60 * 1000) {
-          continue;
-        }
-        if (
-          absGapMs < bestGapMs ||
-          (absGapMs === bestGapMs && gapMs < 0)
-        ) {
-          bestGapMs = absGapMs;
-          bestRow = amosRow;
-        }
+function toChartPoints(rows, unit, extra = {}) {
+  return rows
+    .map((row) => {
+      const x = parseMinute(row.obsTimeLocal);
+      const y = unit === "C" ? row.tempC : row.tempF;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
       }
-
-      if (!bestRow) {
-        return {
-          officialRow,
-          amosRow: null,
-          gapMs: null,
-          deltaC: null,
-          deltaF: null,
-        };
-      }
-
-      const gapMs = bestRow.obsTimeUtc - officialRow.obsTimeUtc;
-      const deltaC = bestRow.tempC - officialRow.tempC;
-      const deltaF = bestRow.tempF - officialRow.tempF;
-
       return {
-        officialRow,
-        amosRow: bestRow,
-        gapMs,
-        deltaC,
-        deltaF,
+        x,
+        y,
+        obsTimeUtc: row.obsTimeUtc,
+        obsTimeLocal: row.obsTimeLocal,
+        ...extra(row),
       };
     })
-    .filter((row) => row.amosRow);
+    .filter(Boolean);
+}
+
+function buildChartData(metarRows, fiveMinuteRows, oneMinuteRows, unit) {
+  const oneMinutePoints = toChartPoints(oneMinuteRows, unit);
+  const fiveMinutePoints = toChartPoints(fiveMinuteRows, unit);
+  const metarPoints = toChartPoints(metarRows, unit, (row) => ({
+    reportType: row.reportType,
+    rawMetar: row.rawMetar,
+  }));
+
+  return {
+    datasets: [
+      {
+        label: "AMOS · 1 minute",
+        data: oneMinutePoints,
+        borderColor: "#22d3ee",
+        backgroundColor: "#22d3ee",
+        borderWidth: 2.25,
+        pointRadius: 0,
+        pointHitRadius: 8,
+        pointHoverRadius: 4,
+        tension: 0.18,
+        spanGaps: false,
+        order: 3,
+      },
+      {
+        label: "AMOS · 5 minute",
+        data: fiveMinutePoints,
+        borderColor: "#fbbf24",
+        backgroundColor: "#fbbf24",
+        borderWidth: 1.5,
+        borderDash: [3, 5],
+        pointStyle: "rectRot",
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        tension: 0.15,
+        spanGaps: false,
+        order: 2,
+      },
+      {
+        label: "Actual METAR",
+        data: metarPoints,
+        borderColor: "#f8fafc",
+        backgroundColor: "#07111f",
+        borderWidth: 2.5,
+        pointBorderColor: "#f8fafc",
+        pointBorderWidth: 2,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        tension: 0.08,
+        spanGaps: false,
+        order: 1,
+      },
+    ],
+  };
+}
+
+function SourceCard({ accent, label, value, unit, detail, count }) {
+  return (
+    <div className="min-w-0 border-l border-white/10 px-4 first:border-l-0 first:pl-0 md:px-6">
+      <div className="flex items-center gap-2">
+        <span
+          className="h-2 w-2 rounded-full shadow-[0_0_14px_currentColor]"
+          style={{ color: accent, backgroundColor: accent }}
+        />
+        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">
+          {label}
+        </span>
+      </div>
+      <div className="mt-2 flex items-end gap-1">
+        <span className="text-2xl font-medium tracking-tight text-white md:text-3xl">
+          {value}
+        </span>
+        <span className="pb-1 text-xs text-slate-500">{unit}</span>
+      </div>
+      <p className="mt-1 truncate font-mono text-[10px] text-slate-500">
+        {detail} · {count} pts
+      </p>
+    </div>
+  );
 }
 
 export default function SeoulDayPage() {
   const params = useParams();
   const router = useRouter();
   const date = String(params?.date ?? "");
-  const [displayUnit, setDisplayUnit] = useState("C");
+  const [unit, setUnit] = useState("C");
   const [inputDate, setInputDate] = useState(date);
-  const [liveMessage, setLiveMessage] = useState("");
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
-  const [weatherPanel, setWeatherPanel] = useState(null);
-  const [weatherPanelError, setWeatherPanelError] = useState("");
-  const [isWeatherLoading, setIsWeatherLoading] = useState(false);
-  const inFlightRef = useRef(false);
-  const weatherRequestRef = useRef(0);
+  const [refreshState, setRefreshState] = useState({
+    active: false,
+    message: "",
+  });
+  const refreshInFlight = useRef(false);
 
   const isDateValid = isValidDate(date);
-  const seoulTodayDate = seoulTodayKey();
-  const isToday = isDateValid && date === seoulTodayDate;
-  const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
-
-  const pollLatest = useAction("seoul:pollLatestStationMetar");
-  const pollLatestAmosRunways = useAction("seoul:pollLatestAmosRunways");
-  const loadSeoulWeather = useAction("seoulWeather:getDayPageWeather");
+  const today = seoulTodayKey();
+  const isToday = isDateValid && date === today;
+  const previousDate = shiftDateKey(date, -1);
+  const nextDate = shiftDateKey(date, 1);
 
   const dayData = useQuery(
     "seoul:getDayStationRows",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
-      : "skip",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
-  const raceData = useQuery("seoul:getRecentPublishRaceReports", {
-    stationIcao: STATION_ICAO,
-    limit: 12,
-    routineOnly: true,
-  });
+  const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
+  const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
 
-  const rows = dayData?.rows ?? [];
-  const summary = dayData?.summary ?? null;
+  const metarRows = dayData?.rows ?? [];
   const amosRows = dayData?.amosRows ?? [];
-  const raceRows = raceData?.rows ?? [];
-  const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
-  const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
-  const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
-  const weatherForecast = weatherPanel?.forecast ?? null;
-  const weatherForecastDays = weatherForecast?.days ?? [];
-  const amos15LRows = useMemo(
-    () =>
-      amosRows.filter((row) => row.rwyDir === "15L" && Number.isFinite(row.tempC)),
+  const oneMinuteRows = useMemo(
+    () => buildCadenceRows(amosRows, "one_minute"),
     [amosRows],
   );
-  const latest15LRow = amos15LRows.length ? amos15LRows[amos15LRows.length - 1] : null;
+  const fiveMinuteRows = useMemo(
+    () => buildCadenceRows(amosRows, "five_minute"),
+    [amosRows],
+  );
 
-  useEffect(() => {
-    setInputDate(date);
-  }, [date]);
-
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setClockNowMs(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isDateValid) {
-      setWeatherPanel(null);
-      setWeatherPanelError("");
-      setIsWeatherLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    const requestId = weatherRequestRef.current + 1;
-    weatherRequestRef.current = requestId;
-    setIsWeatherLoading(true);
-
-    async function loadWeatherPanel() {
-      try {
-        const result = await loadSeoulWeather({ date });
-        if (!cancelled && weatherRequestRef.current === requestId) {
-          setWeatherPanel(result);
-          setWeatherPanelError("");
-        }
-      } catch (error) {
-        console.error(error);
-        if (!cancelled && weatherRequestRef.current === requestId) {
-          const message = error instanceof Error ? error.message : String(error);
-          setWeatherPanel(null);
-          setWeatherPanelError(message);
-        }
-      } finally {
-        if (!cancelled && weatherRequestRef.current === requestId) {
-          setIsWeatherLoading(false);
-        }
-      }
-    }
-
-    loadWeatherPanel();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [date, isDateValid, loadSeoulWeather]);
-
-  useEffect(() => {
-    if (!isDateValid) {
-      setLiveMessage("");
-      return;
-    }
+  const latestMetar = metarRows.at(-1) ?? null;
+  const latestOneMinute = oneMinuteRows.at(-1) ?? null;
+  const latestFiveMinute = fiveMinuteRows.at(-1) ?? null;
+  const currentSeoulMinute = useMemo(() => {
     if (!isToday) {
-      setLiveMessage(
-        "Historical RKSI dates depend on previously captured live official METAR rows and stored 5-minute AMOS runway rows. No date-bounded official history backfill is wired yet.",
-      );
-      return;
+      return null;
     }
-
-    let cancelled = false;
-
-    async function bootstrap() {
-      if (inFlightRef.current) {
-        return;
-      }
-      inFlightRef.current = true;
-      try {
-        const [officialResult, amosResult] = await Promise.allSettled([
-          pollLatest({ stationIcao: STATION_ICAO }),
-          pollLatestAmosRunways({ stationIcao: STATION_ICAO }),
-        ]);
-
-        if (!cancelled) {
-          const messages = [];
-          if (officialResult.status === "fulfilled") {
-            messages.push(formatLivePollMessage(officialResult.value));
-          } else {
-            console.error(officialResult.reason);
-            const message =
-              officialResult.reason instanceof Error
-                ? officialResult.reason.message
-                : String(officialResult.reason);
-            messages.push(`Official sync failed: ${message}`);
-          }
-
-          if (amosResult.status === "fulfilled") {
-            messages.push(formatAmosPollMessage(amosResult.value));
-          } else {
-            console.error(amosResult.reason);
-            const message =
-              amosResult.reason instanceof Error
-                ? amosResult.reason.message
-                : String(amosResult.reason);
-            messages.push(`AMOS sync failed: ${message}`);
-          }
-
-          setLiveMessage(messages.join(" "));
-        }
-      } catch (error) {
-        console.error(error);
-        if (!cancelled) {
-          const message = error instanceof Error ? error.message : String(error);
-          setLiveMessage(`RKSI sync failed: ${message}`);
-        }
-      } finally {
-        inFlightRef.current = false;
-      }
-    }
-
-    bootstrap();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [date, isDateValid, isToday, pollLatest, pollLatestAmosRunways]);
-
-  async function handleRefreshNow() {
-    if (!isDateValid || !isToday || inFlightRef.current) {
-      return;
-    }
-
-    setIsRefreshing(true);
-    const weatherRequestId = weatherRequestRef.current + 1;
-    weatherRequestRef.current = weatherRequestId;
-    setIsWeatherLoading(true);
-    inFlightRef.current = true;
-    try {
-      const [officialResult, amosResult, weatherResult] = await Promise.allSettled([
-        pollLatest({ stationIcao: STATION_ICAO }),
-        pollLatestAmosRunways({ stationIcao: STATION_ICAO }),
-        loadSeoulWeather({ date }),
-      ]);
-      const messages = [];
-
-      if (officialResult.status === "fulfilled") {
-        messages.push(formatLivePollMessage(officialResult.value));
-      } else {
-        console.error(officialResult.reason);
-        const message =
-          officialResult.reason instanceof Error
-            ? officialResult.reason.message
-            : String(officialResult.reason);
-        messages.push(`Official sync failed: ${message}`);
-      }
-
-      if (amosResult.status === "fulfilled") {
-        messages.push(formatAmosPollMessage(amosResult.value));
-      } else {
-        console.error(amosResult.reason);
-        const message =
-          amosResult.reason instanceof Error
-            ? amosResult.reason.message
-            : String(amosResult.reason);
-        messages.push(`AMOS sync failed: ${message}`);
-      }
-
-      setLiveMessage(messages.join(" "));
-
-      if (weatherResult.status === "fulfilled") {
-        if (weatherRequestRef.current === weatherRequestId) {
-          setWeatherPanel(weatherResult.value);
-          setWeatherPanelError("");
-        }
-      } else {
-        console.error(weatherResult.reason);
-        if (weatherRequestRef.current === weatherRequestId) {
-          const message =
-            weatherResult.reason instanceof Error
-              ? weatherResult.reason.message
-              : String(weatherResult.reason);
-          setWeatherPanelError(message);
-        }
-      }
-    } catch (error) {
-      console.error(error);
-      const message = error instanceof Error ? error.message : String(error);
-      setLiveMessage(`Manual refresh failed: ${message}`);
-    } finally {
-      inFlightRef.current = false;
-      setIsRefreshing(false);
-      if (weatherRequestRef.current === weatherRequestId) {
-        setIsWeatherLoading(false);
-      }
-    }
-  }
-
-  function handleGoToDate(event) {
-    event.preventDefault();
-    if (!isValidDate(inputDate)) {
-      return;
-    }
-    router.push(`/seoul/day/${inputDate}`);
-  }
+    const parts = getDateParts(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: SEOUL_TIMEZONE,
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }),
+      new Date(clockNowMs),
+    );
+    return Number(parts.hour) * 60 + Number(parts.minute);
+  }, [clockNowMs, isToday]);
 
   const chartData = useMemo(
-    () => {
-      const datasets = [];
-      if (rows.length) {
-        datasets.push(buildOfficialLineDataset(rows, displayUnit));
-      }
-      if (amos15LRows.length) {
-        datasets.push(buildAmosRunwayDataset(amos15LRows, displayUnit, "15L"));
-      }
-      return { datasets };
-    },
-    [rows, amos15LRows, displayUnit],
+    () => buildChartData(metarRows, fiveMinuteRows, oneMinuteRows, unit),
+    [fiveMinuteRows, metarRows, oneMinuteRows, unit],
   );
 
   const chartOptions = useMemo(
     () => ({
       responsive: true,
       maintainAspectRatio: false,
+      animation: { duration: 250 },
       parsing: false,
+      normalized: true,
       interaction: {
         mode: "nearest",
         axis: "x",
         intersect: false,
       },
+      layout: {
+        padding: { top: 12, right: 8, bottom: 2, left: 2 },
+      },
       plugins: {
-        legend: { position: "top" },
-        tooltip: {
-          padding: 10,
-          titleFont: { size: 13 },
-          bodyFont: { size: 12 },
-          callbacks: {
-            title(items) {
-              if (!items.length) {
-                return "";
-              }
-              return `Local ${minuteLabel(items[0].parsed.x)}`;
-            },
-            label(item) {
-              if (item.dataset?.label?.startsWith("AMOS")) {
-                const runwayLabel = item.raw?.rwyDir ? `${item.raw.rwyDir} ` : "";
-                return `${runwayLabel}${item.parsed.y.toFixed(1)}°${displayUnit}`;
-              }
-              const reportType = item.raw?.reportType ? `${item.raw.reportType} ` : "";
-              return `${reportType}${item.parsed.y.toFixed(1)}°${displayUnit}`;
+        legend: {
+          position: "top",
+          align: "end",
+          labels: {
+            color: "#cbd5e1",
+            boxWidth: 24,
+            boxHeight: 2,
+            padding: 22,
+            font: {
+              family: "IBM Plex Mono, monospace",
+              size: 11,
             },
           },
+        },
+        tooltip: {
+          backgroundColor: "rgba(3, 10, 20, 0.96)",
+          borderColor: "rgba(148, 163, 184, 0.25)",
+          borderWidth: 1,
+          padding: 12,
+          titleColor: "#94a3b8",
+          bodyColor: "#f8fafc",
+          displayColors: true,
+          callbacks: {
+            title(items) {
+              return items.length
+                ? `${date} · ${minuteLabel(items[0].parsed.x)} KST`
+                : "";
+            },
+            label(item) {
+              const reportType = item.raw?.reportType
+                ? ` · ${item.raw.reportType}`
+                : "";
+              return `${item.dataset.label}: ${item.parsed.y.toFixed(
+                1,
+              )}°${unit}${reportType}`;
+            },
+          },
+        },
+        seoulNowLine: {
+          display: isToday,
+          minute: currentSeoulMinute,
         },
       },
       scales: {
@@ -678,556 +415,349 @@ export default function SeoulDayPage() {
           type: "linear",
           min: 0,
           max: 1439,
-          title: { display: true, text: "Local Time (Asia/Seoul)" },
+          border: { color: "rgba(148, 163, 184, 0.18)" },
+          grid: {
+            color: (context) =>
+              Number(context.tick?.value) % 360 === 0
+                ? "rgba(148, 163, 184, 0.16)"
+                : "rgba(148, 163, 184, 0.06)",
+          },
           ticks: {
-            stepSize: 60,
+            color: "#64748b",
+            stepSize: 180,
+            padding: 8,
+            font: {
+              family: "IBM Plex Mono, monospace",
+              size: 10,
+            },
             callback(value) {
               return minuteLabel(Number(value));
             },
           },
         },
         y: {
-          title: { display: true, text: `Temperature (°${displayUnit})` },
+          grace: "12%",
+          border: { color: "rgba(148, 163, 184, 0.18)" },
+          grid: { color: "rgba(148, 163, 184, 0.09)" },
+          ticks: {
+            color: "#64748b",
+            padding: 8,
+            font: {
+              family: "IBM Plex Mono, monospace",
+              size: 10,
+            },
+            callback(value) {
+              return `${Number(value).toFixed(0)}°`;
+            },
+          },
+          title: {
+            display: true,
+            text: `TEMPERATURE · °${unit}`,
+            color: "#64748b",
+            font: {
+              family: "IBM Plex Mono, monospace",
+              size: 10,
+              weight: "normal",
+            },
+          },
         },
       },
     }),
-    [displayUnit],
+    [currentSeoulMinute, date, isToday, unit],
   );
 
-  const amosComparisons = useMemo(
-    () => buildNearestAmosComparisons(rows, amos15LRows, "15L"),
-    [rows, amos15LRows],
-  );
+  useEffect(() => {
+    setInputDate(date);
+  }, [date]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function refreshLiveSources({ quiet = false } = {}) {
+    if (!isToday || refreshInFlight.current) {
+      return;
+    }
+
+    refreshInFlight.current = true;
+    if (!quiet) {
+      setRefreshState({ active: true, message: "Syncing live sources…" });
+    }
+
+    const results = await Promise.allSettled([
+      pollMetar({ stationIcao: STATION_ICAO }),
+      pollOneMinuteAmos({ stationIcao: STATION_ICAO }),
+    ]);
+    const failures = results.filter((result) => result.status === "rejected");
+    const message = failures.length
+      ? `${2 - failures.length}/2 live sources refreshed`
+      : "Live sources synchronized";
+
+    if (failures.length) {
+      for (const failure of failures) {
+        console.error(failure.reason);
+      }
+    }
+    setRefreshState({ active: false, message });
+    refreshInFlight.current = false;
+  }
+
+  useEffect(() => {
+    if (!isToday) {
+      setRefreshState({
+        active: false,
+        message: isDateValid ? "Historical capture" : "",
+      });
+      return;
+    }
+    refreshLiveSources({ quiet: true });
+    // Run once when the selected Seoul day changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, isDateValid, isToday]);
+
+  function handleDateSubmit(event) {
+    event.preventDefault();
+    if (isValidDate(inputDate)) {
+      router.push(`/seoul/day/${inputDate}`);
+    }
+  }
 
   if (!isDateValid) {
     return (
-      <main className="min-h-screen px-4 py-8 md:px-8">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-6">
-          <h1 className="text-2xl font-semibold text-red-800">Invalid Seoul date</h1>
-          <p className="mt-2 text-sm text-red-700">
-            Use a `YYYY-MM-DD` date in the route.
+      <main className="grid min-h-screen place-items-center bg-[#050b14] px-5 text-slate-100">
+        <div className="max-w-md border border-rose-400/30 bg-rose-400/5 p-8">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-rose-300">
+            Invalid date
           </p>
-          <div className="mt-4">
-            <Link
-              href="/seoul/today"
-              className="inline-flex rounded-full border border-red-300 px-4 py-2 text-sm font-semibold text-red-800"
-            >
-              Open Seoul today
-            </Link>
-          </div>
+          <h1 className="mt-3 text-3xl font-medium">
+            Seoul telemetry unavailable
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-slate-400">
+            Use a YYYY-MM-DD date or return to the current RKSI observation day.
+          </p>
+          <Link
+            href="/seoul/today"
+            className="mt-6 inline-flex bg-cyan-300 px-4 py-2 font-mono text-xs font-semibold uppercase tracking-[0.16em] text-slate-950"
+          >
+            Open today
+          </Link>
         </div>
       </main>
     );
   }
 
-  return (
-    <main className="min-h-screen px-4 py-8 md:px-8">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
-          <p className="inline-flex rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold tracking-[0.18em] text-accent">
-            STATION {STATION_ICAO}
-          </p>
-          <h1 className="mt-3 text-2xl font-semibold text-foreground">
-            {STATION_NAME} Official METAR Day Chart
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
-            Official RKSI METAR from Korea&apos;s Aviation Meteorological Office
-            (AMO/KMA) latest-METAR API, with a separate 5-minute AMOS runway
-            sensor capture stored alongside it. The chart overlays runway 15L so
-            we can see how closely it tracks the official reported temperature.
-          </p>
+  const hasChartData =
+    metarRows.length + fiveMinuteRows.length + oneMinuteRows.length > 0;
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Link
-              href="/"
-              className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
-            >
-              Home
-            </Link>
-            <Link
-              href="/seoul/today"
-              className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 hover:border-sky-400"
-            >
-              Current Date {seoulTodayDate}
-            </Link>
-            {quickPreviousDates.map((previousDate) => (
-              <Link
-                key={previousDate}
-                href={`/seoul/day/${previousDate}`}
-                className="inline-flex rounded-full border border-black/15 bg-white/70 px-4 py-2 text-sm font-semibold text-black hover:border-black"
-              >
-                {previousDate}
-              </Link>
-            ))}
+  return (
+    <main className="relative min-h-screen overflow-hidden bg-[#050b14] text-slate-100">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-50"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(34,211,238,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(34,211,238,0.025) 1px, transparent 1px)",
+          backgroundSize: "36px 36px",
+        }}
+      />
+      <div className="pointer-events-none absolute left-1/2 top-[-28rem] h-[52rem] w-[72rem] -translate-x-1/2 rounded-full bg-cyan-400/8 blur-[140px]" />
+
+      <div className="relative mx-auto flex min-h-screen max-w-[1680px] flex-col px-4 py-5 md:px-8 md:py-7">
+        <header className="flex flex-col gap-6 border-b border-white/10 pb-6 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-mono text-[11px] uppercase tracking-[0.24em] text-cyan-300">
+                RKSI · Incheon
+              </span>
+              <span className="h-3 w-px bg-white/15" />
+              <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-slate-400">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    isToday
+                      ? "animate-pulse bg-emerald-400 shadow-[0_0_12px_#34d399]"
+                      : "bg-slate-600"
+                  }`}
+                />
+                {isToday ? "Live telemetry" : "Archive"}
+              </span>
+            </div>
+            <h1 className="mt-3 text-4xl font-medium tracking-[-0.045em] text-white md:text-6xl">
+              Seoul temperature pulse
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
+              Actual RKSI METAR against distinct five-minute and fastest
+              one-minute AMOS captures, aligned on Seoul local time.
+            </p>
           </div>
 
-          <form onSubmit={handleGoToDate} className="mt-4 flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium text-black/70" htmlFor="seoul-day-picker">
-              Pick Date
-            </label>
-            <input
-              id="seoul-day-picker"
-              type="date"
-              value={inputDate}
-              onChange={(event) => setInputDate(event.target.value)}
-              className="rounded-2xl border border-black/15 bg-white px-3 py-2 text-sm text-black outline-none focus:border-black"
-            />
-            <button
-              type="submit"
-              className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent"
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={`/seoul/day/${previousDate}`}
+              className="grid h-10 w-10 place-items-center border border-white/10 text-slate-400 transition hover:border-white/30 hover:text-white"
+              aria-label="Previous day"
             >
-              Go
-            </button>
-          </form>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-full border border-black/10 bg-white/70 p-1">
-              {["C", "F"].map((unit) => (
+              ←
+            </Link>
+            <form
+              onSubmit={handleDateSubmit}
+              className="flex h-10 border border-white/10 bg-white/[0.03]"
+            >
+              <input
+                aria-label="Seoul observation date"
+                type="date"
+                value={inputDate}
+                onChange={(event) => setInputDate(event.target.value)}
+                className="min-w-0 bg-transparent px-3 font-mono text-xs text-slate-200 outline-none [color-scheme:dark]"
+              />
+              <button
+                type="submit"
+                className="border-l border-white/10 px-3 font-mono text-[10px] uppercase tracking-[0.16em] text-cyan-300 hover:bg-cyan-300/10"
+              >
+                Go
+              </button>
+            </form>
+            <Link
+              href={`/seoul/day/${nextDate}`}
+              className="grid h-10 w-10 place-items-center border border-white/10 text-slate-400 transition hover:border-white/30 hover:text-white"
+              aria-label="Next day"
+            >
+              →
+            </Link>
+            {!isToday && (
+              <Link
+                href="/seoul/today"
+                className="h-10 border border-cyan-300/30 px-4 font-mono text-[10px] uppercase leading-10 tracking-[0.16em] text-cyan-300 hover:bg-cyan-300/10"
+              >
+                Today
+              </Link>
+            )}
+            <div className="ml-1 flex h-10 border border-white/10">
+              {["C", "F"].map((candidate) => (
                 <button
-                  key={unit}
+                  key={candidate}
                   type="button"
-                  onClick={() => setDisplayUnit(unit)}
-                  className={`rounded-full px-3 py-1 text-sm font-semibold ${
-                    displayUnit === unit
-                      ? "bg-black text-white"
-                      : "text-black/70 hover:text-black"
+                  onClick={() => setUnit(candidate)}
+                  className={`w-10 font-mono text-xs transition ${
+                    unit === candidate
+                      ? "bg-white text-slate-950"
+                      : "text-slate-500 hover:text-white"
                   }`}
                 >
-                  °{unit}
+                  °{candidate}
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={handleRefreshNow}
-              disabled={isRefreshing || !isToday}
-              className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isRefreshing ? "Refreshing..." : "Refresh Current Data"}
-            </button>
-            {isToday ? (
-              <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
-                Live official ingest enabled
-              </span>
-            ) : (
-              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-amber-900">
-                Historical capture only
-              </span>
+            {isToday && (
+              <button
+                type="button"
+                onClick={() => refreshLiveSources()}
+                disabled={refreshState.active}
+                className="h-10 bg-cyan-300 px-4 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-950 transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
+              >
+                {refreshState.active ? "Syncing" : "Sync now"}
+              </button>
             )}
           </div>
-
-          <div className="mt-4 inline-flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-sky-950">
-            <span className="font-semibold uppercase tracking-[0.16em] text-sky-800">
-              Seoul Time
-            </span>
-            <span className="font-medium">{formatSeoulClock(clockNowMs)}</span>
-          </div>
-
-          <p className="mt-4 text-sm text-black/70">
-            {liveMessage ||
-              (isToday
-                ? "Waiting for AMO sync..."
-                : "Historical RKSI dates depend on previously captured live official and AMOS rows.")}
-          </p>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Latest
+        <section className="grid grid-cols-2 gap-y-5 border-b border-white/10 py-5 md:grid-cols-4">
+          <SourceCard
+            accent="#f8fafc"
+            label="Actual METAR"
+            value={formatTemperature(latestMetar, unit)}
+            unit={unit}
+            detail={
+              latestMetar
+                ? `${latestMetar.reportType} · ${formatClock(
+                    latestMetar.obsTimeUtc,
+                  )}`
+                : "awaiting report"
+            }
+            count={metarRows.length}
+          />
+          <SourceCard
+            accent="#fbbf24"
+            label="AMOS 5 minute"
+            value={formatTemperature(latestFiveMinute, unit)}
+            unit={unit}
+            detail={
+              latestFiveMinute
+                ? `15L · ${formatClock(latestFiveMinute.obsTimeUtc)}`
+                : "awaiting capture"
+            }
+            count={fiveMinuteRows.length}
+          />
+          <SourceCard
+            accent="#22d3ee"
+            label="AMOS 1 minute"
+            value={formatTemperature(latestOneMinute, unit)}
+            unit={unit}
+            detail={
+              latestOneMinute
+                ? `15L · ${formatClock(latestOneMinute.obsTimeUtc)}`
+                : "awaiting capture"
+            }
+            count={oneMinuteRows.length}
+          />
+          <div className="border-l border-white/10 px-4 md:px-6">
+            <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">
+              Seoul clock
             </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {summary ? formatTemp(latestTemp, displayUnit) : "—"}
+            <p className="mt-2 text-2xl font-medium tracking-tight text-white md:text-3xl">
+              {formatClock(clockNowMs, true)}
             </p>
-            <p className="mt-2 text-sm text-black/65">
-              {summary?.latestReportType ?? "—"} at{" "}
-              {summary?.latestObsTimeLocal
-                ? formatStoredLocalDateTime(summary.latestObsTimeLocal)
-                : "—"}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Day Range
-            </p>
-            <p className="mt-2 text-xl font-semibold text-foreground">
-              Max {summary ? formatTemp(maxTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-1 text-sm text-black/65">
-              {summary?.maxTempAtLocal
-                ? `at ${formatStoredLocalDateTime(summary.maxTempAtLocal)}`
-                : "—"}
-            </p>
-            <p className="mt-3 text-xl font-semibold text-foreground">
-              Min {summary ? formatTemp(minTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-1 text-sm text-black/65">
-              {summary?.minTempAtLocal
-                ? `at ${formatStoredLocalDateTime(summary.minTempAtLocal)}`
-                : "—"}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Messages
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {summary?.obsCount ?? 0}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              Routine RKSI METAR is normally half-hourly. Full-day coverage
-              depends on rows being captured live because this page stores the
-              latest official AMO feed rather than a confirmed history endpoint.
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Latest AMOS 15L
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {latest15LRow
-                ? formatTemp(
-                    displayUnit === "C" ? latest15LRow.tempC : latest15LRow.tempF,
-                    displayUnit,
-                  )
-                : "—"}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              {latest15LRow?.obsTimeLocal
-                ? `15L at ${formatStoredLocalDateTime(latest15LRow.obsTimeLocal)}`
-                : "No stored 15L runway sample yet for this date."}
-            </p>
-            <p className="mt-2 text-xs text-black/55">
-              Stored every 5 minutes from `amos_info.do`. All runway rows are
-              kept, but the chart overlays 15L by default.
+            <p className="mt-1 truncate font-mono text-[10px] text-slate-500">
+              {latestOneMinute
+                ? captureOffset(latestOneMinute)
+                : refreshState.message || "Asia/Seoul"}
             </p>
           </div>
         </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <section className="flex min-h-0 flex-1 flex-col pt-5">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold text-foreground">
-                Temperature Line
-              </h2>
-              <p className="mt-1 text-sm text-black/60">
-                Solid blue is official METAR/SPECI. Dashed orange is the stored
-                15L AMOS runway-temperature feed sampled every 5 minutes.
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                00:00—23:59 KST
               </p>
+              <h2 className="mt-1 text-lg font-medium text-slate-200">
+                {date}
+              </h2>
             </div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              {dayData === undefined
+                ? "Loading telemetry…"
+                : refreshState.message ||
+                  `${metarRows.length + fiveMinuteRows.length + oneMinuteRows.length} plotted observations`}
+            </p>
           </div>
 
-          <div className="mt-6 h-[420px]">
-            {chartData.datasets.length ? (
+          <div className="relative min-h-[560px] flex-1 overflow-x-auto border border-white/10 bg-[#07111f]/85 shadow-[0_30px_100px_rgba(0,0,0,0.38)]">
+            <div className="h-[68vh] min-h-[560px] min-w-[900px] p-3 md:h-[72vh] md:max-h-[900px] md:p-5">
               <Line data={chartData} options={chartOptions} />
-            ) : (
-              <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No RKSI METAR or 15L AMOS observations stored for this date yet.
+            </div>
+            {dayData !== undefined && !hasChartData && (
+              <div className="pointer-events-none absolute inset-0 grid place-items-center">
+                <div className="text-center">
+                  <p className="font-mono text-xs uppercase tracking-[0.22em] text-slate-400">
+                    No captured telemetry
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    This Seoul local date has no stored RKSI observations.
+                  </p>
+                </div>
               </div>
             )}
           </div>
         </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">
-                15L Correlation Check
-              </h2>
-              <p className="mt-1 text-sm text-black/60">
-                Nearest stored 15L AMOS sample against each official RKSI METAR
-                or SPECI point. Small deltas support the representative-runway
-                hypothesis, but they do not prove the official AMO processing
-                path.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Official Time</th>
-                  <th className="px-3 py-2 font-semibold">Type</th>
-                  <th className="px-3 py-2 font-semibold">Official Temp</th>
-                  <th className="px-3 py-2 font-semibold">15L Sample</th>
-                  <th className="px-3 py-2 font-semibold">15L Temp</th>
-                  <th className="px-3 py-2 font-semibold">Gap</th>
-                  <th className="px-3 py-2 font-semibold">Delta</th>
-                </tr>
-              </thead>
-              <tbody>
-                {amosComparisons.length ? (
-                  amosComparisons.map((comparison) => (
-                    <tr
-                      key={`${comparison.officialRow._id}-${comparison.amosRow._id}`}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatStoredLocalDateTime(comparison.officialRow.obsTimeLocal)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {comparison.officialRow.reportType}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {displayUnit === "C"
-                          ? formatTemp(comparison.officialRow.tempC, "C")
-                          : formatTemp(comparison.officialRow.tempF, "F")}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatStoredLocalDateTime(comparison.amosRow.obsTimeLocal)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {displayUnit === "C"
-                          ? formatTemp(comparison.amosRow.tempC, "C")
-                          : formatTemp(comparison.amosRow.tempF, "F")}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatSignedGap(comparison.gapMs)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {displayUnit === "C"
-                          ? formatTemp(comparison.deltaC, "C")
-                          : formatTemp(comparison.deltaF, "F")}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
-                      No 15L AMOS samples were found within 10 minutes of the
-                      stored official rows.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">
-                Weather.com 5-Day Forecast
-              </h2>
-              <p className="mt-1 text-sm text-black/60">
-                Daily rows come from Weather.com&apos;s 5-day forecast endpoint
-                for RKSI/Incheon. The selected route date is highlighted when it
-                falls inside the current Weather.com forecast window.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Date</th>
-                  <th className="px-3 py-2 font-semibold">Min</th>
-                  <th className="px-3 py-2 font-semibold">Max</th>
-                  <th className="px-3 py-2 font-semibold">Day</th>
-                  <th className="px-3 py-2 font-semibold">Night</th>
-                </tr>
-              </thead>
-              <tbody>
-                {weatherForecastDays.length ? (
-                  weatherForecastDays.map((day) => (
-                    <tr
-                      key={day.date}
-                      className={`border-b border-black/5 align-top last:border-b-0 ${
-                        day.date === date ? "bg-amber-50/60" : ""
-                      }`}
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap font-semibold text-black">
-                        {day.date}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatTemp(
-                          displayUnit === "C" ? day.minTempC : day.minTempF,
-                          displayUnit,
-                        )}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatTemp(
-                          displayUnit === "C" ? day.maxTempC : day.maxTempF,
-                          displayUnit,
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-black/70">{day.dayPhrase || "—"}</td>
-                      <td className="px-3 py-3 text-black/70">{day.nightPhrase || "—"}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-black/55">
-                      {weatherPanelError
-                        ? `Weather panel failed: ${weatherPanelError}`
-                        : weatherForecast?.status === "error"
-                          ? weatherForecast.error || "Weather.com forecast unavailable."
-                          : isWeatherLoading
-                            ? "Loading Weather.com forecast..."
-                            : "No Weather.com forecast rows available."}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">Latest Raw METAR</h2>
-          <div className="mt-4 rounded-2xl border border-black/10 bg-black/[0.02] p-4 font-mono text-sm text-black/80">
-            {summary?.latestRawMetar ?? "No latest raw METAR stored yet."}
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
-              <p className="mt-1 text-sm text-black/60">
-                Recent routine half-hour RKSI METAR first-seen timing across the
-                official AMO/KMA latest-METAR API and NOAA `tgftp`. Times in this
-                table are shown in America/Chicago. Official RKSI polling is only
-                scheduled at the `:29` to `:31` and `:58` to `:01` routine
-                windows so the race stays useful without excessive AMO calls.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Report Time</th>
-                  <th className="px-3 py-2 font-semibold">Winner</th>
-                  <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">AMO Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
-                  <th className="px-3 py-2 font-semibold">Raw METAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {raceRows.length ? (
-                  raceRows.map((row) => (
-                    <tr
-                      key={row._id}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatChicagoDateTimeSeconds(row.reportTsUtc)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "amo"
-                              ? "bg-emerald-50 text-emerald-800"
-                              : row.winner === "tgftp"
-                                ? "bg-amber-50 text-amber-900"
-                                : row.winner === "tie"
-                                  ? "bg-slate-100 text-slate-800"
-                                  : "bg-black/[0.05] text-black/65"
-                          }`}
-                        >
-                          {formatRaceWinner(row.winner)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatLeadMs(row.leadMs)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.amoFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
-                      </td>
-                      <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ?? row.amoRawMetar ?? row.tgftpRawMetar ?? "—"}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
-                      No publish-race rows stored yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">Raw Observations</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Local Time</th>
-                  <th className="px-3 py-2 font-semibold">Type</th>
-                  <th className="px-3 py-2 font-semibold">Temp</th>
-                  <th className="px-3 py-2 font-semibold">First Seen</th>
-                  <th className="px-3 py-2 font-semibold">Source</th>
-                  <th className="px-3 py-2 font-semibold">Raw METAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length ? (
-                  rows.map((row) => (
-                    <tr
-                      key={row._id}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatStoredLocalDateTime(row.obsTimeLocal)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.reportType === "SPECI"
-                              ? "bg-red-50 text-red-800"
-                              : "bg-sky-50 text-sky-800"
-                          }`}
-                        >
-                          {row.reportType}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {displayUnit === "C"
-                          ? formatTemp(row.tempC, "C")
-                          : formatTemp(row.tempF, "F")}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.amoFirstSeenAt
-                          ? formatSeoulDateTimeSeconds(row.amoFirstSeenAt)
-                          : "—"}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.source}
-                      </td>
-                      <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-black/55">
-                      No stored rows for this date.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <footer className="flex flex-col gap-2 py-4 font-mono text-[10px] leading-5 text-slate-600 md:flex-row md:items-center md:justify-between">
+          <p>
+            AMOS uses the feed row designated 15L. Cadence tags preserve the
+            one-minute and five-minute capture paths separately.
+          </p>
+          <p>NOAA TGFTP METAR · KMA AMOS MOBILE FEED</p>
+        </footer>
       </div>
     </main>
   );
