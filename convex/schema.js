@@ -2,6 +2,58 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const seoulForecastStatus = v.union(
+  v.literal("ok"),
+  v.literal("partial"),
+  v.literal("error"),
+);
+
+const seoulProviderStatus = v.union(v.literal("ok"), v.literal("error"));
+
+const seoulHourlyForecastRow = v.object({
+  date: v.string(),
+  forecastTimeUtc: v.number(),
+  forecastTimeLocal: v.string(),
+  tempC: v.number(),
+  tempF: v.number(),
+  phrase: v.optional(v.string()),
+});
+
+const seoulProviderDetail = v.object({
+  provider: v.union(
+    v.literal("weathercom"),
+    v.literal("google"),
+    v.literal("open_meteo"),
+  ),
+  label: v.string(),
+  status: seoulProviderStatus,
+  error: v.optional(v.string()),
+  weight: v.number(),
+  rawHighC: v.optional(v.number()),
+  rawHighF: v.optional(v.number()),
+  adjustedHighC: v.optional(v.number()),
+  adjustedHighF: v.optional(v.number()),
+  liveBiasC: v.optional(v.number()),
+  capturedAt: v.optional(v.number()),
+  capturedAtLocal: v.optional(v.string()),
+  captureAgeMinutes: v.optional(v.number()),
+  peakTimeUtc: v.optional(v.number()),
+  peakTimeLocal: v.optional(v.string()),
+  pointCount: v.number(),
+});
+
+const seoulPredictionStatus = v.union(
+  v.literal("awaiting_observations"),
+  v.literal("on_track"),
+  v.literal("running_warm"),
+  v.literal("running_cool"),
+  v.literal("limited_guidance"),
+  v.literal("revised_up"),
+  v.literal("revised_down"),
+  v.literal("peak_likely_passed"),
+  v.literal("final"),
+);
+
 export default defineSchema({
   notes: defineTable({
     stationIcao: v.optional(v.string()),
@@ -104,11 +156,7 @@ export default defineSchema({
     durationDays: v.number(),
     unit: v.union(v.literal("imperial"), v.literal("metric")),
     language: v.string(),
-    status: v.union(
-      v.literal("ok"),
-      v.literal("partial"),
-      v.literal("error"),
-    ),
+    status: v.union(v.literal("ok"), v.literal("partial"), v.literal("error")),
     microsoftStatus: v.union(v.literal("ok"), v.literal("error")),
     microsoftError: v.optional(v.string()),
     microsoftForecastDays: v.array(
@@ -191,11 +239,7 @@ export default defineSchema({
     capturedAtLocal: v.string(),
     unit: v.union(v.literal("imperial"), v.literal("metric")),
     language: v.string(),
-    status: v.union(
-      v.literal("ok"),
-      v.literal("partial"),
-      v.literal("error"),
-    ),
+    status: v.union(v.literal("ok"), v.literal("partial"), v.literal("error")),
     actualReadings: v.array(
       v.object({
         source: v.string(),
@@ -949,20 +993,196 @@ export default defineSchema({
     source: v.string(),
     rawJson: v.optional(v.string()),
     updatedAt: v.number(),
-  }).index("by_station_date_ts_rwy", [
-    "stationIcao",
-    "date",
-    "obsTimeUtc",
-    "rwyNo",
-    "rwyDir",
-  ]).index("by_station_date_ts_rwy_cadence", [
-    "stationIcao",
-    "date",
-    "obsTimeUtc",
-    "rwyNo",
-    "rwyDir",
-    "collectionCadence",
-  ]),
+  })
+    .index("by_station_date_ts_rwy", [
+      "stationIcao",
+      "date",
+      "obsTimeUtc",
+      "rwyNo",
+      "rwyDir",
+    ])
+    .index("by_station_date_ts_rwy_cadence", [
+      "stationIcao",
+      "date",
+      "obsTimeUtc",
+      "rwyNo",
+      "rwyDir",
+      "collectionCadence",
+    ])
+    .index("by_station_date_rwy_ts", [
+      "stationIcao",
+      "date",
+      "rwyNo",
+      "rwyDir",
+      "obsTimeUtc",
+    ]),
+
+  seoulForecastCaptures: defineTable({
+    stationIcao: v.string(),
+    stationName: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    captureDate: v.string(),
+    status: seoulForecastStatus,
+    weathercomStatus: seoulProviderStatus,
+    weathercomError: v.optional(v.string()),
+    weathercomForecastDays: v.array(
+      v.object({
+        date: v.string(),
+        minTempC: v.optional(v.number()),
+        minTempF: v.optional(v.number()),
+        maxTempC: v.optional(v.number()),
+        maxTempF: v.optional(v.number()),
+        dayPhrase: v.optional(v.string()),
+        nightPhrase: v.optional(v.string()),
+      }),
+    ),
+    googleStatus: seoulProviderStatus,
+    googleError: v.optional(v.string()),
+    googleHourlyRows: v.array(seoulHourlyForecastRow),
+    openMeteoStatus: seoulProviderStatus,
+    openMeteoError: v.optional(v.string()),
+    openMeteoHourlyRows: v.array(seoulHourlyForecastRow),
+    createdAt: v.number(),
+  }).index("by_station_capturedAt", ["stationIcao", "capturedAt"]),
+
+  seoulAmosDailySummaries: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    rwyNo: v.literal("2"),
+    rwyDir: v.literal("15L"),
+    obsCount: v.number(),
+    oneMinuteObsCount: v.number(),
+    fallbackObsCount: v.number(),
+    firstObsTimeUtc: v.optional(v.number()),
+    firstObsTimeLocal: v.optional(v.string()),
+    latestObsTimeUtc: v.optional(v.number()),
+    latestObsTimeLocal: v.optional(v.string()),
+    latestTempC: v.optional(v.number()),
+    latestTempF: v.optional(v.number()),
+    maxTempC: v.optional(v.number()),
+    maxTempF: v.optional(v.number()),
+    maxTempAtUtc: v.optional(v.number()),
+    maxTempAtLocal: v.optional(v.string()),
+    minTempC: v.optional(v.number()),
+    minTempF: v.optional(v.number()),
+    minTempAtUtc: v.optional(v.number()),
+    minTempAtLocal: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_station_date", ["stationIcao", "date"]),
+
+  seoulHighPredictions: defineTable({
+    stationIcao: v.string(),
+    targetDate: v.string(),
+    revision: v.number(),
+    evaluationSlotUtc: v.number(),
+    modelVersion: v.string(),
+    generatedAt: v.number(),
+    generatedAtLocal: v.string(),
+    forecastCaptureId: v.optional(v.id("seoulForecastCaptures")),
+    forecastCapturedAt: v.optional(v.number()),
+    forecastAgeMinutes: v.optional(v.number()),
+    previousPredictionId: v.optional(v.id("seoulHighPredictions")),
+    observedCount: v.number(),
+    observedCurrentC: v.optional(v.number()),
+    observedCurrentF: v.optional(v.number()),
+    observedCurrentAtUtc: v.optional(v.number()),
+    observedCurrentAtLocal: v.optional(v.string()),
+    observationAgeMinutes: v.optional(v.number()),
+    observedHighC: v.optional(v.number()),
+    observedHighF: v.optional(v.number()),
+    observedHighAtUtc: v.optional(v.number()),
+    observedHighAtLocal: v.optional(v.string()),
+    slope15mCPerHour: v.optional(v.number()),
+    slope30mCPerHour: v.optional(v.number()),
+    slope60mCPerHour: v.optional(v.number()),
+    expectedCurrentC: v.optional(v.number()),
+    liveBiasC: v.optional(v.number()),
+    predictedHighC: v.number(),
+    predictedHighF: v.number(),
+    confidenceLowC: v.number(),
+    confidenceLowF: v.number(),
+    confidenceHighC: v.number(),
+    confidenceHighF: v.number(),
+    peakWindowStartUtc: v.optional(v.number()),
+    peakWindowEndUtc: v.optional(v.number()),
+    peakWindowStartLocal: v.optional(v.string()),
+    peakWindowEndLocal: v.optional(v.string()),
+    status: seoulPredictionStatus,
+    reason: v.string(),
+    providerDetails: v.array(seoulProviderDetail),
+    hourlyEnsembleCurve: v.array(
+      v.object({
+        forecastTimeUtc: v.number(),
+        forecastTimeLocal: v.string(),
+        tempC: v.number(),
+        tempF: v.number(),
+        providerCount: v.number(),
+      }),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_station_date_revision", [
+      "stationIcao",
+      "targetDate",
+      "revision",
+    ])
+    .index("by_station_date_generatedAt", [
+      "stationIcao",
+      "targetDate",
+      "generatedAt",
+    ])
+    .index("by_station_date_slot", [
+      "stationIcao",
+      "targetDate",
+      "evaluationSlotUtc",
+    ]),
+
+  seoulHighEvaluations: defineTable({
+    stationIcao: v.string(),
+    targetDate: v.string(),
+    finalizedAt: v.number(),
+    finalizedAtLocal: v.string(),
+    actualHighC: v.number(),
+    actualHighF: v.number(),
+    actualHighAtUtc: v.number(),
+    actualHighAtLocal: v.string(),
+    obsCount: v.number(),
+    initialPredictionId: v.optional(v.id("seoulHighPredictions")),
+    initialPredictedHighC: v.optional(v.number()),
+    initialPredictedHighF: v.optional(v.number()),
+    initialErrorC: v.optional(v.number()),
+    initialAbsoluteErrorC: v.optional(v.number()),
+    finalPredictionId: v.optional(v.id("seoulHighPredictions")),
+    finalPredictedHighC: v.optional(v.number()),
+    finalPredictedHighF: v.optional(v.number()),
+    finalErrorC: v.optional(v.number()),
+    finalAbsoluteErrorC: v.optional(v.number()),
+    finalPeakWindowStartUtc: v.optional(v.number()),
+    finalPeakWindowEndUtc: v.optional(v.number()),
+    peakWindowHit: v.optional(v.boolean()),
+    checkpoints: v.optional(
+      v.array(
+        v.object({
+          localHour: v.number(),
+          cutoffAtUtc: v.number(),
+          cutoffAtLocal: v.string(),
+          predictionId: v.optional(v.id("seoulHighPredictions")),
+          predictedHighC: v.optional(v.number()),
+          predictedHighF: v.optional(v.number()),
+          errorC: v.optional(v.number()),
+          absoluteErrorC: v.optional(v.number()),
+          peakWindowStartUtc: v.optional(v.number()),
+          peakWindowEndUtc: v.optional(v.number()),
+          peakWindowHit: v.optional(v.boolean()),
+        }),
+      ),
+    ),
+    revisionCount: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_station_date", ["stationIcao", "targetDate"])
+    .index("by_station_finalizedAt", ["stationIcao", "finalizedAt"]),
 
   seoulPublishRaceReports: defineTable({
     stationIcao: v.string(),

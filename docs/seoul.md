@@ -79,16 +79,80 @@ chart path:
   the one-minute AMOS line and uses five-minute rows solely to fill missing
   timestamps.
 
+## RKSI 15L daily-high prediction
+
+The Seoul day page now predicts one precise target: the highest 0.1 °C
+temperature reported during the Seoul-local calendar day by the representative
+AMOS row `rwyNo=2`, `rwyDir=15L`. The target is not a central-Seoul city
+temperature and is not the rounded METAR maximum.
+
+The first model is a transparent live ensemble:
+
+- Weather.com contributes a daily-high forecast and remains an advisory or
+  fallback input.
+- Google Weather contributes an hourly curve when
+  `GOOGLE_WEATHER_API_KEY` is configured.
+- Open-Meteo contributes an hourly curve without requiring a key.
+- The freshest 15L observation, when no more than ten minutes old, measures how
+  warm or cool the live sensor is running against the hourly forecast. That
+  bias decays with forecast lead time instead of being applied indefinitely.
+- Fifteen-, thirty-, and sixty-minute AMOS slopes describe the recent warming
+  or cooling trend.
+
+Provider forecasts are captured immutably every hour. The prediction is checked
+every five minutes and after a manual page synchronization. A new immutable
+revision is stored for a material change in the temperature, status, peak
+window, observed high, or provider capture; unchanged runs reuse the previous
+revision, with a periodic heartbeat.
+
+Every prediction contains:
+
+```text
+predicted high and confidence interval
+most likely one-hour peak window
+observed 15L high and first occurrence so far
+current 15L temperature and observation age
+expected temperature now and live bias
+15/30/60-minute temperature slopes
+provider inputs and capture ages
+hourly ensemble curve
+on-track / running-warm / running-cool / revised / peak-passed status
+plain-language reason
+```
+
+The prediction has a hard truth constraint: it can never be lower than the
+maximum already observed by 15L. A stale 15L row is still valid for the
+observed daily maximum but is not used as the current reading or live bias.
+Transient provider failures can reuse that provider's latest successful
+capture for up to twelve hours, and the provider capture age remains visible in
+the stored prediction.
+
+At 00:10 KST the completed day is finalized against the canonical 15L series.
+One-minute rows win when duplicate timestamps also have five-minute or legacy
+captures, and the first occurrence wins when the maximum temperature is tied.
+The evaluator retains the closing tracker result, but does not present it as
+independent forecast skill: by late day it has already absorbed live
+observations. Honest temperature-error and peak-window statistics are instead
+recorded at fixed 09:00, 12:00, and 15:00 KST cutoffs.
+
+The AMOS 15L display record also exposes dew point, QNH, average/minimum/maximum
+wind direction and speed, crosswind/headwind-tailwind fields, visibility, RVR,
+precipitation, and cloud fields in the raw payload. These are useful future
+predictors, but model version `rksi15l-ensemble-v1` deliberately starts with
+provider temperature curves plus live temperature bias and trend. Fixed-cutoff
+scores should accumulate before adding more features or claiming that a more
+complex model is better.
+
 ## Ranked findings
 
-| Order | Source | Granularity | Authentication | Observed freshness | Verdict |
-|---:|---|---:|---|---|---|
-| 1 | AMO mobile `amos_info.do` | 1 minute | None | New minute appeared about 14-16 seconds after the minute in measured tests | Fastest practical machine feed measured; official host but undocumented contract |
-| 1b | AMO public AMOS HTML | 1 minute | None | New minute appeared roughly 12-17 seconds after the minute in two tests | Effectively tied within the small sample, but HTML parsing is more brittle |
-| TBD | KMA API Hub AMOS `amos.php` | 1 minute | KMA key | Not yet measurable without a key | Preferred supported API; race it against the two no-key feeds |
-| 2 | KMA Weather station 113 web JSON | 1 minute | None | About 5-6 minutes behind during the live comparison | Official fallback, not a speed winner |
-| 3 | AviationWeather.gov API / NOAA tgftp | 30 minutes | None | About 4m20s-4m45s after the nominal METAR time over a 12-hour sample | Good supported METAR access, not current sensor temperature |
-| 4 | KMA WIS2 METAR | 30 minutes | None | About 5m10s after nominal time in the sampled cycles | KMA-origin audit/backup feed; it did not beat AWC |
+| Order | Source                               | Granularity | Authentication | Observed freshness                                                         | Verdict                                                                          |
+| ----: | ------------------------------------ | ----------: | -------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+|     1 | AMO mobile `amos_info.do`            |    1 minute | None           | New minute appeared about 14-16 seconds after the minute in measured tests | Fastest practical machine feed measured; official host but undocumented contract |
+|    1b | AMO public AMOS HTML                 |    1 minute | None           | New minute appeared roughly 12-17 seconds after the minute in two tests    | Effectively tied within the small sample, but HTML parsing is more brittle       |
+|   TBD | KMA API Hub AMOS `amos.php`          |    1 minute | KMA key        | Not yet measurable without a key                                           | Preferred supported API; race it against the two no-key feeds                    |
+|     2 | KMA Weather station 113 web JSON     |    1 minute | None           | About 5-6 minutes behind during the live comparison                        | Official fallback, not a speed winner                                            |
+|     3 | AviationWeather.gov API / NOAA tgftp |  30 minutes | None           | About 4m20s-4m45s after the nominal METAR time over a 12-hour sample       | Good supported METAR access, not current sensor temperature                      |
+|     4 | KMA WIS2 METAR                       |  30 minutes | None           | About 5m10s after nominal time in the sampled cycles                       | KMA-origin audit/backup feed; it did not beat AWC                                |
 
 The observed timings are small live samples, not provider SLAs. They should be
 retested over at least 24-48 hours before making a hard latency guarantee.
@@ -195,11 +259,11 @@ pavement.
 The mobile JSON does not preserve that provenance cleanly. In four live probes:
 
 | KST minute | Every populated runway 1/2 row | Every runway 3/4 row |
-|---|---:|---:|
-| 10:38 | 29.3 °C | 28.9 °C |
-| 10:39 | 29.5 °C | 28.7 °C |
-| 10:41 | 29.5 °C | 28.9 °C |
-| 10:42 | 29.4 °C | 28.9 °C |
+| ---------- | -----------------------------: | -------------------: |
+| 10:38      |                        29.3 °C |              28.9 °C |
+| 10:39      |                        29.5 °C |              28.7 °C |
+| 10:41      |                        29.5 °C |              28.9 °C |
+| 10:42      |                        29.4 °C |              28.9 °C |
 
 Wind and sometimes QNH still varied by runway direction. This shows that
 `amos_info.do` flattens each temperature onto several display rows rather than

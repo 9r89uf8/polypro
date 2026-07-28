@@ -1,7 +1,7 @@
 # Seoul RKSI live-temperature page
 
-This document describes the focused RKSI temperature view and the collectors
-that feed it.
+This document describes the focused RKSI 15L temperature and daily-high
+prediction view, plus the collectors that feed it.
 
 ## Routes
 
@@ -14,8 +14,24 @@ current `Asia/Seoul` date.
 
 Example: `/seoul/day/2026-07-27`.
 
-The route is a single-purpose temperature console. Its dominant element is one
-full-day chart with exactly two visible series:
+The route is a single-purpose 15L daily-high tracker. Its dominant panel shows
+the latest continuously revised prediction:
+
+- predicted maximum temperature
+- confidence interval
+- most likely peak-time window in `Asia/Seoul`
+- observed 15L maximum and its first occurrence so far
+- current 15L temperature, expected temperature now, and deviation
+- recent 30-minute warming rate
+- an on-track/running-warm/running-cool/final status and plain-language reason
+- prediction revision and update time
+
+The prediction target is the maximum 0.1 °C temperature reported by the
+representative RKSI `rwyNo=2`, `rwyDir=15L` AMOS row during that Seoul-local
+calendar date. It is an airport prediction, not a central-Seoul city
+temperature prediction.
+
+Below the prediction is one full-day chart with two observed series:
 
 - `Actual METAR`
   - parsed RKSI temperature from the NOAA `tgftp` latest-METAR file
@@ -27,6 +43,10 @@ full-day chart with exactly two visible series:
   - cyan high-resolution line
   - silently uses a five-minute audit snapshot only when the matching
     one-minute timestamp is missing
+
+The chart adds one forecast dataset, `15L high forecast`. It is the hourly curve
+from the latest prediction and is drawn as a clearly distinct amber dashed
+line. It does not add a five-minute AMOS series.
 
 The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
 is marked when the selected date is today. The chart uses a 2,400-pixel
@@ -40,28 +60,84 @@ The rest of the interface is deliberately compact:
 - RKSI/live status and Seoul clock
 - previous day, next day, date picker, and today navigation
 - Celsius/Fahrenheit toggle
-- manual live-source synchronization
+- manual live-source and prediction synchronization
 - one status card per plotted series
 - capture-second or audit-fallback status for the newest displayed AMOS row
+- compact horizontally scrollable provider signals and immutable prediction
+  revision history when those records are available
 
-The previous forecast, correlation, publish-race, raw-METAR, and raw-observation
-panels are no longer part of the primary Seoul page.
+The previous correlation, publish-race, raw-METAR, and raw-observation panels
+are no longer part of the primary Seoul page.
+
+## Prediction dashboard behavior
+
+The page subscribes to
+`seoulWeather:getHighPredictionDashboard({ date })`. Its main UI contract is:
+
+- `latestPrediction`: the current prediction and hourly forecast curve
+- `revisions`: immutable earlier predictions for the selected date
+- `summary`: observed-day aggregates
+- `evaluation`: current/final forecast evaluation
+- `latestForecastCapture`: the most recent provider capture and provider health
+- `accuracy`: finalized accuracy fields when the day is complete
+
+The UI treats every part of the dashboard as optional. While the query is
+loading it shows a prediction skeleton. A date with no prediction gets an
+explicit empty state instead of fabricated values. An unavailable provider does
+not hide the ensemble prediction; its provider signal is marked unavailable
+when the backend returns that state.
+
+The predicted maximum must never be below the observed 15L maximum already
+stored for the day. The displayed status and reason explain whether the live
+temperature remains near the expected hourly curve or has caused a revision.
+Historical revisions remain visible and are never overwritten by the latest
+forecast.
+
+When a completed date has an evaluation, the panel switches to `Final` while
+preserving the last stored value as the **closing tracker estimate**. It shows
+that estimate beside the actual 15L high, closing error, closing peak-window
+result, observation count, and revision count. The closing estimate has already
+absorbed live observations through the day, so its error is not presented as
+independent forecast skill. The backend separately scores the latest immutable
+prediction available at 09:00, 12:00, and 15:00 KST; each checkpoint records
+temperature error and whether its predicted peak window contained the actual
+first occurrence of the maximum.
 
 ## Client behavior
 
 The page subscribes to `seoul:getDayStationRows`, so chart data updates
 reactively after the collectors write to Convex.
 
-For the current Seoul date, the first page load and `Sync now` request:
+For the current Seoul date, the first page load and `Sync now` first request:
 
 - `seoul:pollLatestNoaaStationMetar`
 - `seoul:pollLatestAmosTemperatureSites`
 
-The manual AMOS request is a single immediate fetch. The scheduled rollover
-watch remains the lowest-latency path.
+After both observation requests settle, the page calls
+`seoulWeather:recomputeTodayHighPrediction({ date })`. Recalculation is still
+attempted if one live observation source is temporarily unavailable, and the
+status message reports partial failures. The manual AMOS request is a single
+immediate fetch. The scheduled rollover watch remains the lowest-latency path.
 
 Historical routes only display already-captured rows. There is no historical
-backfill from these latest-value endpoints.
+backfill from these latest-value endpoints, and the historical page does not
+trigger recomputation.
+
+## Prediction collectors
+
+- `seoul_forecast_capture_hourly` runs at minute `:02` and stores independent
+  Weather.com, Google Weather, and Open-Meteo results and errors. A usable
+  provider capture can remain an explicit fallback for at most twelve hours.
+- `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
+  date. Material changes create immutable revisions; no-op runs retain the
+  preceding revision, with a 30-minute heartbeat.
+- `seoul_15l_high_finalize_after_midnight` runs at `00:10 KST` and freezes the
+  previous day's canonical truth, closing tracker result, and fixed-cutoff
+  scores.
+
+The current AMOS value affects live bias only while it is at most ten minutes
+old. The observed maximum remains valid even when the newest observation is
+stale, and the predicted high is never allowed below that known maximum.
 
 ## Truthful cadence separation
 
@@ -168,6 +244,31 @@ One row per station/date with latest, minimum, and maximum METAR fields.
 One row per station/date/observation time/runway/direction/cadence. It preserves
 temperature, dew point, QNH, wind, visibility, precipitation, runway metadata,
 raw JSON, and the collection cadence.
+
+### `seoulAmosDailySummaries`
+
+One representative-15L row per station/date with observation counts, latest
+temperature, and the day's minimum and maximum temperature and occurrence
+times.
+
+### `seoulForecastCaptures`
+
+Immutable multi-provider forecast captures. Weather.com contributes a daily
+high while Google Weather and Open-Meteo can contribute hourly curves. Provider
+status and error text are stored independently so a missing key or failed
+provider does not discard the usable inputs.
+
+### `seoulHighPredictions`
+
+Immutable, numbered prediction revisions containing the predicted high,
+confidence interval, peak window, live-curve bias and warming rates, provider
+details, status/reason, and hourly ensemble curve.
+
+### `seoulHighEvaluations`
+
+Finalized actual high, peak time, revision count, lifecycle opening/closing
+tracker diagnostics, and honest 09:00/12:00/15:00 KST checkpoint temperature
+and peak-window scores.
 
 ### `seoulPublishRaceReports`
 
