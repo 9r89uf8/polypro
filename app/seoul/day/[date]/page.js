@@ -157,6 +157,94 @@ const peakTimingPlugin = {
   },
 };
 
+function providerPeakPosition(chart, options) {
+  if (
+    !options?.display ||
+    !Number.isFinite(options.minute) ||
+    !Number.isFinite(options.temperature)
+  ) {
+    return null;
+  }
+
+  const { chartArea, scales } = chart;
+  const x = scales.x.getPixelForValue(options.minute);
+  const y = scales.y.getPixelForValue(options.temperature);
+  if (
+    x < chartArea.left ||
+    x > chartArea.right ||
+    y < chartArea.top ||
+    y > chartArea.bottom
+  ) {
+    return null;
+  }
+
+  return { x, y };
+}
+
+const providerPeakPlugin = {
+  id: "seoulProviderPeak",
+  beforeDatasetsDraw(chart, _args, options) {
+    const position = providerPeakPosition(chart, options);
+    if (!position) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    ctx.save();
+    ctx.strokeStyle = "rgba(244, 114, 182, 0.56)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 5]);
+    ctx.beginPath();
+    ctx.moveTo(position.x, chartArea.top);
+    ctx.lineTo(position.x, chartArea.bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+  afterDatasetsDraw(chart, _args, options) {
+    const position = providerPeakPosition(chart, options);
+    if (!position || !options?.label) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    const boxHeight = 24;
+    const horizontalPadding = 9;
+
+    ctx.save();
+    ctx.font = "600 10px IBM Plex Mono, monospace";
+    const boxWidth = Math.min(
+      ctx.measureText(options.label).width + horizontalPadding * 2,
+      chartArea.right - chartArea.left - 8,
+    );
+    const boxLeft = Math.min(
+      Math.max(position.x - boxWidth / 2, chartArea.left + 4),
+      chartArea.right - boxWidth - 4,
+    );
+    const preferredTop = position.y - boxHeight - 12;
+    const boxTop =
+      preferredTop >= chartArea.top + 6
+        ? preferredTop
+        : Math.min(position.y + 12, chartArea.bottom - boxHeight - 6);
+
+    ctx.fillStyle = "rgba(29, 8, 21, 0.94)";
+    ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
+    ctx.strokeStyle = "rgba(244, 114, 182, 0.72)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.strokeRect(boxLeft, boxTop, boxWidth, boxHeight);
+    ctx.fillStyle = "#fbcfe8";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      options.label,
+      boxLeft + horizontalPadding,
+      boxTop + boxHeight / 2,
+      boxWidth - horizontalPadding * 2,
+    );
+    ctx.restore();
+  },
+};
+
 const hourlyCloudCoverPlugin = {
   id: "seoulHourlyCloudCover",
   afterDraw(chart, _args, options) {
@@ -308,6 +396,7 @@ ChartJS.register(
   nowLinePlugin,
   sunsetLinePlugin,
   peakTimingPlugin,
+  providerPeakPlugin,
   hourlyCloudCoverPlugin,
 );
 
@@ -318,6 +407,23 @@ const RKSI_LONGITUDE = 126.4407;
 const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_PROVIDER_CAPTURE_AGE_MINUTES = 12 * 60;
+const HOURLY_PROVIDER_CONFIGS = Object.freeze([
+  {
+    provider: "open_meteo",
+    providerLabel: "Open-Meteo",
+    weight: 0.45,
+    statusField: "openMeteoStatus",
+    rowsField: "openMeteoHourlyRows",
+  },
+  {
+    provider: "google",
+    providerLabel: "Google Weather",
+    weight: 0.35,
+    statusField: "googleStatus",
+    rowsField: "googleHourlyRows",
+  },
+]);
 const METAR_SKY_DEFAULT_HOLD_MINUTES = 30;
 const METAR_SKY_MAX_HOLD_MINUTES = 45;
 const METAR_SKY_AMOUNT_RANK = Object.freeze({
@@ -1108,22 +1214,6 @@ function formatTemperature(row, unit) {
   return Number.isFinite(value) ? `${value.toFixed(1)}°` : "—";
 }
 
-function formatPredictionTemperature(value, unit) {
-  return Number.isFinite(value) ? `${value.toFixed(1)}°${unit}` : "—";
-}
-
-function formatTemperatureDelta(value, unit) {
-  if (!Number.isFinite(value)) {
-    return "—";
-  }
-  return `${value > 0 ? "+" : ""}${value.toFixed(1)}°${unit}`;
-}
-
-function temperatureForUnit(source, cField, fField, unit) {
-  const value = source?.[unit === "C" ? cField : fField];
-  return Number.isFinite(value) ? value : null;
-}
-
 function firstFinite(...values) {
   return values.find(Number.isFinite) ?? null;
 }
@@ -1150,44 +1240,156 @@ function formatPeakWindow(start, end) {
   return `${formatLocalTime(start)}–${formatLocalTime(end)}`;
 }
 
-function predictionStatusMeta(status) {
-  const statuses = {
-    on_track: {
-      label: "On track",
-      className: "border-emerald-300/30 bg-emerald-300/10 text-emerald-200",
-    },
-    running_warm: {
-      label: "Running warm",
-      className: "border-amber-300/30 bg-amber-300/10 text-amber-200",
-    },
-    running_cool: {
-      label: "Running cool",
-      className: "border-sky-300/30 bg-sky-300/10 text-sky-200",
-    },
-    revised_up: {
-      label: "Revised up",
-      className: "border-orange-300/30 bg-orange-300/10 text-orange-200",
-    },
-    revised_down: {
-      label: "Revised down",
-      className: "border-indigo-300/30 bg-indigo-300/10 text-indigo-200",
-    },
-    peak_likely_passed: {
-      label: "Peak likely passed",
-      className: "border-violet-300/30 bg-violet-300/10 text-violet-200",
-    },
-    final: {
-      label: "Final",
-      className: "border-white/20 bg-white/10 text-slate-100",
-    },
+function providerPeakLabel(signal) {
+  const knownLabels = {
+    google: "Google Weather",
+    open_meteo: "Open-Meteo",
   };
+  const provider = String(signal?.provider ?? "");
   return (
-    statuses[status] ?? {
-      label: status
-        ? String(status).replaceAll("_", " ")
-        : "Awaiting assessment",
-      className: "border-white/15 bg-white/5 text-slate-300",
-    }
+    knownLabels[provider] ??
+    String(
+      signal?.label ??
+        signal?.providerName ??
+        signal?.provider ??
+        "Hourly forecast",
+    ).replace(/\s+hourly$/i, "")
+  );
+}
+
+function selectStoredHourlyProviderPeak(providerDetails, unit, nowMs = null) {
+  const temperatureField = unit === "C" ? "dailyHighC" : "dailyHighF";
+  return (
+    (Array.isArray(providerDetails) ? providerDetails : [])
+      .map((signal) => {
+        const minute = parseMinute(signal?.dailyPeakTimeLocal);
+        const temperature = signal?.[temperatureField];
+        const weight = Number(signal?.weight);
+        const capturedAt = Number(signal?.capturedAt);
+        const captureAgeMinutes = Number(signal?.captureAgeMinutes);
+        if (
+          signal?.status !== "ok" ||
+          !Number.isFinite(signal?.pointCount) ||
+          signal.pointCount <= 0 ||
+          !Number.isFinite(minute) ||
+          !Number.isFinite(signal?.dailyPeakTimeUtc) ||
+          !Number.isFinite(temperature) ||
+          !Number.isFinite(weight) ||
+          weight <= 0 ||
+          !Number.isFinite(capturedAt) ||
+          (Number.isFinite(nowMs) &&
+            (capturedAt > nowMs + 60 * 1000 ||
+              nowMs - capturedAt >
+                MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000)) ||
+          (Number.isFinite(captureAgeMinutes) &&
+            captureAgeMinutes > MAX_PROVIDER_CAPTURE_AGE_MINUTES)
+        ) {
+          return null;
+        }
+        return {
+          provider: String(signal.provider ?? ""),
+          providerLabel: providerPeakLabel(signal),
+          minute,
+          temperature,
+          peakTimeUtc: signal.dailyPeakTimeUtc,
+          peakTimeLocal: signal.dailyPeakTimeLocal,
+          weight,
+          capturedAt,
+          capturedAtLocal: signal.capturedAtLocal,
+          source: "prediction_revision",
+        };
+      })
+      .filter(Boolean)
+      .sort(
+        (left, right) =>
+          right.weight - left.weight ||
+          right.capturedAt - left.capturedAt ||
+          left.provider.localeCompare(right.provider),
+      )[0] ?? null
+  );
+}
+
+function selectLatestCaptureHourlyProviderPeak(
+  forecastCapture,
+  date,
+  unit,
+  nowMs,
+) {
+  const capturedAt = Number(forecastCapture?.capturedAt);
+  if (
+    !Number.isFinite(capturedAt) ||
+    (Number.isFinite(nowMs) &&
+      (capturedAt > nowMs + 60 * 1000 ||
+        nowMs - capturedAt > MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000))
+  ) {
+    return null;
+  }
+
+  const temperatureField = unit === "C" ? "tempC" : "tempF";
+  return (
+    HOURLY_PROVIDER_CONFIGS.map((config) => {
+      if (forecastCapture?.[config.statusField] !== "ok") {
+        return null;
+      }
+      const rows = (
+        Array.isArray(forecastCapture?.[config.rowsField])
+          ? forecastCapture[config.rowsField]
+          : []
+      ).filter(
+        (row) =>
+          row?.date === date &&
+          Number.isFinite(row?.forecastTimeUtc) &&
+          Number.isFinite(row?.[temperatureField]),
+      );
+      const coveredHours = new Set(
+        rows
+          .map((row) => parseMinute(row.forecastTimeLocal))
+          .filter(Number.isFinite)
+          .map((minute) => Math.floor(minute / 60)),
+      );
+      if (
+        coveredHours.size !== 24 ||
+        !Array.from({ length: 24 }, (_, hour) => hour).every((hour) =>
+          coveredHours.has(hour),
+        )
+      ) {
+        return null;
+      }
+
+      let peak = null;
+      for (const row of rows) {
+        if (
+          !peak ||
+          row[temperatureField] > peak[temperatureField] ||
+          (row[temperatureField] === peak[temperatureField] &&
+            row.forecastTimeUtc < peak.forecastTimeUtc)
+        ) {
+          peak = row;
+        }
+      }
+      const minute = parseMinute(peak?.forecastTimeLocal);
+      if (!peak || !Number.isFinite(minute)) {
+        return null;
+      }
+      return {
+        provider: config.provider,
+        providerLabel: config.providerLabel,
+        minute,
+        temperature: peak[temperatureField],
+        peakTimeUtc: peak.forecastTimeUtc,
+        peakTimeLocal: peak.forecastTimeLocal,
+        weight: config.weight,
+        capturedAt,
+        capturedAtLocal: forecastCapture.capturedAtLocal,
+        source: "latest_capture",
+      };
+    })
+      .filter(Boolean)
+      .sort(
+        (left, right) =>
+          right.weight - left.weight ||
+          left.provider.localeCompare(right.provider),
+      )[0] ?? null
   );
 }
 
@@ -1354,7 +1556,13 @@ function toForecastPoints(rows, unit) {
     .filter(Boolean);
 }
 
-function buildChartData(metarRows, amosDisplayRows, forecastRows, unit) {
+function buildChartData(
+  metarRows,
+  amosDisplayRows,
+  forecastRows,
+  providerPeak,
+  unit,
+) {
   const amosPoints = toChartPoints(amosDisplayRows, unit, (row) => ({
     displayCadence: row.displayCadence,
   }));
@@ -1412,107 +1620,31 @@ function buildChartData(metarRows, amosDisplayRows, forecastRows, unit) {
     });
   }
 
+  if (providerPeak) {
+    datasets.unshift({
+      label: `${providerPeak.providerLabel} daily forecast peak`,
+      data: [
+        {
+          x: providerPeak.minute,
+          y: providerPeak.temperature,
+          forecastTimeUtc: providerPeak.peakTimeUtc,
+          forecastTimeLocal: providerPeak.peakTimeLocal,
+        },
+      ],
+      showLine: false,
+      borderColor: "#f472b6",
+      backgroundColor: "#f472b6",
+      pointBorderColor: "#f472b6",
+      pointBackgroundColor: "#07111f",
+      pointBorderWidth: 3,
+      pointRadius: 6,
+      pointHitRadius: 12,
+      pointHoverRadius: 8,
+      order: 0,
+    });
+  }
+
   return { datasets };
-}
-
-function PredictionMetric({ label, value, detail }) {
-  return (
-    <div className="border-l border-white/10 pl-4 first:border-l-0 first:pl-0">
-      <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
-        {label}
-      </p>
-      <p className="mt-2 text-lg font-medium tracking-tight text-slate-100">
-        {value}
-      </p>
-      {detail && (
-        <p className="mt-1 font-mono text-[9px] leading-4 text-slate-600">
-          {detail}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ProviderSignal({ signal, unit }) {
-  const name =
-    signal?.label ??
-    signal?.providerName ??
-    signal?.provider ??
-    signal?.source ??
-    "Forecast";
-  const high = firstFinite(
-    temperatureForUnit(signal, "adjustedHighC", "adjustedHighF", unit),
-    temperatureForUnit(signal, "rawHighC", "rawHighF", unit),
-    temperatureForUnit(signal, "predictedHighC", "predictedHighF", unit),
-    temperatureForUnit(signal, "dailyHighC", "dailyHighF", unit),
-    temperatureForUnit(signal, "maxTempC", "maxTempF", unit),
-  );
-  const hasError = Boolean(signal?.error);
-
-  return (
-    <div className="flex min-w-[150px] items-center justify-between gap-4 border border-white/10 bg-black/10 px-3 py-2">
-      <div className="min-w-0">
-        <p className="truncate font-mono text-[9px] uppercase tracking-[0.15em] text-slate-400">
-          {String(name)}
-        </p>
-        <p
-          className={`mt-1 truncate font-mono text-[9px] ${
-            hasError ? "text-rose-300" : "text-slate-600"
-          }`}
-        >
-          {hasError ? "Unavailable" : signal?.status || "Captured"}
-        </p>
-      </div>
-      <p className="shrink-0 text-sm font-medium text-slate-200">
-        {formatPredictionTemperature(high, unit)}
-      </p>
-    </div>
-  );
-}
-
-function RevisionCard({ prediction, unit, isLatest }) {
-  const high = temperatureForUnit(
-    prediction,
-    "predictedHighC",
-    "predictedHighF",
-    unit,
-  );
-  const status = predictionStatusMeta(prediction?.status);
-
-  return (
-    <article
-      className={`min-w-[210px] border px-3 py-3 ${
-        isLatest
-          ? "border-amber-300/30 bg-amber-300/[0.06]"
-          : "border-white/10 bg-white/[0.02]"
-      }`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
-          Revision {prediction?.revisionNumber ?? "—"}
-        </p>
-        {isLatest && (
-          <span className="font-mono text-[8px] uppercase tracking-[0.15em] text-amber-300">
-            Latest
-          </span>
-        )}
-      </div>
-      <div className="mt-2 flex items-end justify-between gap-3">
-        <p className="text-xl font-medium text-slate-100">
-          {formatPredictionTemperature(high, unit)}
-        </p>
-        <p className="pb-0.5 font-mono text-[9px] text-slate-500">
-          {formatLocalTime(
-            prediction?.generatedAtLocal ?? prediction?.generatedAt,
-          )}
-        </p>
-      </div>
-      <p className="mt-2 truncate font-mono text-[9px] text-slate-500">
-        {status.label} ·{" "}
-        {formatPeakWindow(prediction?.peakStartLocal, prediction?.peakEndLocal)}
-      </p>
-    </article>
-  );
 }
 
 function SourceCard({ accent, label, value, unit, detail, count }) {
@@ -1603,6 +1735,45 @@ export default function SeoulDayPage() {
   const latestPrediction = normalizePrediction(
     predictionDashboard?.latestPrediction,
   );
+  const providerFreshnessNow = Number.isFinite(clockNowMs)
+    ? Math.floor(clockNowMs / (60 * 1000)) * 60 * 1000
+    : null;
+  const storedProviderPeak = useMemo(
+    () =>
+      selectStoredHourlyProviderPeak(
+        latestPrediction?.providerDetails ??
+          latestPrediction?.providerPredictions,
+        unit,
+        date >= today ? providerFreshnessNow : null,
+      ),
+    [
+      date,
+      latestPrediction?.providerDetails,
+      latestPrediction?.providerPredictions,
+      providerFreshnessNow,
+      today,
+      unit,
+    ],
+  );
+  const latestCaptureProviderPeak = useMemo(
+    () =>
+      selectLatestCaptureHourlyProviderPeak(
+        predictionDashboard?.latestForecastCapture,
+        date,
+        unit,
+        providerFreshnessNow,
+      ),
+    [
+      date,
+      predictionDashboard?.latestForecastCapture,
+      providerFreshnessNow,
+      unit,
+    ],
+  );
+  const preferredProviderPeak =
+    date >= today
+      ? (latestCaptureProviderPeak ?? storedProviderPeak)
+      : storedProviderPeak;
   const forecastCloudRows = useMemo(
     () =>
       buildForecastCloudRows({
@@ -1649,148 +1820,14 @@ export default function SeoulDayPage() {
       ) ?? null
     );
   }, [hourlyCloudCover]);
-  const predictionSummary = predictionDashboard?.summary ?? null;
-  const predictionEvaluation = predictionDashboard?.evaluation ?? null;
-  const predictionRevisions = Array.isArray(predictionDashboard?.revisions)
-    ? predictionDashboard.revisions.map(normalizePrediction)
-    : [];
-  const providerSignals = Array.isArray(latestPrediction?.providerPredictions)
-    ? latestPrediction.providerPredictions
-    : Array.isArray(latestPrediction?.providerDetails)
-      ? latestPrediction.providerDetails
-      : Array.isArray(
-            predictionDashboard?.latestForecastCapture?.providerPredictions,
-          )
-        ? predictionDashboard.latestForecastCapture.providerPredictions
-        : Array.isArray(
-              predictionDashboard?.latestForecastCapture?.providerDetails,
-            )
-          ? predictionDashboard.latestForecastCapture.providerDetails
-          : Array.isArray(predictionDashboard?.providerCaptures)
-            ? predictionDashboard.providerCaptures
-            : [];
-  const isFinalized = Boolean(predictionEvaluation);
-  const predictedHigh = firstFinite(
-    temperatureForUnit(
-      predictionEvaluation,
-      "finalPredictedHighC",
-      "finalPredictedHighF",
-      unit,
-    ),
-    temperatureForUnit(
-      latestPrediction,
-      "predictedHighC",
-      "predictedHighF",
-      unit,
-    ),
-  );
-  const confidenceLow = temperatureForUnit(
-    latestPrediction,
-    "confidenceLowC",
-    "confidenceLowF",
-    unit,
-  );
-  const confidenceHigh = temperatureForUnit(
-    latestPrediction,
-    "confidenceHighC",
-    "confidenceHighF",
-    unit,
-  );
-  const actualHigh = temperatureForUnit(
-    predictionEvaluation,
-    "actualHighC",
-    "actualHighF",
-    unit,
-  );
-  const observedHigh = firstFinite(
-    actualHigh,
-    temperatureForUnit(
-      latestPrediction,
-      "observedHighC",
-      "observedHighF",
-      unit,
-    ),
-    temperatureForUnit(
-      predictionSummary,
-      "observedHighC",
-      "observedHighF",
-      unit,
-    ),
-    temperatureForUnit(predictionSummary, "maxTempC", "maxTempF", unit),
-  );
-  const liveAmosTemperature = temperatureForUnit(
-    latestAmos,
-    "tempC",
-    "tempF",
-    unit,
-  );
-  const predictionCurrentTemperature = temperatureForUnit(
-    latestPrediction,
-    "currentTempC",
-    "currentTempF",
-    unit,
-  );
-  const currentTemperature = isToday
-    ? firstFinite(liveAmosTemperature, predictionCurrentTemperature)
-    : firstFinite(predictionCurrentTemperature, liveAmosTemperature);
-  const expectedNow = temperatureForUnit(
-    latestPrediction,
-    "expectedNowC",
-    "expectedNowF",
-    unit,
-  );
-  const deviation = temperatureForUnit(
-    latestPrediction,
-    "deviationC",
-    "deviationF",
-    unit,
-  );
-  const finalErrorC = predictionEvaluation?.finalErrorC;
-  const finalError = Number.isFinite(finalErrorC)
-    ? finalErrorC * (unit === "C" ? 1 : 1.8)
-    : null;
-  const predictionStatus = predictionStatusMeta(
-    isFinalized ? "final" : latestPrediction?.status,
-  );
-  const warmingRate30 = Number.isFinite(latestPrediction?.warmingRate30CPerHour)
-    ? latestPrediction.warmingRate30CPerHour * (unit === "C" ? 1 : 1.8)
-    : null;
-  const finalErrorDescription = Number.isFinite(finalError)
-    ? finalError > 0
-      ? `${formatPredictionTemperature(Math.abs(finalError), unit)} too warm`
-      : finalError < 0
-        ? `${formatPredictionTemperature(Math.abs(finalError), unit)} too cool`
-        : "exactly on target"
-    : "not scored";
-  const predictionReason = isFinalized
-    ? `The actual 15L high was ${formatPredictionTemperature(
-        actualHigh,
-        unit,
-      )} at ${formatLocalTime(
-        predictionEvaluation.actualHighAtLocal,
-      )}. The closing tracker estimate was ${formatPredictionTemperature(
-        predictedHigh,
-        unit,
-      )}, ${finalErrorDescription}. ${
-        typeof predictionEvaluation.peakWindowHit === "boolean"
-          ? `The closing peak window ${
-              predictionEvaluation.peakWindowHit ? "contained" : "missed"
-            } the actual peak.`
-          : ""
-      }`
-    : (latestPrediction?.reason ??
-      "The tracker is waiting for enough 15L observations and forecast inputs.");
-  const predictionUpdatedAt = isFinalized
-    ? (predictionEvaluation.finalizedAtLocal ??
-      predictionEvaluation.finalizedAt)
-    : (latestPrediction?.generatedAtLocal ?? latestPrediction?.generatedAt);
   const sunsetMinute = useMemo(() => sunsetMinuteForDate(date), [date]);
   const forecastPeakStartMinute = parseMinute(latestPrediction?.peakStartLocal);
   const forecastPeakEndMinute = parseMinute(latestPrediction?.peakEndLocal);
   const hasTemperatureChartData =
     metarRows.length +
       amosDisplayRows.length +
-      (latestPrediction?.hourlyCurve?.length ?? 0) >
+      (latestPrediction?.hourlyCurve?.length ?? 0) +
+      (preferredProviderPeak ? 1 : 0) >
     0;
   const hasCloudGuidance = hourlyCloudCover.some((hour) =>
     Number.isFinite(hour.coverPct),
@@ -1802,9 +1839,16 @@ export default function SeoulDayPage() {
         metarRows,
         amosDisplayRows,
         latestPrediction?.hourlyCurve,
+        preferredProviderPeak,
         unit,
       ),
-    [amosDisplayRows, latestPrediction?.hourlyCurve, metarRows, unit],
+    [
+      amosDisplayRows,
+      latestPrediction?.hourlyCurve,
+      metarRows,
+      preferredProviderPeak,
+      unit,
+    ],
   );
 
   const chartOptions = useMemo(
@@ -1899,6 +1943,16 @@ export default function SeoulDayPage() {
             windowEndMinute: forecastPeakEndMinute,
           },
         },
+        seoulProviderPeak: {
+          display: Boolean(preferredProviderPeak),
+          minute: preferredProviderPeak?.minute,
+          temperature: preferredProviderPeak?.temperature,
+          label: preferredProviderPeak
+            ? `${preferredProviderPeak.providerLabel.toUpperCase()} PEAK HOUR · ${preferredProviderPeak.temperature.toFixed(
+                1,
+              )}°${unit} · ${minuteLabel(preferredProviderPeak.minute)} KST`
+            : "",
+        },
         seoulHourlyCloudCover: {
           display: hourlyCloudSegments.length > 0,
           hours: hourlyCloudSegments,
@@ -1966,6 +2020,7 @@ export default function SeoulDayPage() {
       hasTemperatureChartData,
       hourlyCloudSegments,
       isToday,
+      preferredProviderPeak,
       sunsetMinute,
       unit,
     ],
@@ -2049,13 +2104,13 @@ export default function SeoulDayPage() {
         console.error(error);
       }
 
-      let message = "Live sources and high prediction synchronized";
+      let message = "Live sources refreshed · forecast guidance recalculated";
       if (predictionFailure && sourceFailures.length) {
-        message = `${2 - sourceFailures.length}/2 sources refreshed · prediction unavailable`;
+        message = `${2 - sourceFailures.length}/2 sources refreshed · forecast recalculation failed`;
       } else if (predictionFailure) {
-        message = "Live sources refreshed · prediction unavailable";
+        message = "Live sources refreshed · forecast recalculation failed";
       } else if (sourceFailures.length) {
-        message = `${2 - sourceFailures.length}/2 sources refreshed · prediction updated`;
+        message = `${2 - sourceFailures.length}/2 sources refreshed · guidance recalculated`;
       }
       setRefreshState({ active: false, message });
     } finally {
@@ -2139,11 +2194,11 @@ export default function SeoulDayPage() {
               </span>
             </div>
             <h1 className="mt-3 text-4xl font-medium tracking-[-0.045em] text-white md:text-6xl">
-              Seoul 15L high tracker
+              Seoul 15L weather timeline
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-              A continuously revised daily-high prediction, checked against the
-              fastest one-minute 15L AMOS temperature and actual RKSI METAR.
+              One-minute 15L AMOS temperature, actual RKSI METAR, and hourly
+              cloud guidance across the full Seoul day.
             </p>
           </div>
 
@@ -2216,261 +2271,6 @@ export default function SeoulDayPage() {
             )}
           </div>
         </header>
-
-        <section className="border-b border-white/10 py-6">
-          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-300">
-                15L daily-high tracker
-              </p>
-              <h2 className="mt-1 text-xl font-medium tracking-tight text-slate-100">
-                RKSI maximum-temperature prediction
-              </h2>
-            </div>
-            <p className="font-mono text-[9px] uppercase tracking-[0.15em] text-slate-500">
-              {predictionDashboard === undefined
-                ? "Loading prediction…"
-                : latestPrediction
-                  ? `${
-                      isFinalized ? "Finalized" : "Updated"
-                    } ${formatLocalTime(predictionUpdatedAt, true)} KST · ${
-                      isFinalized
-                        ? `${predictionEvaluation.revisionCount ?? predictionRevisions.length} revisions`
-                        : latestPrediction.modelVersion
-                          ? `model ${latestPrediction.modelVersion}`
-                          : `revision ${latestPrediction.revisionNumber ?? "—"}`
-                    }`
-                  : "No prediction captured"}
-            </p>
-          </div>
-
-          {predictionDashboard === undefined ? (
-            <div className="h-52 animate-pulse border border-white/10 bg-white/[0.025]" />
-          ) : latestPrediction ? (
-            <>
-              <div className="grid overflow-hidden border border-amber-300/20 bg-[#0a121d]/90 shadow-[0_24px_80px_rgba(0,0,0,0.25)] xl:grid-cols-[0.9fr_1.1fr]">
-                <div className="relative border-b border-white/10 p-5 md:p-7 xl:border-b-0 xl:border-r">
-                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_10%,rgba(251,191,36,0.12),transparent_55%)]" />
-                  <div className="relative">
-                    <span
-                      className={`inline-flex border px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.17em] ${predictionStatus.className}`}
-                    >
-                      {predictionStatus.label}
-                    </span>
-                    <p className="mt-5 font-mono text-[9px] uppercase tracking-[0.2em] text-slate-500">
-                      {isFinalized
-                        ? "Closing tracker estimate"
-                        : "Expected 15L high"}
-                    </p>
-                    <div className="mt-1 flex flex-wrap items-end gap-x-5 gap-y-2">
-                      <p className="text-6xl font-medium tracking-[-0.065em] text-white md:text-8xl">
-                        {formatPredictionTemperature(predictedHigh, unit)}
-                      </p>
-                      <div className="pb-2">
-                        <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
-                          {isFinalized ? "Closing peak window" : "Likely peak"}
-                        </p>
-                        <p className="mt-1 text-base font-medium text-amber-200">
-                          {formatPeakWindow(
-                            latestPrediction.peakStartLocal,
-                            latestPrediction.peakEndLocal,
-                          )}
-                        </p>
-                        <p
-                          className="mt-2 font-mono text-[9px] leading-4 text-violet-300/85"
-                          title={`Historical 15L first-maximum times from ${HISTORICAL_PEAK_REFERENCE.firstDate} through ${HISTORICAL_PEAK_REFERENCE.lastDate}. This is a spring–summer reference, not a condition-matched forecast.`}
-                        >
-                          Spring–summer typical ·{" "}
-                          {minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute)}
-                          <span className="text-slate-600">
-                            {" "}
-                            · middle 50%{" "}
-                            {minuteLabel(
-                              HISTORICAL_PEAK_REFERENCE.windowStartMinute,
-                            )}
-                            –
-                            {minuteLabel(
-                              HISTORICAL_PEAK_REFERENCE.windowEndMinute,
-                            )}{" "}
-                            · n={HISTORICAL_PEAK_REFERENCE.sampleSize}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-                    <p className="mt-3 font-mono text-[10px] text-slate-500">
-                      {isFinalized
-                        ? "Closing confidence interval"
-                        : "Confidence interval"}{" "}
-                      <span className="text-slate-300">
-                        {formatPredictionTemperature(confidenceLow, unit)}–
-                        {formatPredictionTemperature(confidenceHigh, unit)}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-col justify-between p-5 md:p-7">
-                  {isFinalized ? (
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-6 md:grid-cols-4">
-                      <PredictionMetric
-                        label="Actual 15L high"
-                        value={formatPredictionTemperature(actualHigh, unit)}
-                        detail={`at ${formatLocalTime(
-                          predictionEvaluation.actualHighAtLocal,
-                        )}`}
-                      />
-                      <PredictionMetric
-                        label="Closing error"
-                        value={formatTemperatureDelta(finalError, unit)}
-                        detail="tracker estimate vs actual"
-                      />
-                      <PredictionMetric
-                        label="Peak window"
-                        value={
-                          typeof predictionEvaluation.peakWindowHit ===
-                          "boolean"
-                            ? predictionEvaluation.peakWindowHit
-                              ? "Hit"
-                              : "Missed"
-                            : "—"
-                        }
-                        detail="closing tracker window"
-                      />
-                      <PredictionMetric
-                        label="15L observations"
-                        value={String(predictionEvaluation.obsCount ?? "—")}
-                        detail={`${predictionEvaluation.revisionCount ?? predictionRevisions.length} immutable revisions`}
-                      />
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-6 md:grid-cols-4">
-                      <PredictionMetric
-                        label="Observed high"
-                        value={formatPredictionTemperature(observedHigh, unit)}
-                        detail={
-                          latestPrediction.observedHighAtLocal
-                            ? `at ${formatLocalTime(
-                                latestPrediction.observedHighAtLocal,
-                              )}`
-                            : "15L maximum so far"
-                        }
-                      />
-                      <PredictionMetric
-                        label="Current 15L"
-                        value={formatPredictionTemperature(
-                          currentTemperature,
-                          unit,
-                        )}
-                        detail={formatLocalTime(
-                          isToday
-                            ? (latestAmos?.obsTimeLocal ??
-                                latestPrediction.currentObsTimeLocal)
-                            : (latestPrediction.currentObsTimeLocal ??
-                                latestAmos?.obsTimeLocal),
-                        )}
-                      />
-                      <PredictionMetric
-                        label="Expected now"
-                        value={formatPredictionTemperature(expectedNow, unit)}
-                        detail={
-                          Number.isFinite(deviation)
-                            ? `${deviation >= 0 ? "+" : ""}${deviation.toFixed(
-                                1,
-                              )}°${unit} deviation`
-                            : "curve comparison pending"
-                        }
-                      />
-                      <PredictionMetric
-                        label="30-minute trend"
-                        value={
-                          Number.isFinite(warmingRate30)
-                            ? `${warmingRate30 >= 0 ? "+" : ""}${warmingRate30.toFixed(
-                                1,
-                              )}°${unit}/hr`
-                            : "—"
-                        }
-                        detail="AMOS warming rate"
-                      />
-                    </div>
-                  )}
-
-                  <div className="mt-6 border-t border-white/10 pt-5">
-                    <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
-                      {isFinalized ? "Final score" : "Why this prediction"}
-                    </p>
-                    <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
-                      {predictionReason}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {providerSignals.length > 0 && (
-                <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-                  {providerSignals.map((signal, index) => (
-                    <ProviderSignal
-                      key={
-                        signal?._id ??
-                        signal?.provider ??
-                        signal?.source ??
-                        index
-                      }
-                      signal={signal}
-                      unit={unit}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {predictionRevisions.length > 0 && (
-                <div className="mt-5">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
-                      Prediction history
-                    </p>
-                    <p className="font-mono text-[9px] text-slate-600">
-                      Forecasts are retained, not overwritten
-                    </p>
-                  </div>
-                  <div
-                    aria-label="Prediction revision history"
-                    className="flex gap-2 overflow-x-auto pb-2"
-                    role="region"
-                    tabIndex={0}
-                  >
-                    {predictionRevisions.map((prediction, index) => (
-                      <RevisionCard
-                        key={
-                          prediction?._id ??
-                          `${prediction?.generatedAt ?? "revision"}-${index}`
-                        }
-                        prediction={prediction}
-                        unit={unit}
-                        isLatest={
-                          prediction?._id === latestPrediction?._id ||
-                          prediction?.revisionNumber ===
-                            latestPrediction?.revisionNumber
-                        }
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="border border-white/10 bg-white/[0.02] px-5 py-10 text-center">
-              <p className="font-mono text-xs uppercase tracking-[0.2em] text-slate-400">
-                No daily-high prediction yet
-              </p>
-              <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-600">
-                {predictionDashboard?.error ||
-                  (isToday
-                    ? "Sync live sources to build the first 15L prediction."
-                    : "No immutable prediction was captured for this historical date.")}
-              </p>
-            </div>
-          )}
-        </section>
 
         <section className="grid grid-cols-1 gap-y-5 border-b border-white/10 py-5 md:grid-cols-3">
           <SourceCard
@@ -2569,12 +2369,43 @@ export default function SeoulDayPage() {
               </div>
             </div>
             <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
+              {preferredProviderPeak && (
+                <p
+                  className="text-rose-300"
+                  title="Highest-weight usable provider with all 24 Seoul-local forecast hours."
+                >
+                  {preferredProviderPeak.providerLabel} forecast peak hour ·{" "}
+                  {preferredProviderPeak.temperature.toFixed(1)}°{unit} ·{" "}
+                  {minuteLabel(preferredProviderPeak.minute)} KST
+                </p>
+              )}
+              {preferredProviderPeak && (
+                <p className="mt-1 text-rose-300/60">
+                  Provider captured ·{" "}
+                  {formatLocalTime(
+                    preferredProviderPeak.capturedAtLocal ??
+                      preferredProviderPeak.capturedAt,
+                  )}{" "}
+                  KST
+                </p>
+              )}
               {latestPrediction && (
-                <p className="text-amber-300">
-                  Forecast peak ·{" "}
+                <p
+                  className={
+                    preferredProviderPeak
+                      ? "mt-1 text-amber-300/70"
+                      : "text-amber-300"
+                  }
+                >
+                  Tracker window ·{" "}
                   {formatPeakWindow(
                     latestPrediction.peakStartLocal,
                     latestPrediction.peakEndLocal,
+                  )}{" "}
+                  KST · rev {latestPrediction.revisionNumber ?? "—"} at{" "}
+                  {formatLocalTime(
+                    latestPrediction.generatedAtLocal ??
+                      latestPrediction.generatedAt,
                   )}{" "}
                   KST
                 </p>
@@ -2621,6 +2452,17 @@ export default function SeoulDayPage() {
               cloud cover is unavailable, not clear sky. The current hour ends
               at the NOW line; its remaining time stays hatched until observed.
             </p>
+            {preferredProviderPeak && (
+              <p>
+                The selected hourly provider is{" "}
+                {preferredProviderPeak.providerLabel}. Its latest stored
+                full-day forecast reaches{" "}
+                {preferredProviderPeak.temperature.toFixed(1)}
+                degrees {unit === "C" ? "Celsius" : "Fahrenheit"} in the first
+                tied peak forecast hour, beginning at{" "}
+                {minuteLabel(preferredProviderPeak.minute)} Korea Standard Time.
+              </p>
+            )}
           </div>
 
           <div

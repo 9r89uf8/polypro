@@ -1,7 +1,7 @@
 # Seoul RKSI live-temperature page
 
-This document describes the focused RKSI 15L temperature and daily-high
-prediction view, plus the collectors that feed it.
+This document describes the focused RKSI 15L temperature and cloud-cover
+timeline, plus the collectors that feed it.
 
 ## Routes
 
@@ -14,24 +14,19 @@ current `Asia/Seoul` date.
 
 Example: `/seoul/day/2026-07-27`.
 
-The route is a single-purpose 15L daily-high tracker. Its dominant panel shows
-the latest continuously revised prediction:
+The route is a single-purpose 15L weather timeline. It starts with live-source
+status cards and one horizontally scrollable full-day chart. The former
+maximum-temperature prediction summary, provider cards, and revision-history
+panel are not rendered.
 
-- predicted maximum temperature
-- confidence interval
-- most likely peak-time window in `Asia/Seoul`
-- observed 15L maximum and its first occurrence so far
-- current 15L temperature, expected temperature now, and deviation
-- recent 30-minute warming rate
-- an on-track/running-warm/running-cool/final status and plain-language reason
-- prediction revision and update time
+Forecast machinery remains connected because it supplies the chart's hourly
+temperature curve, selected-provider daily-peak-hour marker, peak-window
+annotation, and coming-hour cloud cover. Its target is the maximum 0.1 °C
+temperature reported by the representative RKSI `rwyNo=2`, `rwyDir=15L` AMOS
+row during that Seoul-local calendar date. It is an airport forecast, not a
+central-Seoul city forecast.
 
-The prediction target is the maximum 0.1 °C temperature reported by the
-representative RKSI `rwyNo=2`, `rwyDir=15L` AMOS row during that Seoul-local
-calendar date. It is an airport prediction, not a central-Seoul city
-temperature prediction.
-
-Below the prediction is one full-day chart with two observed series:
+The primary visualization has two observed series:
 
 - `Actual METAR`
   - parsed RKSI temperature from the NOAA `tgftp` latest-METAR file
@@ -54,13 +49,32 @@ and `SUNSET · h:mm` label use RKSI's coordinates (`37.4602`, `126.4407`) and th
 standard official-sunset zenith, so historical and future dates do not depend
 on a forecast-provider response.
 
-Peak timing has two deliberately separate visual references:
+Peak timing has three deliberately separate visual references:
 
+- a rose point, vertical line, and in-plot label mark the full-day maximum and
+  first tied forecast hour from one selected hourly provider;
 - the current prediction's amber peak-window band comes from the latest hourly
   ensemble curve and therefore remains the condition-aware timing estimate;
 - a violet historical reference shows the median first occurrence of the daily
   15L maximum at `13:44 KST`, with a low-opacity middle-50% band from
   `12:20–14:39 KST`.
+
+The provider marker uses the highest-weight usable hourly provider with all 24
+Seoul-local hours: Open-Meteo has weight `0.45`, while Google Weather has weight
+`0.35` and is the fallback. Weather.com's daily-only input is not eligible
+because it cannot supply a peak hour. The marker pairs that provider's native
+full-day maximum with the first hourly timestamp that produces it; it never
+combines a temperature from one provider or forecast capture with a time from
+another. This is an operational availability/weight rule, not a claim that one
+provider has proven superior forecast accuracy.
+
+For today and future dates, the chart reads the latest complete provider
+capture directly, so an hourly forecast change is visible as soon as Convex
+stores it. For a past date, it uses the complete provider peak retained in that
+date's immutable prediction revision. Existing older revisions that predate
+this field are not backfilled and render no provider marker. The selected
+provider, temperature, peak forecast hour, capture time, and tracker revision
+time are repeated above the 2,400-pixel scroller.
 
 The historical reference is a fixed, versioned snapshot of 130 complete 15L
 days from `2026-03-20` through `2026-07-27`. Its circular clock-time average was
@@ -133,48 +147,31 @@ The rest of the interface is deliberately compact:
 - RKSI/live status and Seoul clock
 - previous day, next day, date picker, and today navigation
 - Celsius/Fahrenheit toggle
-- manual live-source and prediction synchronization
+- manual live-source and forecast-guidance synchronization
 - one status card per plotted series
 - capture-second or audit-fallback status for the newest displayed AMOS row
-- compact horizontally scrollable provider signals and immutable prediction
-  revision history when those records are available
 
 The previous correlation, publish-race, raw-METAR, and raw-observation panels
 are no longer part of the primary Seoul page.
 
-## Prediction dashboard behavior
+## Forecast dashboard data dependency
 
 The page subscribes to
-`seoulWeather:getHighPredictionDashboard({ date })`. Its main UI contract is:
+`seoulWeather:getHighPredictionDashboard({ date })`. The route consumes:
 
-- `latestPrediction`: the current prediction and hourly forecast curve
-- `revisions`: immutable earlier predictions for the selected date
-- `summary`: observed-day aggregates
-- `evaluation`: current/final forecast evaluation
-- `latestForecastCapture`: the most recent provider capture and provider health
-- `accuracy`: finalized accuracy fields when the day is complete
+- `latestPrediction.hourlyCurve` for the amber forecast-temperature line
+- `latestPrediction.peakStartLocal` and `peakEndLocal` for the chart annotation
+- `latestPrediction.providerDetails` for a historical provider daily-peak
+  value, peak forecast hour, capture age, and provider-selection weight
+- `latestForecastCapture` for the newest today/future provider peak and as
+  fallback cloud guidance
 
-The UI treats every part of the dashboard as optional. While the query is
-loading it shows a prediction skeleton. A date with no prediction gets an
-explicit empty state instead of fabricated values. An unavailable provider does
-not hide the ensemble prediction; its provider signal is marked unavailable
-when the backend returns that state.
-
-The predicted maximum must never be below the observed 15L maximum already
-stored for the day. The displayed status and reason explain whether the live
-temperature remains near the expected hourly curve or has caused a revision.
-Historical revisions remain visible and are never overwritten by the latest
-forecast.
-
-When a completed date has an evaluation, the panel switches to `Final` while
-preserving the last stored value as the **closing tracker estimate**. It shows
-that estimate beside the actual 15L high, closing error, closing peak-window
-result, observation count, and revision count. The closing estimate has already
-absorbed live observations through the day, so its error is not presented as
-independent forecast skill. The backend separately scores the latest immutable
-prediction available at 09:00, 12:00, and 15:00 KST; each checkpoint records
-temperature error and whether its predicted peak window contained the actual
-first occurrence of the maximum.
+All of those inputs are optional. Observed temperatures and observed cloud
+cover still render when forecast data are unavailable, and missing future
+guidance remains explicit. Other prediction-dashboard fields may continue to
+be stored and scored by the backend, but this route does not render a predicted
+maximum summary, confidence/status reason, provider cards, evaluation, or
+revision history.
 
 ## Client behavior
 
@@ -189,8 +186,11 @@ For the current Seoul date, the first page load and `Sync now` first request:
 After both observation requests settle, the page calls
 `seoulWeather:recomputeTodayHighPrediction({ date })`. Recalculation is still
 attempted if one live observation source is temporarily unavailable, and the
-status message reports partial failures. The manual AMOS request is a single
-immediate fetch. The scheduled rollover watch remains the lowest-latency path.
+result refreshes the chart's hourly forecast curve, stored provider peak,
+peak-window annotation, and cloud guidance. Independently, each hourly provider
+capture can update the current/future provider peak immediately. The status
+message reports partial failures. The manual AMOS request is a single immediate
+fetch. The scheduled rollover watch remains the lowest-latency path.
 
 Historical routes only display already-captured rows. There is no historical
 backfill from these latest-value endpoints, and the historical page does not

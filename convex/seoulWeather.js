@@ -26,7 +26,7 @@ const PREDICTION_INTERVAL_MS = 5 * MILLIS_PER_MINUTE;
 const MAX_LIVE_OBSERVATION_AGE_MS = 10 * MILLIS_PER_MINUTE;
 const MAX_PROVIDER_CAPTURE_AGE_MS = 12 * MILLIS_PER_HOUR;
 const PREDICTION_HEARTBEAT_MS = 30 * MILLIS_PER_MINUTE;
-const PREDICTION_MODEL_VERSION = "rksi15l-ensemble-v2";
+const PREDICTION_MODEL_VERSION = "rksi15l-ensemble-v3";
 const MAX_DASHBOARD_REVISIONS = 288;
 const WEATHER_STATUS = {
   OK: "ok",
@@ -532,6 +532,9 @@ async function fetchOpenMeteoHourlyForecast({ station, timeZone }) {
   url.searchParams.set("timeformat", "unixtime");
   url.searchParams.set("timezone", "UTC");
   url.searchParams.set("forecast_days", String(OPEN_METEO_FORECAST_DAYS));
+  // A Seoul-local day starts at 15:00 UTC on the preceding date. Keep one UTC
+  // past day so today's provider peak can be evaluated across all 24 KST hours.
+  url.searchParams.set("past_days", "1");
 
   const response = await fetch(url.toString(), {
     cache: "no-store",
@@ -946,6 +949,26 @@ function findHighestForecastRow(rows, generatedAt, targetIsToday) {
   return selected;
 }
 
+function hasCompleteHourlyDay(rows, targetDate) {
+  const hours = new Set();
+  for (const row of rows) {
+    if (row.date !== targetDate || !Number.isFinite(row.tempC)) {
+      continue;
+    }
+    const match = /(?:^|[ T])(\d{2}):\d{2}/.exec(row.forecastTimeLocal ?? "");
+    const hour = match ? Number(match[1]) : null;
+    if (Number.isInteger(hour) && hour >= 0 && hour <= 23) {
+      hours.add(hour);
+    }
+  }
+  return (
+    hours.size === 24 &&
+    Array.from({ length: 24 }, (_, hour) => hour).every((hour) =>
+      hours.has(hour),
+    )
+  );
+}
+
 function selectLatestUsableProviderCapture({
   captures,
   provider,
@@ -1013,6 +1036,9 @@ function buildHourlyProvider({
     generatedAt,
     targetIsToday,
   );
+  const dailyPeak = hasCompleteHourlyDay(dateRows, targetDate)
+    ? findHighestForecastRow(dateRows, generatedAt, false)
+    : null;
   const detail = {
     provider,
     label,
@@ -1036,6 +1062,14 @@ function buildHourlyProvider({
           adjustedHighF: adjustedPeak.tempF,
           peakTimeUtc: adjustedPeak.forecastTimeUtc,
           peakTimeLocal: adjustedPeak.forecastTimeLocal,
+        }
+      : {}),
+    ...(dailyPeak
+      ? {
+          dailyHighC: dailyPeak.tempC,
+          dailyHighF: dailyPeak.tempF,
+          dailyPeakTimeUtc: dailyPeak.forecastTimeUtc,
+          dailyPeakTimeLocal: dailyPeak.forecastTimeLocal,
         }
       : {}),
     ...(Number.isFinite(expectedCurrentC)
@@ -1156,6 +1190,25 @@ function buildHourlyEnsembleCurve(providerCurves) {
           : {}),
       };
     });
+}
+
+function selectPreferredDailyPeakProvider(providerDetails) {
+  return (
+    providerDetails
+      .filter(
+        (provider) =>
+          provider.status === WEATHER_STATUS.OK &&
+          provider.weight > 0 &&
+          Number.isFinite(provider.dailyHighC) &&
+          Number.isFinite(provider.dailyPeakTimeUtc),
+      )
+      .sort(
+        (left, right) =>
+          right.weight - left.weight ||
+          (right.capturedAt ?? 0) - (left.capturedAt ?? 0) ||
+          left.provider.localeCompare(right.provider),
+      )[0] ?? null
+  );
 }
 
 function predictionState({
@@ -1427,6 +1480,11 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
       generatedAt,
     });
     const providerDetails = [weathercom, google.detail, openMeteo.detail];
+    const preferredDailyPeakProvider =
+      selectPreferredDailyPeakProvider(providerDetails);
+    const previousPreferredDailyPeakProvider = selectPreferredDailyPeakProvider(
+      previousPrediction?.providerDetails ?? [],
+    );
     const hourlyEnsembleCurve = buildHourlyEnsembleCurve([
       {
         rows: google.adjustedRows,
@@ -1520,6 +1578,12 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
       previousPrediction.status !== state.status ||
       previousPrediction.peakWindowStartUtc !== peakWindowStartUtc ||
       previousPrediction.peakWindowEndUtc !== peakWindowEndUtc ||
+      previousPreferredDailyPeakProvider?.provider !==
+        preferredDailyPeakProvider?.provider ||
+      previousPreferredDailyPeakProvider?.dailyHighC !==
+        preferredDailyPeakProvider?.dailyHighC ||
+      previousPreferredDailyPeakProvider?.dailyPeakTimeUtc !==
+        preferredDailyPeakProvider?.dailyPeakTimeUtc ||
       previousPrediction.observedHighC !== maxRow?.tempC ||
       (Number.isFinite(previousPrediction.observedCurrentC) &&
       Number.isFinite(latestRow?.tempC)
