@@ -211,12 +211,13 @@ the result tentative and distinguishes the latest-three sample from the total
 matched-hour count.
 
 The chart displays `Weather.com · latest stored` as a blue dashed curve and the
-selected morning baseline as a faint blue dotted curve. A signed badge marks a
-forecast-valid hour only when its latest change is at least `0.5 °C`; smaller
-changes remain available in the tooltip and semantic table. The compact summary
-reports actuals versus the morning baseline, actuals versus latest strictly
-pre-hour guidance, matched-hour counts, and the latest stored Weather.com
-forecast peak.
+selected morning baseline as a faint blue dotted curve. A signed badge marks
+every forecast-valid hour whose latest distinct change is at least `1.0 °C`; a
+`31 °C` to `28 °C` change therefore remains visible as `↓ -3.0 °C` after later
+captures repeat `28 °C`. Smaller changes remain available in the tooltip and
+semantic table. The compact summary reports actuals versus the morning
+baseline, actuals versus latest strictly pre-hour guidance, matched-hour
+counts, and the latest stored Weather.com forecast peak.
 
 For today, `Live vs latest pre-observation curve` chooses the newest successful
 Weather.com capture that completed strictly before the freshest usable AMOS

@@ -407,6 +407,9 @@ function chartBoundsOverlap(left, right, padding = 3) {
   );
 }
 
+const WEATHERCOM_REVISION_THRESHOLD_C = 1;
+const WEATHERCOM_REVISION_MAXIMUM_LABELS = 24;
+
 const weathercomRevisionBadgePlugin = {
   id: "seoulWeathercomRevisionBadges",
   afterDatasetsDraw(chart, _args, options) {
@@ -429,7 +432,7 @@ const weathercomRevisionBadgePlugin = {
 
     const thresholdC = Number.isFinite(options.thresholdC)
       ? options.thresholdC
-      : 0.5;
+      : WEATHERCOM_REVISION_THRESHOLD_C;
     const fallbackThreshold =
       options.unit === "F" ? thresholdC * 1.8 : thresholdC;
     let candidates = dataset.data
@@ -458,7 +461,7 @@ const weathercomRevisionBadgePlugin = {
 
     const maximumLabels = Number.isFinite(options.maximumLabels)
       ? Math.max(1, Math.floor(options.maximumLabels))
-      : 16;
+      : WEATHERCOM_REVISION_MAXIMUM_LABELS;
     if (candidates.length > maximumLabels) {
       const lastIndex = candidates.length - 1;
       candidates = Array.from({ length: maximumLabels }, (_value, index) => {
@@ -2653,8 +2656,8 @@ export default function SeoulDayPage() {
         },
         seoulWeathercomRevisionBadges: {
           display: weathercomHourlyPointCount > 0,
-          thresholdC: 0.5,
-          maximumLabels: 16,
+          thresholdC: WEATHERCOM_REVISION_THRESHOLD_C,
+          maximumLabels: WEATHERCOM_REVISION_MAXIMUM_LABELS,
           unit,
         },
       },
@@ -3149,10 +3152,11 @@ export default function SeoulDayPage() {
           <div id="seoul-weathercom-hourly-description" className="sr-only">
             Weather.com hourly forecast history is drawn as a blue latest-stored
             curve and a faint dotted morning-baseline curve. Revision badges
-            mark material changes from the previous distinct stored value. Their
-            timestamps show when this system first detected a change, not when
-            Weather.com published it. The expandable table after the chart lists
-            each stored forecast value and matched AMOS departure.
+            mark every change of at least one degree Celsius from the previous
+            distinct stored value. Their timestamps show when this system first
+            detected a change, not when Weather.com published it. The expandable
+            table after the chart lists each stored forecast value and matched
+            AMOS departure.
           </div>
 
           <div
