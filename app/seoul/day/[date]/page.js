@@ -39,7 +39,37 @@ const nowLinePlugin = {
     ctx.fillStyle = "#67e8f9";
     ctx.font = "500 10px IBM Plex Mono, monospace";
     ctx.textAlign = "center";
-    ctx.fillText("NOW", x, chartArea.top + 12);
+    ctx.fillText("NOW", x, chartArea.top + 28);
+    ctx.restore();
+  },
+};
+
+const sunsetLinePlugin = {
+  id: "seoulSunsetLine",
+  afterDatasetsDraw(chart, _args, options) {
+    if (!options?.display || !Number.isFinite(options.minute)) {
+      return;
+    }
+
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x.getPixelForValue(options.minute);
+    if (x < chartArea.left || x > chartArea.right) {
+      return;
+    }
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(251, 146, 60, 0.62)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([7, 5]);
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.stroke();
+
+    ctx.fillStyle = "#fb923c";
+    ctx.font = "500 10px IBM Plex Mono, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(`SUNSET · ${options.label}`, x, chartArea.top + 12);
     ctx.restore();
   },
 };
@@ -51,10 +81,15 @@ ChartJS.register(
   Tooltip,
   Legend,
   nowLinePlugin,
+  sunsetLinePlugin,
 );
 
 const STATION_ICAO = "RKSI";
 const SEOUL_TIMEZONE = "Asia/Seoul";
+const RKSI_LATITUDE = 37.4602;
+const RKSI_LONGITUDE = 126.4407;
+const SEOUL_UTC_OFFSET_HOURS = 9;
+const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isValidDate(value) {
@@ -107,6 +142,68 @@ function shiftDateKey(dateKey, deltaDays) {
   return `${shifted.getUTCFullYear()}-${String(
     shifted.getUTCMonth() + 1,
   ).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`;
+}
+
+function normalizeCycle(value, cycle) {
+  return ((value % cycle) + cycle) % cycle;
+}
+
+function degreesToRadians(value) {
+  return (value * Math.PI) / 180;
+}
+
+function radiansToDegrees(value) {
+  return (value * 180) / Math.PI;
+}
+
+function sunsetMinuteForDate(dateKey) {
+  const parts = parseDateKey(dateKey);
+  if (!parts) {
+    return null;
+  }
+
+  const dayOfYear =
+    Math.floor(
+      (Date.UTC(parts.year, parts.month - 1, parts.day) -
+        Date.UTC(parts.year, 0, 1)) /
+        DAY_MS,
+    ) + 1;
+  const longitudeHour = RKSI_LONGITUDE / 15;
+  const approximateTime = dayOfYear + (18 - longitudeHour) / 24;
+  const meanAnomaly = 0.9856 * approximateTime - 3.289;
+  const trueLongitude = normalizeCycle(
+    meanAnomaly +
+      1.916 * Math.sin(degreesToRadians(meanAnomaly)) +
+      0.02 * Math.sin(degreesToRadians(2 * meanAnomaly)) +
+      282.634,
+    360,
+  );
+
+  let rightAscension = normalizeCycle(
+    radiansToDegrees(
+      Math.atan(0.91764 * Math.tan(degreesToRadians(trueLongitude))),
+    ),
+    360,
+  );
+  rightAscension +=
+    Math.floor(trueLongitude / 90) * 90 - Math.floor(rightAscension / 90) * 90;
+  rightAscension /= 15;
+
+  const sinDeclination = 0.39782 * Math.sin(degreesToRadians(trueLongitude));
+  const cosDeclination = Math.cos(Math.asin(sinDeclination));
+  const cosHourAngle =
+    (Math.cos(degreesToRadians(OFFICIAL_SUNSET_ZENITH_DEGREES)) -
+      sinDeclination * Math.sin(degreesToRadians(RKSI_LATITUDE))) /
+    (cosDeclination * Math.cos(degreesToRadians(RKSI_LATITUDE)));
+  if (cosHourAngle < -1 || cosHourAngle > 1) {
+    return null;
+  }
+
+  const hourAngle = radiansToDegrees(Math.acos(cosHourAngle)) / 15;
+  const localMeanTime =
+    hourAngle + rightAscension - 0.06571 * approximateTime - 6.622;
+  const utcHour = normalizeCycle(localMeanTime - longitudeHour, 24);
+  return normalizeCycle(utcHour + SEOUL_UTC_OFFSET_HOURS, 24) * 60;
 }
 
 function parseMinute(localTimestamp) {
@@ -766,6 +863,7 @@ export default function SeoulDayPage() {
     ? (predictionEvaluation.finalizedAtLocal ??
       predictionEvaluation.finalizedAt)
     : (latestPrediction?.generatedAtLocal ?? latestPrediction?.generatedAt);
+  const sunsetMinute = useMemo(() => sunsetMinuteForDate(date), [date]);
   const currentSeoulMinute = useMemo(() => {
     if (!isToday) {
       return null;
@@ -855,6 +953,11 @@ export default function SeoulDayPage() {
           display: isToday,
           minute: currentSeoulMinute,
         },
+        seoulSunsetLine: {
+          display: Number.isFinite(sunsetMinute),
+          minute: sunsetMinute,
+          label: minuteLabel(sunsetMinute),
+        },
       },
       scales: {
         x: {
@@ -909,7 +1012,7 @@ export default function SeoulDayPage() {
         },
       },
     }),
-    [currentSeoulMinute, date, isToday, unit],
+    [currentSeoulMinute, date, isToday, sunsetMinute, unit],
   );
 
   useEffect(() => {
@@ -1420,14 +1523,21 @@ export default function SeoulDayPage() {
                 {date}
               </h2>
             </div>
-            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-slate-500">
-              {dayData === undefined
-                ? "Loading telemetry…"
-                : refreshState.message ||
-                  `${metarRows.length + amosDisplayRows.length} observations · ${
-                    latestPrediction?.hourlyCurve?.length ?? 0
-                  } forecast points`}
-            </p>
+            <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
+              <p className="text-orange-300">
+                Sunset · {minuteLabel(sunsetMinute)} KST
+              </p>
+              <p className="mt-1 text-slate-500">
+                {dayData === undefined
+                  ? "Loading telemetry…"
+                  : refreshState.message ||
+                    `${
+                      metarRows.length + amosDisplayRows.length
+                    } observations · ${
+                      latestPrediction?.hourlyCurve?.length ?? 0
+                    } forecast points`}
+              </p>
+            </div>
           </div>
 
           <div
