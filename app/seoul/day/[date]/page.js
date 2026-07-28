@@ -157,54 +157,22 @@ const peakTimingPlugin = {
   },
 };
 
-const metarSkyPlugin = {
-  id: "seoulMetarSky",
+const hourlyCloudCoverPlugin = {
+  id: "seoulHourlyCloudCover",
   afterDraw(chart, _args, options) {
-    const runs = Array.isArray(options?.runs) ? options.runs : [];
-    if (!options?.display || !runs.length) {
+    const hours = Array.isArray(options?.hours) ? options.hours : [];
+    if (!options?.display || !hours.length) {
       return;
     }
 
     const { ctx, chartArea, scales } = chart;
-    const railHeight = 12;
-    const railTop = chartArea.top - 19;
-    const styles = {
-      clear: {
-        fill: "rgba(148, 163, 184, 0.08)",
-        text: "#94a3b8",
-      },
-      no_significant_cloud: {
-        fill: "rgba(148, 163, 184, 0.09)",
-        text: "#94a3b8",
-      },
-      cavok: {
-        fill: "rgba(125, 211, 252, 0.10)",
-        text: "#bae6fd",
-      },
-      few: {
-        fill: "rgba(148, 163, 184, 0.13)",
-        text: "#cbd5e1",
-      },
-      scattered: {
-        fill: "rgba(148, 163, 184, 0.18)",
-        text: "#cbd5e1",
-      },
-      broken: {
-        fill: "rgba(148, 163, 184, 0.28)",
-        text: "#e2e8f0",
-      },
-      overcast: {
-        fill: "rgba(148, 163, 184, 0.43)",
-        text: "#f8fafc",
-      },
-      obscured: {
-        fill: "rgba(100, 116, 139, 0.55)",
-        text: "#f8fafc",
-      },
-    };
+    const railHeight = 42;
+    const railTop = chartArea.top - 51;
+    const meterTop = railTop + 16;
+    const meterHeight = railHeight - 18;
 
     ctx.save();
-    ctx.fillStyle = "rgba(15, 23, 42, 0.72)";
+    ctx.fillStyle = "rgba(8, 18, 33, 0.96)";
     ctx.fillRect(
       chartArea.left,
       railTop,
@@ -212,61 +180,114 @@ const metarSkyPlugin = {
       railHeight,
     );
 
-    for (const run of runs) {
-      const style = styles[run.conditionKey];
-      if (!style) {
-        continue;
-      }
+    for (const hour of hours) {
       const left = Math.max(
         chartArea.left,
-        scales.x.getPixelForValue(run.startMinute),
+        scales.x.getPixelForValue(hour.startMinute),
       );
       const right = Math.min(
         chartArea.right,
-        scales.x.getPixelForValue(run.endMinute),
+        scales.x.getPixelForValue(hour.endMinute),
       );
       if (right <= left) {
         continue;
       }
 
-      ctx.fillStyle = style.fill;
-      ctx.fillRect(left, railTop, right - left, railHeight);
+      const cellWidth = right - left;
+      const isForecast = hour.phase === "forecast";
+      const isLive = hour.phase === "live";
+      const accent = isForecast
+        ? "rgba(56, 189, 248, 0.72)"
+        : isLive
+          ? "rgba(251, 191, 36, 0.78)"
+          : "rgba(203, 213, 225, 0.72)";
 
-      if (run.conditionKey === "overcast" || run.conditionKey === "obscured") {
+      if (Number.isFinite(hour.coverPct)) {
+        const fillHeight = Math.max(
+          hour.coverPct > 0 ? 2 : 1,
+          (meterHeight * hour.coverPct) / 100,
+        );
+        const fillTop = meterTop + meterHeight - fillHeight;
+        ctx.fillStyle = accent;
+        ctx.fillRect(left + 1, fillTop, Math.max(0, cellWidth - 2), fillHeight);
+
+        if (isForecast) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(left + 1, fillTop, Math.max(0, cellWidth - 2), fillHeight);
+          ctx.clip();
+          ctx.strokeStyle = "rgba(224, 242, 254, 0.24)";
+          ctx.lineWidth = 1;
+          for (
+            let hatchX = left - meterHeight;
+            hatchX < right + meterHeight;
+            hatchX += 7
+          ) {
+            ctx.beginPath();
+            ctx.moveTo(hatchX, meterTop + meterHeight);
+            ctx.lineTo(hatchX + meterHeight, meterTop);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      } else {
         ctx.save();
         ctx.beginPath();
-        ctx.rect(left, railTop, right - left, railHeight);
+        ctx.rect(left + 1, meterTop, Math.max(0, cellWidth - 2), meterHeight);
         ctx.clip();
-        ctx.strokeStyle = "rgba(248, 250, 252, 0.25)";
+        ctx.strokeStyle = "rgba(100, 116, 139, 0.22)";
         ctx.lineWidth = 1;
         for (
-          let hatchX = left - railHeight;
-          hatchX < right + railHeight;
-          hatchX += 8
+          let hatchX = left - meterHeight;
+          hatchX < right + meterHeight;
+          hatchX += 9
         ) {
           ctx.beginPath();
-          ctx.moveTo(hatchX, railTop + railHeight);
-          ctx.lineTo(hatchX + railHeight, railTop);
+          ctx.moveTo(hatchX, meterTop + meterHeight);
+          ctx.lineTo(hatchX + meterHeight, meterTop);
           ctx.stroke();
         }
         ctx.restore();
       }
 
-      if (right - left >= 58) {
-        ctx.fillStyle = style.text;
-        ctx.font = "600 8px IBM Plex Mono, monospace";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+      ctx.fillStyle = Number.isFinite(hour.coverPct) ? "#f8fafc" : "#64748b";
+      ctx.font = "600 10px IBM Plex Mono, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      if (cellWidth >= 30) {
         ctx.fillText(
-          run.ribbonLabel,
-          left + (right - left) / 2,
-          railTop + railHeight / 2 + 0.5,
-          right - left - 5,
+          hour.displayLabel,
+          left + cellWidth / 2,
+          railTop + 8,
+          Math.max(0, cellWidth - 5),
         );
       }
+
+      if (isForecast) {
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = "rgba(125, 211, 252, 0.62)";
+        ctx.beginPath();
+        ctx.moveTo(left + 1, railTop + 1);
+        ctx.lineTo(right - 1, railTop + 1);
+        ctx.stroke();
+        ctx.restore();
+      } else if (isLive) {
+        ctx.strokeStyle = "rgba(251, 191, 36, 0.72)";
+        ctx.beginPath();
+        ctx.moveTo(left + 1, railTop + 1);
+        ctx.lineTo(right - 1, railTop + 1);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.13)";
+      ctx.beginPath();
+      ctx.moveTo(right, railTop);
+      ctx.lineTo(right, railTop + railHeight);
+      ctx.stroke();
     }
 
-    ctx.strokeStyle = "rgba(148, 163, 184, 0.24)";
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.28)";
     ctx.lineWidth = 1;
     ctx.strokeRect(
       chartArea.left,
@@ -287,7 +308,7 @@ ChartJS.register(
   nowLinePlugin,
   sunsetLinePlugin,
   peakTimingPlugin,
-  metarSkyPlugin,
+  hourlyCloudCoverPlugin,
 );
 
 const STATION_ICAO = "RKSI";
@@ -305,6 +326,13 @@ const METAR_SKY_AMOUNT_RANK = Object.freeze({
   BKN: 3,
   OVC: 4,
 });
+const METAR_SKY_COVERAGE_BANDS = Object.freeze({
+  few: { lowerPct: 1, upperPct: 25, nominalPct: 18.75 },
+  scattered: { lowerPct: 37.5, upperPct: 50, nominalPct: 43.75 },
+  broken: { lowerPct: 62.5, upperPct: 87.5, nominalPct: 75 },
+  overcast: { lowerPct: 100, upperPct: 100, nominalPct: 100 },
+});
+const CLOUD_CHART_WIDTH_PX = 2400;
 const HISTORICAL_PEAK_REFERENCE = Object.freeze({
   averageMinute: 13 * 60 + 39,
   medianMinute: 13 * 60 + 44,
@@ -456,7 +484,7 @@ function minuteLabel(totalMinutes) {
   if (!Number.isFinite(totalMinutes)) {
     return "";
   }
-  const normalized = Math.max(0, Math.min(1439, Math.round(totalMinutes)));
+  const normalized = ((Math.round(totalMinutes) % 1440) + 1440) % 1440;
   const hour24 = Math.floor(normalized / 60);
   const minute = normalized % 60;
   const hour12 = hour24 % 12 || 12;
@@ -625,30 +653,6 @@ function metarSkySummary(sky) {
   return `${sky.conditionLabel} · ${primaryDetail}${ceilingDetail}`;
 }
 
-function metarSkyRibbonLabel(conditionKey, baseFeetValues) {
-  const codeByCondition = {
-    clear: "CLR",
-    no_significant_cloud: "NSC",
-    cavok: "CAVOK",
-    few: "FEW",
-    scattered: "SCT",
-    broken: "BKN",
-    overcast: "OVC",
-    obscured: "VV",
-  };
-  const finiteBases = [...new Set(baseFeetValues.filter(Number.isFinite))].sort(
-    (left, right) => left - right,
-  );
-  if (!finiteBases.length) {
-    return codeByCondition[conditionKey];
-  }
-  const baseLabel =
-    finiteBases.length === 1
-      ? formatFeet(finiteBases[0])
-      : `${formatFeet(finiteBases[0])}–${formatFeet(finiteBases.at(-1))}`;
-  return `${codeByCondition[conditionKey]} · ${baseLabel} FT`;
-}
-
 function buildMetarSkyRuns(metarRows, currentMinute = null) {
   const reports = [...metarRows]
     .sort((left, right) => left.obsTimeUtc - right.obsTimeUtc)
@@ -676,9 +680,9 @@ function buildMetarSkyRuns(metarRows, currentMinute = null) {
         ? gapMinutes
         : METAR_SKY_DEFAULT_HOLD_MINUTES;
     const endMinute = Math.min(
-      1439,
+      1440,
       report.minute + holdMinutes,
-      Number.isFinite(currentMinute) ? currentMinute : 1439,
+      Number.isFinite(currentMinute) ? currentMinute : 1440,
     );
     if (endMinute <= report.minute) {
       continue;
@@ -689,6 +693,8 @@ function buildMetarSkyRuns(metarRows, currentMinute = null) {
       startMinute: report.minute,
       endMinute,
       reportCount: 1,
+      reportMinutes: [report.minute],
+      primaryCodes: [report.sky.primaryCode],
       baseFeetValues: Number.isFinite(report.sky.primaryHeightFeet)
         ? [report.sky.primaryHeightFeet]
         : [],
@@ -710,6 +716,8 @@ function buildMetarSkyRuns(metarRows, currentMinute = null) {
     ) {
       previous.endMinute = Math.max(previous.endMinute, interval.endMinute);
       previous.reportCount += interval.reportCount;
+      previous.reportMinutes.push(...interval.reportMinutes);
+      previous.primaryCodes.push(...interval.primaryCodes);
       previous.baseFeetValues.push(...interval.baseFeetValues);
       previous.ceilingFeetValues.push(...interval.ceilingFeetValues);
       previous.lastReportTimeLocal = interval.lastReportTimeLocal;
@@ -718,20 +726,368 @@ function buildMetarSkyRuns(metarRows, currentMinute = null) {
     runs.push({ ...interval });
   }
 
-  return runs.map((run) => ({
-    ...run,
-    ribbonLabel: metarSkyRibbonLabel(run.conditionKey, run.baseFeetValues),
-  }));
+  return runs;
 }
 
-function overcastRunSummary(run) {
-  if (!run) {
+function metarSkyCoverageBand(source) {
+  if (!source) {
     return null;
   }
-  const baseLabel = metarSkyRibbonLabel("overcast", run.baseFeetValues);
-  return `${minuteLabel(run.startMinute)}–${minuteLabel(
-    run.endMinute,
-  )} · ${baseLabel}`;
+  if (source.conditionKey === "clear") {
+    const codes = source.primaryCodes ?? [source.primaryCode];
+    return codes.length > 0 && codes.every((code) => code === "SKC")
+      ? { lowerPct: 0, upperPct: 0, nominalPct: 0 }
+      : null;
+  }
+  return METAR_SKY_COVERAGE_BANDS[source.conditionKey] ?? null;
+}
+
+function cloudCoverDescription(coverPct) {
+  if (!Number.isFinite(coverPct)) {
+    return "Cloud cover unavailable";
+  }
+  if (coverPct <= 10) {
+    return "Clear";
+  }
+  if (coverPct <= 30) {
+    return "Mostly clear";
+  }
+  if (coverPct <= 60) {
+    return "Partly cloudy";
+  }
+  if (coverPct < 90) {
+    return "Mostly cloudy";
+  }
+  return "Near-total cloud cover";
+}
+
+function formatCloudCoverRange(lowerPct, upperPct) {
+  if (!Number.isFinite(lowerPct) || !Number.isFinite(upperPct)) {
+    return null;
+  }
+  const lower = Math.round(lowerPct);
+  const upper = Math.round(upperPct);
+  return lower === upper ? `${lower}%` : `${lower}–${upper}%`;
+}
+
+function cloudHourWindowLabel(hour) {
+  const start = String(hour).padStart(2, "0");
+  const end = String((hour + 1) % 24).padStart(2, "0");
+  return `${start}:00–${end}:00 KST`;
+}
+
+function observedCloudHour(hour, metarSkyRuns, windowEnd, phase) {
+  const startMinute = hour * 60;
+  const endMinute = Math.min((hour + 1) * 60, windowEnd);
+  const windowMinutes = Math.max(0, endMinute - startMinute);
+  const segments = metarSkyRuns
+    .map((run) => {
+      const start = Math.max(startMinute, run.startMinute);
+      const end = Math.min(endMinute, run.endMinute);
+      return end > start
+        ? {
+            run,
+            durationMinutes: end - start,
+            band: metarSkyCoverageBand(run),
+          }
+        : null;
+    })
+    .filter(Boolean);
+  const representedMinutes = segments.reduce(
+    (total, segment) => total + segment.durationMinutes,
+    0,
+  );
+  const numericMinutes = segments
+    .filter((segment) => segment.band)
+    .reduce((total, segment) => total + segment.durationMinutes, 0);
+  const hasUnknownCoverage =
+    representedMinutes > 0 && numericMinutes < representedMinutes - 0.5;
+  const minimumMinutes = phase === "live" ? Math.min(45, windowMinutes) : 45;
+  const canEstimate =
+    windowMinutes >= (phase === "live" ? 15 : 45) &&
+    representedMinutes >= minimumMinutes &&
+    !hasUnknownCoverage &&
+    numericMinutes > 0;
+  const reportMinutes = new Set(
+    segments.flatMap((segment) => segment.run.reportMinutes),
+  );
+  const conditionLabels = [
+    ...new Set(segments.map((segment) => segment.run.conditionLabel)),
+  ];
+  const liveRemainderDetail =
+    phase === "live"
+      ? " Elapsed portion only; the rest of this hour is still pending and is not inferred from hourly guidance."
+      : "";
+
+  if (canEstimate) {
+    const weighted = (field) =>
+      segments.reduce(
+        (total, segment) =>
+          total + segment.durationMinutes * segment.band[field],
+        0,
+      ) / numericMinutes;
+    const nominalPct = weighted("nominalPct");
+    const lowerPct = weighted("lowerPct");
+    const upperPct = weighted("upperPct");
+    const coverPct = Math.round(nominalPct / 10) * 10;
+    const rangeLabel = formatCloudCoverRange(lowerPct, upperPct);
+    const hasFullWindowCoverage =
+      representedMinutes >= Math.max(0, windowMinutes - 0.5);
+    const exact =
+      hasFullWindowCoverage && Math.round(lowerPct) === Math.round(upperPct);
+    const estimatePrefix = exact ? "" : "≈";
+    const conditionLabel =
+      conditionLabels.length > 1
+        ? `Variable ${conditionLabels.join(" → ")}`
+        : conditionLabels[0] || cloudCoverDescription(coverPct);
+    return {
+      hour,
+      startMinute,
+      endMinute: (hour + 1) * 60,
+      phase,
+      coverPct,
+      lowerPct,
+      upperPct,
+      displayLabel: `${estimatePrefix}${coverPct}%`,
+      valueLabel: `${estimatePrefix}${coverPct}% (${rangeLabel} METAR-sample range)`,
+      summaryLabel: `${conditionLabel} · ${estimatePrefix}${coverPct}% METAR sample · ${rangeLabel} range`,
+      detail: `${conditionLabel}; ${rangeLabel} range across the represented METAR sample; ${Math.round(
+        representedMinutes,
+      )}/${Math.round(windowMinutes)} minutes represented; ${
+        reportMinutes.size
+      } ${reportMinutes.size === 1 ? "report" : "reports"}.${liveRemainderDetail}`,
+    };
+  }
+
+  const isNoSignificantCloud = (segment) =>
+    ["cavok", "no_significant_cloud"].includes(segment.run.conditionKey) ||
+    (segment.run.conditionKey === "clear" &&
+      segment.run.primaryCodes.length > 0 &&
+      segment.run.primaryCodes.every((code) => code === "CLR"));
+  const allNoSignificantCloud =
+    segments.length > 0 && segments.every(isNoSignificantCloud);
+  const allObscuredSky =
+    segments.length > 0 &&
+    segments.every((segment) => segment.run.conditionKey === "obscured");
+  const hasMixedConditions = conditionLabels.length > 1;
+  let displayLabel = "NO DATA";
+  let valueLabel = "No observation";
+  let summaryLabel = "No observed cloud amount";
+  if (allObscuredSky) {
+    displayLabel = "SKY HIDDEN";
+    valueLabel = "Sky obscured";
+    summaryLabel = "Sky obscured · total cover unavailable";
+  } else if (allNoSignificantCloud) {
+    displayLabel = "NO LOW CLOUD";
+    valueLabel = "No significant low cloud";
+    summaryLabel = "No significant low cloud · total cover unavailable";
+  } else if (representedMinutes > 0) {
+    displayLabel = hasMixedConditions ? "VARIABLE" : "PARTIAL";
+    valueLabel = hasMixedConditions
+      ? "Variable observation"
+      : "Partial observation";
+    summaryLabel = `${
+      hasMixedConditions
+        ? `Variable ${conditionLabels.join(" → ")}`
+        : conditionLabels[0] || "Partial observation"
+    } · total cover unavailable`;
+  }
+  return {
+    hour,
+    startMinute,
+    endMinute: (hour + 1) * 60,
+    phase,
+    coverPct: null,
+    lowerPct: null,
+    upperPct: null,
+    displayLabel,
+    valueLabel,
+    summaryLabel,
+    detail: `${summaryLabel}; ${Math.round(
+      representedMinutes,
+    )}/${Math.round(windowMinutes)} minutes represented; ${
+      reportMinutes.size
+    } ${reportMinutes.size === 1 ? "report" : "reports"}.${liveRemainderDetail}`,
+  };
+}
+
+function forecastCloudHour(hour, forecast) {
+  const startMinute = hour * 60;
+  const endMinute = (hour + 1) * 60;
+  const rawCoverPct = forecast?.cloudCoverPct;
+  if (Number.isFinite(rawCoverPct)) {
+    const coverPct = Math.round(rawCoverPct / 5) * 5;
+    const providerCount =
+      forecast.cloudProviderCount ?? forecast.providerCount ?? 1;
+    return {
+      hour,
+      startMinute,
+      endMinute,
+      phase: "forecast",
+      coverPct,
+      lowerPct: null,
+      upperPct: null,
+      displayLabel: `${coverPct}%`,
+      valueLabel: `${coverPct}%`,
+      summaryLabel: `${cloudCoverDescription(coverPct)} · ${coverPct}%`,
+      detail: `${cloudCoverDescription(
+        coverPct,
+      )}; ${coverPct}% forecast total cloud cover; ${providerCount} ${
+        providerCount === 1 ? "provider" : "providers"
+      }.`,
+    };
+  }
+
+  return {
+    hour,
+    startMinute,
+    endMinute,
+    phase: "forecast",
+    coverPct: null,
+    lowerPct: null,
+    upperPct: null,
+    displayLabel: "—",
+    valueLabel: "Forecast unavailable",
+    summaryLabel: "Forecast unavailable",
+    detail: "No hourly cloud-cover forecast is stored for this hour.",
+  };
+}
+
+function buildHourlyCloudCover({
+  date,
+  today,
+  currentMinute,
+  metarSkyRuns,
+  forecastRows,
+}) {
+  const forecastByHour = new Map();
+  for (const row of forecastRows ?? []) {
+    const minute = parseMinute(
+      row.forecastTimeLocal ?? row.timeLocal ?? row.validTimeLocal,
+    );
+    if (Number.isFinite(minute) && Number.isFinite(row.cloudCoverPct)) {
+      forecastByHour.set(Math.floor(minute / 60), row);
+    }
+  }
+
+  return Array.from({ length: 24 }, (_, hour) => {
+    const startMinute = hour * 60;
+    const endMinute = (hour + 1) * 60;
+    const isPastDate = date < today;
+    const isFutureDate = date > today;
+    const isCompletedHour =
+      isPastDate ||
+      (!isFutureDate &&
+        Number.isFinite(currentMinute) &&
+        endMinute <= currentMinute);
+    const isLiveHour =
+      !isPastDate &&
+      !isFutureDate &&
+      Number.isFinite(currentMinute) &&
+      startMinute <= currentMinute &&
+      currentMinute < endMinute;
+
+    if (isCompletedHour) {
+      return observedCloudHour(hour, metarSkyRuns, endMinute, "observed");
+    }
+
+    if (isLiveHour) {
+      return observedCloudHour(hour, metarSkyRuns, currentMinute, "live");
+    }
+    return forecastCloudHour(hour, forecastByHour.get(hour));
+  });
+}
+
+function buildHourlyCloudSegments(hourlyCloudCover, currentMinute) {
+  return hourlyCloudCover.flatMap((hour) => {
+    if (
+      hour.phase !== "live" ||
+      !Number.isFinite(currentMinute) ||
+      currentMinute >= hour.endMinute
+    ) {
+      return [hour];
+    }
+    const splitMinute = Math.max(hour.startMinute, currentMinute);
+    return [
+      ...(splitMinute > hour.startMinute
+        ? [{ ...hour, endMinute: splitMinute }]
+        : []),
+      ...(splitMinute < hour.endMinute
+        ? [
+            {
+              hour: hour.hour,
+              startMinute: splitMinute,
+              endMinute: hour.endMinute,
+              phase: "pending",
+              coverPct: null,
+              lowerPct: null,
+              upperPct: null,
+              displayLabel: "",
+              valueLabel: "Current hour still in progress",
+              summaryLabel: "Current hour still in progress",
+              detail:
+                "No future portion is inferred from an hourly forecast value.",
+            },
+          ]
+        : []),
+    ];
+  });
+}
+
+function buildForecastCloudRows({ predictionRows, forecastCapture, date }) {
+  const storedPredictionRows = (predictionRows ?? []).filter((row) =>
+    Number.isFinite(row.cloudCoverPct),
+  );
+  if (storedPredictionRows.length) {
+    return storedPredictionRows;
+  }
+
+  const points = new Map();
+  const providerRows = [
+    {
+      rows:
+        forecastCapture?.googleStatus === "ok"
+          ? forecastCapture.googleHourlyRows
+          : [],
+      weight: 0.35,
+    },
+    {
+      rows:
+        forecastCapture?.openMeteoStatus === "ok"
+          ? forecastCapture.openMeteoHourlyRows
+          : [],
+      weight: 0.45,
+    },
+  ];
+  for (const provider of providerRows) {
+    const { rows, weight } = provider;
+    for (const row of rows ?? []) {
+      if (row.date !== date || !Number.isFinite(row.cloudCoverPct)) {
+        continue;
+      }
+      const key = row.forecastTimeUtc ?? row.forecastTimeLocal;
+      const point = points.get(key) ?? {
+        forecastTimeUtc: row.forecastTimeUtc,
+        forecastTimeLocal: row.forecastTimeLocal,
+        values: [],
+      };
+      point.values.push({ value: row.cloudCoverPct, weight });
+      points.set(key, point);
+    }
+  }
+
+  return [...points.values()]
+    .sort((left, right) => left.forecastTimeUtc - right.forecastTimeUtc)
+    .map((point) => ({
+      forecastTimeUtc: point.forecastTimeUtc,
+      forecastTimeLocal: point.forecastTimeLocal,
+      cloudCoverPct:
+        point.values.reduce(
+          (sum, value) => sum + value.value * value.weight,
+          0,
+        ) / point.values.reduce((sum, value) => sum + value.weight, 0),
+      cloudProviderCount: point.values.length,
+    }));
 }
 
 function formatClock(epochMs, includeSeconds = false) {
@@ -990,6 +1346,9 @@ function toForecastPoints(rows, unit) {
         forecastTimeUtc: row.forecastTimeUtc ?? row.timeUtc,
         forecastTimeLocal:
           row.forecastTimeLocal ?? row.timeLocal ?? row.validTimeLocal,
+        cloudCoverPct: Number.isFinite(row.cloudCoverPct)
+          ? row.cloudCoverPct
+          : null,
       };
     })
     .filter(Boolean);
@@ -1187,19 +1546,24 @@ export default function SeoulDayPage() {
   const date = String(params?.date ?? "");
   const [unit, setUnit] = useState("C");
   const [inputDate, setInputDate] = useState(date);
-  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const [clockNowMs, setClockNowMs] = useState(null);
   const [refreshState, setRefreshState] = useState({
     active: false,
     message: "",
   });
   const refreshInFlight = useRef(false);
+  const chartScrollRef = useRef(null);
+  const hasAutoScrolledChart = useRef(false);
 
   const isDateValid = isValidDate(date);
   const today = seoulTodayKey();
   const isToday = isDateValid && date === today;
   const previousDate = shiftDateKey(date, -1);
   const nextDate = shiftDateKey(date, 1);
-  const currentSeoulMinute = isToday ? seoulMinuteForEpoch(clockNowMs) : null;
+  const currentSeoulMinute =
+    isToday && Number.isFinite(clockNowMs)
+      ? seoulMinuteForEpoch(clockNowMs)
+      : null;
 
   const dayData = useQuery(
     "seoul:getDayStationRows",
@@ -1236,37 +1600,55 @@ export default function SeoulDayPage() {
     () => buildMetarSkyRuns(metarRows, currentSeoulMinute),
     [currentSeoulMinute, metarRows],
   );
-  const overcastRuns = useMemo(
-    () => metarSkyRuns.filter((run) => run.conditionKey === "overcast"),
-    [metarSkyRuns],
-  );
-  const latestMetarSky = useMemo(
-    () => parseMetarSkyCondition(latestMetar?.rawMetar),
-    [latestMetar?.rawMetar],
-  );
-  const overcastReportCount = overcastRuns.reduce(
-    (total, run) => total + run.reportCount,
-    0,
-  );
-  const overcastHeaderSummary =
-    overcastRuns.length === 1
-      ? `${overcastRunSummary(overcastRuns[0])} · ${
-          overcastRuns[0].reportCount
-        } ${overcastRuns[0].reportCount === 1 ? "report" : "reports"}`
-      : overcastRuns.length > 1
-        ? `${overcastRuns.length} periods · ${overcastReportCount} reports`
-        : null;
-  const overcastTitle = overcastRuns
-    .map(
-      (run) =>
-        `${overcastRunSummary(run)} · ${run.reportCount} ${
-          run.reportCount === 1 ? "report" : "reports"
-        }`,
-    )
-    .join("; ");
   const latestPrediction = normalizePrediction(
     predictionDashboard?.latestPrediction,
   );
+  const forecastCloudRows = useMemo(
+    () =>
+      buildForecastCloudRows({
+        predictionRows: latestPrediction?.hourlyCurve,
+        forecastCapture: predictionDashboard?.latestForecastCapture,
+        date,
+      }),
+    [
+      date,
+      latestPrediction?.hourlyCurve,
+      predictionDashboard?.latestForecastCapture,
+    ],
+  );
+  const hourlyCloudCover = useMemo(
+    () =>
+      buildHourlyCloudCover({
+        date,
+        today,
+        currentMinute: currentSeoulMinute,
+        metarSkyRuns,
+        forecastRows: forecastCloudRows,
+      }),
+    [currentSeoulMinute, date, forecastCloudRows, metarSkyRuns, today],
+  );
+  const hourlyCloudSegments = useMemo(
+    () => buildHourlyCloudSegments(hourlyCloudCover, currentSeoulMinute),
+    [currentSeoulMinute, hourlyCloudCover],
+  );
+  const latestObservedCloudHour = useMemo(
+    () =>
+      hourlyCloudCover
+        .filter(
+          (hour) =>
+            (hour.phase === "observed" || hour.phase === "live") &&
+            hour.valueLabel !== "No observation",
+        )
+        .at(-1) ?? null,
+    [hourlyCloudCover],
+  );
+  const nextForecastCloudHour = useMemo(() => {
+    return (
+      hourlyCloudCover.find(
+        (hour) => hour.phase === "forecast" && Number.isFinite(hour.coverPct),
+      ) ?? null
+    );
+  }, [hourlyCloudCover]);
   const predictionSummary = predictionDashboard?.summary ?? null;
   const predictionEvaluation = predictionDashboard?.evaluation ?? null;
   const predictionRevisions = Array.isArray(predictionDashboard?.revisions)
@@ -1405,6 +1787,14 @@ export default function SeoulDayPage() {
   const sunsetMinute = useMemo(() => sunsetMinuteForDate(date), [date]);
   const forecastPeakStartMinute = parseMinute(latestPrediction?.peakStartLocal);
   const forecastPeakEndMinute = parseMinute(latestPrediction?.peakEndLocal);
+  const hasTemperatureChartData =
+    metarRows.length +
+      amosDisplayRows.length +
+      (latestPrediction?.hourlyCurve?.length ?? 0) >
+    0;
+  const hasCloudGuidance = hourlyCloudCover.some((hour) =>
+    Number.isFinite(hour.coverPct),
+  );
 
   const chartData = useMemo(
     () =>
@@ -1430,7 +1820,7 @@ export default function SeoulDayPage() {
         intersect: false,
       },
       layout: {
-        padding: { top: 34, right: 8, bottom: 2, left: 2 },
+        padding: { top: 70, right: 8, bottom: 2, left: 2 },
       },
       plugins: {
         legend: {
@@ -1472,9 +1862,14 @@ export default function SeoulDayPage() {
               const skyCondition = item.raw?.skySummary
                 ? ` · ${item.raw.skySummary}`
                 : "";
+              const forecastCloudCover = Number.isFinite(
+                item.raw?.cloudCoverPct,
+              )
+                ? ` · ${Math.round(item.raw.cloudCoverPct)}% cloud cover`
+                : "";
               return `${item.dataset.label}: ${item.parsed.y.toFixed(
                 1,
-              )}°${unit}${reportType}${auditFallback}${skyCondition}`;
+              )}°${unit}${reportType}${auditFallback}${skyCondition}${forecastCloudCover}`;
             },
           },
         },
@@ -1504,9 +1899,9 @@ export default function SeoulDayPage() {
             windowEndMinute: forecastPeakEndMinute,
           },
         },
-        seoulMetarSky: {
-          display: metarSkyRuns.length > 0,
-          runs: metarSkyRuns,
+        seoulHourlyCloudCover: {
+          display: hourlyCloudSegments.length > 0,
+          hours: hourlyCloudSegments,
         },
       },
       scales: {
@@ -1535,6 +1930,7 @@ export default function SeoulDayPage() {
           },
         },
         y: {
+          display: hasTemperatureChartData,
           grace: "12%",
           border: { color: "rgba(148, 163, 184, 0.18)" },
           grid: { color: "rgba(148, 163, 184, 0.09)" },
@@ -1567,21 +1963,60 @@ export default function SeoulDayPage() {
       date,
       forecastPeakEndMinute,
       forecastPeakStartMinute,
+      hasTemperatureChartData,
+      hourlyCloudSegments,
       isToday,
-      metarSkyRuns,
       sunsetMinute,
       unit,
     ],
   );
 
+  function scrollChartToMinute(minute, behavior = "smooth") {
+    const scroller = chartScrollRef.current;
+    if (!scroller || !Number.isFinite(minute)) {
+      return false;
+    }
+    const minuteX = (minute / 1439) * CLOUD_CHART_WIDTH_PX;
+    const requestedLeft = minuteX - scroller.clientWidth * 0.4;
+    const maximumLeft = Math.max(
+      0,
+      scroller.scrollWidth - scroller.clientWidth,
+    );
+    scroller.scrollTo({
+      left: Math.min(maximumLeft, Math.max(0, requestedLeft)),
+      behavior,
+    });
+    return true;
+  }
+
   useEffect(() => {
     setInputDate(date);
+    hasAutoScrolledChart.current = false;
   }, [date]);
 
   useEffect(() => {
+    setClockNowMs(Date.now());
     const timer = window.setInterval(() => setClockNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (
+      !isToday ||
+      !Number.isFinite(currentSeoulMinute) ||
+      hasAutoScrolledChart.current
+    ) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      if (scrollChartToMinute(currentSeoulMinute, "auto")) {
+        hasAutoScrolledChart.current = true;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+    // Auto-position only once for each selected Seoul date.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSeoulMinute, date, isToday]);
 
   async function refreshLiveSources({ quiet = false } = {}) {
     if (!isToday || refreshInFlight.current) {
@@ -1671,12 +2106,6 @@ export default function SeoulDayPage() {
       </main>
     );
   }
-
-  const hasChartData =
-    metarRows.length +
-      amosDisplayRows.length +
-      (latestPrediction?.hourlyCurve?.length ?? 0) >
-    0;
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#050b14] text-slate-100">
@@ -2100,24 +2529,43 @@ export default function SeoulDayPage() {
               <h2 className="mt-1 text-lg font-medium text-slate-200">
                 {date}
               </h2>
-              <div className="mt-2 font-mono text-[9px] uppercase leading-4 tracking-[0.14em]">
+              <div className="mt-2 max-w-3xl font-mono text-[9px] uppercase leading-4 tracking-[0.14em]">
                 <p className="text-slate-300">
-                  METAR sky ·{" "}
-                  {latestMetarSky
-                    ? metarSkySummary(latestMetarSky)
-                    : "awaiting coded sky condition"}
-                  {latestMetar && (
-                    <> · {formatLocalTime(latestMetar.obsTimeLocal)} KST</>
+                  Hourly sky cover ·{" "}
+                  {date < today ? (
+                    <span className="text-slate-200">
+                      ■ completed hours: observed
+                    </span>
+                  ) : date > today ? (
+                    <span className="text-sky-300">▧ forecast percentages</span>
+                  ) : (
+                    <>
+                      <span className="text-slate-200">■ past: observed</span> ·{" "}
+                      <span className="text-amber-300">▌ now: live</span> ·{" "}
+                      <span className="text-sky-300">▧ coming: forecast</span>
+                    </>
                   )}
                 </p>
-                {overcastHeaderSummary && (
-                  <p
-                    className="text-slate-500"
-                    title={`Observed METAR overcast periods: ${overcastTitle}. Each report is carried forward only until the next report, capped at ${METAR_SKY_MAX_HOLD_MINUTES} minutes.`}
-                  >
-                    Overcast observed · {overcastHeaderSummary}
+                {latestObservedCloudHour && (
+                  <p className="text-slate-500">
+                    {latestObservedCloudHour.phase === "live"
+                      ? "Live hour"
+                      : "Latest completed hour"}{" "}
+                    · {cloudHourWindowLabel(latestObservedCloudHour.hour)} ·{" "}
+                    {latestObservedCloudHour.summaryLabel}
                   </p>
                 )}
+                <p className="text-sky-400/80">
+                  {date < today
+                    ? "Completed day · observed METAR hourly summary"
+                    : `${date > today ? "Forecast day" : "Coming hours"} · ${
+                        nextForecastCloudHour
+                          ? `${cloudHourWindowLabel(
+                              nextForecastCloudHour.hour,
+                            )} · ${nextForecastCloudHour.summaryLabel}`
+                          : "no stored forecast hour remains on this date"
+                      }`}
+                </p>
               </div>
             </div>
             <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
@@ -2151,33 +2599,34 @@ export default function SeoulDayPage() {
                       latestPrediction?.hourlyCurve?.length ?? 0
                     } forecast points`}
               </p>
+              {isToday && Number.isFinite(currentSeoulMinute) && (
+                <button
+                  type="button"
+                  onClick={() => scrollChartToMinute(currentSeoulMinute)}
+                  className="mt-2 border border-cyan-300/30 px-2.5 py-1 text-[9px] text-cyan-200 transition hover:border-cyan-200 hover:text-cyan-100"
+                >
+                  Jump to now
+                </button>
+              )}
             </div>
           </div>
 
-          <div id="seoul-metar-sky-description" className="sr-only">
+          <div id="seoul-hourly-cloud-description" className="sr-only">
             <p>
-              The METAR sky ribbon shows coded sky conditions carried from each
-              report until the next report for no more than{" "}
-              {METAR_SKY_MAX_HOLD_MINUTES} minutes. Hatched segments are
-              overcast or obscured.
+              The hourly sky-cover strip uses meter height to show how much of
+              the sky is covered. Solid cells are past METAR observations. Their
+              percentages are approximate ranges derived only from explicit
+              cloud-amount reports. Diagonally patterned cells are upcoming
+              model forecasts. Hatched cells without a percentage mean total
+              cloud cover is unavailable, not clear sky. The current hour ends
+              at the NOW line; its remaining time stays hatched until observed.
             </p>
-            {metarSkyRuns.length > 0 && (
-              <ul>
-                {metarSkyRuns.map((run, index) => (
-                  <li key={`${run.conditionKey}-${run.startMinute}-${index}`}>
-                    {run.conditionLabel} from {minuteLabel(run.startMinute)} to{" "}
-                    {minuteLabel(run.endMinute)} KST, based on {run.reportCount}{" "}
-                    {run.reportCount === 1 ? "report" : "reports"}
-                    {run.ribbonLabel ? `, ${run.ribbonLabel}` : ""}.
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
 
           <div
-            aria-label="Scrollable 24-hour temperature chart"
-            aria-describedby="seoul-metar-sky-description"
+            ref={chartScrollRef}
+            aria-label="Scrollable 24-hour temperature and hourly sky-cover chart"
+            aria-describedby="seoul-hourly-cloud-description"
             className="relative min-h-[560px] flex-1 overflow-x-auto overscroll-x-contain border border-white/10 bg-[#07111f]/85 shadow-[0_30px_100px_rgba(0,0,0,0.38)]"
             role="region"
             tabIndex={0}
@@ -2185,26 +2634,77 @@ export default function SeoulDayPage() {
             <div className="h-[68vh] min-h-[560px] w-[2400px] min-w-[2400px] p-3 md:h-[72vh] md:max-h-[900px] md:p-5">
               <Line data={chartData} options={chartOptions} />
             </div>
-            {dayData !== undefined && !hasChartData && (
+            {dayData !== undefined && !hasTemperatureChartData && (
               <div className="pointer-events-none absolute inset-0 grid place-items-center">
                 <div className="text-center">
                   <p className="font-mono text-xs uppercase tracking-[0.22em] text-slate-400">
-                    No captured telemetry
+                    {hasCloudGuidance
+                      ? "Cloud guidance available"
+                      : "No captured telemetry"}
                   </p>
                   <p className="mt-2 text-sm text-slate-600">
-                    This Seoul local date has no stored RKSI observations.
+                    {hasCloudGuidance
+                      ? "No temperature tracker has been generated for this date; hourly cloud guidance is shown above."
+                      : "This Seoul local date has no stored RKSI observations."}
                   </p>
                 </div>
               </div>
             )}
           </div>
+
+          <details className="mt-3 border border-white/10 bg-white/[0.02]">
+            <summary className="cursor-pointer px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-slate-400 transition hover:text-slate-200">
+              View all 24 hourly cloud details
+            </summary>
+            <div className="overflow-x-auto border-t border-white/10">
+              <table className="w-full min-w-[760px] border-collapse text-left">
+                <caption className="sr-only">
+                  Hour-by-hour observed and forecast Seoul sky cover
+                </caption>
+                <thead>
+                  <tr className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
+                    <th className="px-4 py-2 font-normal">Hour</th>
+                    <th className="px-4 py-2 font-normal">Source</th>
+                    <th className="px-4 py-2 font-normal">Sky cover</th>
+                    <th className="px-4 py-2 font-normal">What it means</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hourlyCloudCover.map((hour) => (
+                    <tr
+                      key={`cloud-table-${hour.hour}`}
+                      className="border-t border-white/[0.06] text-xs text-slate-300"
+                    >
+                      <td className="whitespace-nowrap px-4 py-2 font-mono text-[10px] text-slate-400">
+                        {cloudHourWindowLabel(hour.hour)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 font-mono text-[10px] uppercase tracking-[0.12em]">
+                        {hour.phase === "forecast"
+                          ? "Forecast"
+                          : hour.phase === "live"
+                            ? "Live observation"
+                            : "Observed"}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 font-medium text-slate-100">
+                        {hour.valueLabel}
+                      </td>
+                      <td className="px-4 py-2 text-slate-500">
+                        {hour.detail}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </section>
 
         <footer className="flex flex-col gap-2 py-4 font-mono text-[10px] leading-5 text-slate-600 md:flex-row md:items-center md:justify-between">
           <p>
             AMOS uses the feed row designated 15L. Five-minute snapshots remain
-            available only as an audit fallback for missed minute captures. The
-            sky ribbon uses observed METAR codes, not AMOS inference.
+            available only as an audit fallback for missed minute captures. Past
+            sky cover comes from METAR ranges; coming hours use model
+            cloud-cover percentages.
           </p>
           <p>
             NOAA TGFTP METAR · KMA AMOS MOBILE FEED · MULTI-PROVIDER FORECAST

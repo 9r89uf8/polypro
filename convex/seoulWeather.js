@@ -26,7 +26,7 @@ const PREDICTION_INTERVAL_MS = 5 * MILLIS_PER_MINUTE;
 const MAX_LIVE_OBSERVATION_AGE_MS = 10 * MILLIS_PER_MINUTE;
 const MAX_PROVIDER_CAPTURE_AGE_MS = 12 * MILLIS_PER_HOUR;
 const PREDICTION_HEARTBEAT_MS = 30 * MILLIS_PER_MINUTE;
-const PREDICTION_MODEL_VERSION = "rksi15l-ensemble-v1";
+const PREDICTION_MODEL_VERSION = "rksi15l-ensemble-v2";
 const MAX_DASHBOARD_REVISIONS = 288;
 const WEATHER_STATUS = {
   OK: "ok",
@@ -378,6 +378,14 @@ function celsiusTempPair(value) {
   return { tempC, tempF: toFahrenheit(tempC) };
 }
 
+function normalizeCloudCover(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = toFiniteNumber(value);
+  return parsed === null ? null : Math.round(clamp(parsed, 0, 100));
+}
+
 function extractGoogleDescription(node) {
   return (
     toNonEmptyString(node?.weatherCondition?.description?.text) ??
@@ -402,6 +410,7 @@ function normalizeGoogleHourlyRows(payload, timeZone) {
       continue;
     }
     const phrase = extractGoogleDescription(row);
+    const cloudCoverPct = normalizeCloudCover(row?.cloudCover);
     rows.push({
       date: formatDateInTimezone(forecastTimeUtc, timeZone),
       forecastTimeUtc,
@@ -409,6 +418,7 @@ function normalizeGoogleHourlyRows(payload, timeZone) {
       tempC: temperature.tempC,
       tempF: temperature.tempF,
       ...(phrase ? { phrase } : {}),
+      ...(Number.isFinite(cloudCoverPct) ? { cloudCoverPct } : {}),
     });
   }
 
@@ -471,11 +481,27 @@ function normalizeOpenMeteoHourlyRows(payload, timeZone) {
   const temperatures = Array.isArray(payload?.hourly?.temperature_2m)
     ? payload.hourly.temperature_2m
     : [];
+  const cloudCoverValues = Array.isArray(payload?.hourly?.cloud_cover)
+    ? payload.hourly.cloud_cover
+    : [];
   const rows = [];
 
   for (let index = 0; index < timestamps.length; index += 1) {
     const rawTimestamp = toFiniteNumber(timestamps[index]);
     const temperature = celsiusTempPair(temperatures[index]);
+    const cloudCoverAtStart = normalizeCloudCover(cloudCoverValues[index]);
+    const nextRawTimestamp = toFiniteNumber(timestamps[index + 1]);
+    const cloudCoverAtEnd = normalizeCloudCover(cloudCoverValues[index + 1]);
+    // Open-Meteo values are instantaneous at each timestamp. A forward
+    // trapezoidal mean makes this slot comparable with Google's hourly mean.
+    const cloudCoverPct =
+      Number.isFinite(rawTimestamp) &&
+      Number.isFinite(nextRawTimestamp) &&
+      nextRawTimestamp - rawTimestamp === 60 * 60 &&
+      Number.isFinite(cloudCoverAtStart) &&
+      Number.isFinite(cloudCoverAtEnd)
+        ? Math.round((cloudCoverAtStart + cloudCoverAtEnd) / 2)
+        : null;
     const forecastTimeUtc =
       rawTimestamp === null ? null : Math.round(rawTimestamp * 1000);
     if (
@@ -490,6 +516,7 @@ function normalizeOpenMeteoHourlyRows(payload, timeZone) {
       forecastTimeLocal: formatDateTimeInTimezone(forecastTimeUtc, timeZone),
       tempC: temperature.tempC,
       tempF: temperature.tempF,
+      ...(Number.isFinite(cloudCoverPct) ? { cloudCoverPct } : {}),
     });
   }
 
@@ -500,7 +527,7 @@ async function fetchOpenMeteoHourlyForecast({ station, timeZone }) {
   const url = new URL(OPEN_METEO_FORECAST_URL);
   url.searchParams.set("latitude", String(station.lat));
   url.searchParams.set("longitude", String(station.lon));
-  url.searchParams.set("hourly", "temperature_2m");
+  url.searchParams.set("hourly", "temperature_2m,cloud_cover");
   url.searchParams.set("temperature_unit", "celsius");
   url.searchParams.set("timeformat", "unixtime");
   url.searchParams.set("timezone", "UTC");
@@ -601,6 +628,7 @@ const hourlyForecastRowValidator = v.object({
   tempC: v.number(),
   tempF: v.number(),
   phrase: v.optional(v.string()),
+  cloudCoverPct: v.optional(v.number()),
 });
 
 export const storeForecastCapture = internalMutationGeneric({
@@ -1093,10 +1121,17 @@ function buildHourlyEnsembleCurve(providerCurves) {
           forecastTimeUtc: row.forecastTimeUtc,
           forecastTimeLocal: row.forecastTimeLocal,
           values: [],
+          cloudValues: [],
         };
         points.set(row.forecastTimeUtc, point);
       }
       point.values.push({ value: row.tempC, weight: provider.weight });
+      if (Number.isFinite(row.cloudCoverPct)) {
+        point.cloudValues.push({
+          value: row.cloudCoverPct,
+          weight: provider.weight,
+        });
+      }
     }
   }
 
@@ -1104,12 +1139,21 @@ function buildHourlyEnsembleCurve(providerCurves) {
     .sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc)
     .map((point) => {
       const tempC = roundToTenth(weightedMean(point.values));
+      const cloudCoverPct = point.cloudValues.length
+        ? Math.round(clamp(weightedMean(point.cloudValues), 0, 100))
+        : null;
       return {
         forecastTimeUtc: point.forecastTimeUtc,
         forecastTimeLocal: point.forecastTimeLocal,
         tempC,
         tempF: toFahrenheit(tempC),
         providerCount: point.values.length,
+        ...(Number.isFinite(cloudCoverPct)
+          ? {
+              cloudCoverPct,
+              cloudProviderCount: point.cloudValues.length,
+            }
+          : {}),
       };
     });
 }
@@ -1469,6 +1513,7 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
     });
     const materialChange =
       !previousPrediction ||
+      previousPrediction.modelVersion !== PREDICTION_MODEL_VERSION ||
       Math.abs(
         roundToTenth(previousPrediction.predictedHighC - predictedHighC),
       ) >= 0.1 ||

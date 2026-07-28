@@ -4,11 +4,90 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f605221a-94bb-4adb-bd31-f0786384479f" name="Changes" comment="" />
+    <list default="true" id="f605221a-94bb-4adb-bd31-f0786384479f" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.claude/settings.local.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/seoul/day/[date]/page.js" beforeDir="false" afterPath="$PROJECT_DIR$/app/seoul/day/[date]/page.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/convex/schema.js" beforeDir="false" afterPath="$PROJECT_DIR$/convex/schema.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/convex/seoulWeather.js" beforeDir="false" afterPath="$PROJECT_DIR$/convex/seoulWeather.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/bot-implementation-plan.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/bot.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/btc.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/seoul-pages.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/seoul-pages.md" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="107" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.7422620734709904" />
+      <entry key="MS500" value="4.696252973932749" />
+      <entry key="S2" value="12.13586408932104" />
+      <entry key="S5" value="21.81904449563841" />
+      <entry key="S10" value="31.347749057819676" />
+      <entry key="S30" value="64.46153734961672" />
+      <entry key="S60" value="99.60952816168943" />
+      <entry key="M2" value="132.03784742441294" />
+      <entry key="M5" value="159.75402796324343" />
+      <entry key="M10" value="170.83342872393362" />
+      <entry key="M15" value="174.76261834605265" />
+      <entry key="M30" value="178.81670415400959" />
+      <entry key="H1" value="180.9699010227121" />
+      <entry key="H2" value="190.82584552893803" />
+      <entry key="H4" value="287.8101981180296" />
+      <entry key="D1" value="1276.3197131548425" />
+      <entry key="W1" value="2003.8170969079229" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="1.797488241227493E-137" />
+      <entry key="M10" value="4.239679517637622E-69" />
+      <entry key="M15" value="2.6195218137589667E-46" />
+      <entry key="M30" value="1.618493686660242E-23" />
+      <entry key="H1" value="4.023050691527805E-12" />
+      <entry key="H2" value="2.0057543946176017E-6" />
+      <entry key="H4" value="0.0014162465867981512" />
+      <entry key="D1" value="0.3351118711155091" />
+      <entry key="W1" value="0.8554014325579371" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="1.6494043130461769" />
+      <entry key="MS500" value="4.628987452479503" />
+      <entry key="S2" value="12.086418322856881" />
+      <entry key="S5" value="21.784254195895624" />
+      <entry key="S10" value="31.3231546825384" />
+      <entry key="S30" value="64.44336777459459" />
+      <entry key="S60" value="99.5946687423831" />
+      <entry key="M2" value="132.027671773337" />
+      <entry key="M5" value="159.74900312618175" />
+      <entry key="M10" value="170.83072391333604" />
+      <entry key="M15" value="174.76076952293104" />
+      <entry key="M30" value="178.8157561755887" />
+      <entry key="H1" value="180.9694208729143" />
+      <entry key="H2" value="190.82559882354866" />
+      <entry key="H4" value="287.81145001326445" />
+      <entry key="D1" value="1276.6547204429025" />
+      <entry key="W1" value="2004.6724741816197" />
+    </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 1
@@ -18,23 +97,27 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
-    &quot;js.debugger.nextJs.config.created.client&quot;: &quot;true&quot;,
-    &quot;js.debugger.nextJs.config.created.server&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/alexa/WebstormProjects/polypro2&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;terminal&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "agent/seoul-hourly-cloud-cover",
+    "ignore.virus.scanning.warn.message": "true",
+    "js.debugger.nextJs.config.created.client": "true",
+    "js.debugger.nextJs.config.created.server": "true",
+    "last_opened_file_path": "C:/Users/alexa/WebstormProjects/polypro2",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "terminal"
   }
-}</component>
+}]]></component>
   <component name="RunManager" selected="npm.Next.js: server-side">
     <configuration name="Next.js: debug client-side" type="JavascriptDebugType" uri="http://localhost:3000/">
       <method v="2" />
@@ -53,7 +136,7 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-js-predefined-d6986cc7102b-a71380e98a7c-JavaScript-WS-252.28238.10" />
+        <option value="bundled-js-predefined-d6986cc7102b-4abd2a77f808-JavaScript-WS-262.8665.341" />
       </set>
     </attachedChunks>
   </component>
@@ -67,6 +150,7 @@
       <workItem from="1773060609998" duration="58009000" />
       <workItem from="1773250650327" duration="238392000" />
       <workItem from="1774485995177" duration="23000" />
+      <workItem from="1785112654074" duration="23858000" />
     </task>
     <servers />
   </component>
