@@ -74,6 +74,89 @@ const sunsetLinePlugin = {
   },
 };
 
+function drawMinuteBand(chart, startMinute, endMinute, fillStyle) {
+  if (!Number.isFinite(startMinute) || !Number.isFinite(endMinute)) {
+    return;
+  }
+
+  const { ctx, chartArea, scales } = chart;
+  const normalizedStart = normalizeCycle(startMinute, 1440);
+  const normalizedEnd = normalizeCycle(endMinute, 1440);
+  const segments =
+    normalizedEnd > normalizedStart
+      ? [[normalizedStart, normalizedEnd]]
+      : [
+          [normalizedStart, 1439],
+          [0, normalizedEnd],
+        ];
+
+  ctx.save();
+  ctx.fillStyle = fillStyle;
+  for (const [start, end] of segments) {
+    const left = Math.max(chartArea.left, scales.x.getPixelForValue(start));
+    const right = Math.min(chartArea.right, scales.x.getPixelForValue(end));
+    if (right > left) {
+      ctx.fillRect(left, chartArea.top, right - left, chartArea.height);
+    }
+  }
+  ctx.restore();
+}
+
+const peakTimingPlugin = {
+  id: "seoulPeakTiming",
+  beforeDatasetsDraw(chart, _args, options) {
+    if (options?.typical?.display) {
+      drawMinuteBand(
+        chart,
+        options.typical.windowStartMinute,
+        options.typical.windowEndMinute,
+        "rgba(167, 139, 250, 0.055)",
+      );
+    }
+    if (options?.forecast?.display) {
+      drawMinuteBand(
+        chart,
+        options.forecast.windowStartMinute,
+        options.forecast.windowEndMinute,
+        "rgba(251, 191, 36, 0.075)",
+      );
+    }
+  },
+  afterDatasetsDraw(chart, _args, options) {
+    if (
+      !options?.typical?.display ||
+      !Number.isFinite(options.typical.medianMinute)
+    ) {
+      return;
+    }
+
+    const { ctx, chartArea, scales } = chart;
+    const x = scales.x.getPixelForValue(options.typical.medianMinute);
+    if (x < chartArea.left || x > chartArea.right) {
+      return;
+    }
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(167, 139, 250, 0.72)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([2, 5]);
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.stroke();
+
+    ctx.fillStyle = "#c4b5fd";
+    ctx.font = "500 10px IBM Plex Mono, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      `${options.typical.title} · ${options.typical.label}`,
+      x,
+      chartArea.top + 12,
+    );
+    ctx.restore();
+  },
+};
+
 ChartJS.register(
   LinearScale,
   PointElement,
@@ -82,6 +165,7 @@ ChartJS.register(
   Legend,
   nowLinePlugin,
   sunsetLinePlugin,
+  peakTimingPlugin,
 );
 
 const STATION_ICAO = "RKSI";
@@ -91,6 +175,15 @@ const RKSI_LONGITUDE = 126.4407;
 const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HISTORICAL_PEAK_REFERENCE = Object.freeze({
+  averageMinute: 13 * 60 + 39,
+  medianMinute: 13 * 60 + 44,
+  windowStartMinute: 12 * 60 + 20,
+  windowEndMinute: 14 * 60 + 39,
+  sampleSize: 130,
+  firstDate: "2026-03-20",
+  lastDate: "2026-07-27",
+});
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -879,6 +972,8 @@ export default function SeoulDayPage() {
     );
     return Number(parts.hour) * 60 + Number(parts.minute);
   }, [clockNowMs, isToday]);
+  const forecastPeakStartMinute = parseMinute(latestPrediction?.peakStartLocal);
+  const forecastPeakEndMinute = parseMinute(latestPrediction?.peakEndLocal);
 
   const chartData = useMemo(
     () =>
@@ -958,6 +1053,23 @@ export default function SeoulDayPage() {
           minute: sunsetMinute,
           label: minuteLabel(sunsetMinute),
         },
+        seoulPeakTiming: {
+          typical: {
+            display: true,
+            medianMinute: HISTORICAL_PEAK_REFERENCE.medianMinute,
+            windowStartMinute: HISTORICAL_PEAK_REFERENCE.windowStartMinute,
+            windowEndMinute: HISTORICAL_PEAK_REFERENCE.windowEndMinute,
+            title: "MAR–JUL TYPICAL",
+            label: minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute),
+          },
+          forecast: {
+            display:
+              Number.isFinite(forecastPeakStartMinute) &&
+              Number.isFinite(forecastPeakEndMinute),
+            windowStartMinute: forecastPeakStartMinute,
+            windowEndMinute: forecastPeakEndMinute,
+          },
+        },
       },
       scales: {
         x: {
@@ -1012,7 +1124,15 @@ export default function SeoulDayPage() {
         },
       },
     }),
-    [currentSeoulMinute, date, isToday, sunsetMinute, unit],
+    [
+      currentSeoulMinute,
+      date,
+      forecastPeakEndMinute,
+      forecastPeakStartMinute,
+      isToday,
+      sunsetMinute,
+      unit,
+    ],
   );
 
   useEffect(() => {
@@ -1288,6 +1408,25 @@ export default function SeoulDayPage() {
                             latestPrediction.peakEndLocal,
                           )}
                         </p>
+                        <p
+                          className="mt-2 font-mono text-[9px] leading-4 text-violet-300/85"
+                          title={`Historical 15L first-maximum times from ${HISTORICAL_PEAK_REFERENCE.firstDate} through ${HISTORICAL_PEAK_REFERENCE.lastDate}. This is a spring–summer reference, not a condition-matched forecast.`}
+                        >
+                          Spring–summer typical ·{" "}
+                          {minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute)}
+                          <span className="text-slate-600">
+                            {" "}
+                            · middle 50%{" "}
+                            {minuteLabel(
+                              HISTORICAL_PEAK_REFERENCE.windowStartMinute,
+                            )}
+                            –
+                            {minuteLabel(
+                              HISTORICAL_PEAK_REFERENCE.windowEndMinute,
+                            )}{" "}
+                            · n={HISTORICAL_PEAK_REFERENCE.sampleSize}
+                          </span>
+                        </p>
                       </div>
                     </div>
                     <p className="mt-3 font-mono text-[10px] text-slate-500">
@@ -1524,7 +1663,24 @@ export default function SeoulDayPage() {
               </h2>
             </div>
             <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
-              <p className="text-orange-300">
+              {latestPrediction && (
+                <p className="text-amber-300">
+                  Forecast peak ·{" "}
+                  {formatPeakWindow(
+                    latestPrediction.peakStartLocal,
+                    latestPrediction.peakEndLocal,
+                  )}{" "}
+                  KST
+                </p>
+              )}
+              <p
+                className="mt-1 text-violet-300"
+                title={`Median first occurrence of the daily 15L maximum across ${HISTORICAL_PEAK_REFERENCE.sampleSize} complete days (${HISTORICAL_PEAK_REFERENCE.firstDate}–${HISTORICAL_PEAK_REFERENCE.lastDate}).`}
+              >
+                Spring–summer typical ·{" "}
+                {minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute)} KST
+              </p>
+              <p className="mt-1 text-orange-300">
                 Sunset · {minuteLabel(sunsetMinute)} KST
               </p>
               <p className="mt-1 text-slate-500">

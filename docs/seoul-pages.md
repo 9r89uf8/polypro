@@ -52,12 +52,27 @@ The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minu
 is marked when the selected date is today. A date-specific orange sunset line
 and `SUNSET · h:mm` label use RKSI's coordinates (`37.4602`, `126.4407`) and the
 standard official-sunset zenith, so historical and future dates do not depend
-on a forecast-provider response. The chart header repeats the sunset time in
-KST even when that part of the 2,400-pixel timeline is outside the current
+on a forecast-provider response.
+
+Peak timing has two deliberately separate visual references:
+
+- the current prediction's amber peak-window band comes from the latest hourly
+  ensemble curve and therefore remains the condition-aware timing estimate;
+- a violet historical reference shows the median first occurrence of the daily
+  15L maximum at `13:44 KST`, with a low-opacity middle-50% band from
+  `12:20–14:39 KST`.
+
+The historical reference is a fixed, versioned snapshot of 130 complete 15L
+days from `2026-03-20` through `2026-07-27`. Its circular clock-time average was
+`13:39 KST`. It is labeled as a spring–summer empirical reference rather than a
+condition-matched forecast because the archive does not yet cover every season
+and does not contain comparable historical forecast inputs for cloud, wind,
+and precipitation. The chart header repeats the historical median and sunset
+time even when those parts of the 2,400-pixel timeline are outside the current
 horizontal scroll position. The x-axis has a label every hour so the full-day
-series remain legible. Y-axis labels retain one decimal place, matching the AMOS
-sensor resolution instead of rounding several fractional ticks to the same
-whole degree.
+series remain legible. Y-axis labels retain one decimal place, matching the
+AMOS sensor resolution instead of rounding several fractional ticks to the
+same whole degree.
 
 The rest of the interface is deliberately compact:
 
