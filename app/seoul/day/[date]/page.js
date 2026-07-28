@@ -379,6 +379,149 @@ const hourlyCloudCoverPlugin = {
   },
 };
 
+function weathercomRevisionBadgeBounds(position, width, height, chartArea) {
+  const gap = 9;
+  const preferredTop = position.y - height - gap;
+  const top =
+    preferredTop >= chartArea.top
+      ? preferredTop
+      : Math.min(chartArea.bottom - height, position.y + gap);
+  const left = Math.min(
+    chartArea.right - width,
+    Math.max(chartArea.left, position.x - width / 2),
+  );
+  return {
+    left,
+    right: left + width,
+    top,
+    bottom: top + height,
+  };
+}
+
+function chartBoundsOverlap(left, right, padding = 3) {
+  return !(
+    left.right + padding < right.left ||
+    left.left - padding > right.right ||
+    left.bottom + padding < right.top ||
+    left.top - padding > right.bottom
+  );
+}
+
+const weathercomRevisionBadgePlugin = {
+  id: "seoulWeathercomRevisionBadges",
+  afterDatasetsDraw(chart, _args, options) {
+    if (!options?.display) {
+      return;
+    }
+
+    const datasetIndex = chart.data.datasets.findIndex(
+      (dataset) => dataset.weathercomRole === "latest",
+    );
+    if (datasetIndex < 0) {
+      return;
+    }
+
+    const dataset = chart.data.datasets[datasetIndex];
+    const meta = chart.getDatasetMeta(datasetIndex);
+    if (meta.hidden) {
+      return;
+    }
+
+    const thresholdC = Number.isFinite(options.thresholdC)
+      ? options.thresholdC
+      : 0.5;
+    const fallbackThreshold =
+      options.unit === "F" ? thresholdC * 1.8 : thresholdC;
+    let candidates = dataset.data
+      .map((point, index) => {
+        const delta = point?.revisionDelta;
+        const deltaC = point?.revisionDeltaC;
+        const material = Number.isFinite(deltaC)
+          ? Math.abs(deltaC) >= thresholdC
+          : Number.isFinite(delta) && Math.abs(delta) >= fallbackThreshold;
+        const element = meta.data[index];
+        if (!material || !element || element.skip || !Number.isFinite(delta)) {
+          return null;
+        }
+        const position = element.tooltipPosition();
+        if (
+          position.x < chart.chartArea.left ||
+          position.x > chart.chartArea.right ||
+          position.y < chart.chartArea.top ||
+          position.y > chart.chartArea.bottom
+        ) {
+          return null;
+        }
+        return { delta, position };
+      })
+      .filter(Boolean);
+
+    const maximumLabels = Number.isFinite(options.maximumLabels)
+      ? Math.max(1, Math.floor(options.maximumLabels))
+      : 16;
+    if (candidates.length > maximumLabels) {
+      const lastIndex = candidates.length - 1;
+      candidates = Array.from({ length: maximumLabels }, (_value, index) => {
+        const sourceIndex = Math.round(
+          (index * lastIndex) / Math.max(1, maximumLabels - 1),
+        );
+        return candidates[sourceIndex];
+      });
+    }
+
+    const { ctx, chartArea } = chart;
+    const occupiedBounds = [];
+    ctx.save();
+    ctx.font = "600 9px IBM Plex Mono, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    for (const candidate of candidates) {
+      const arrow = candidate.delta > 0 ? "↑" : "↓";
+      const signedDelta = `${candidate.delta > 0 ? "+" : ""}${candidate.delta.toFixed(
+        1,
+      )}°${options.unit}`;
+      const label = `${arrow} ${signedDelta}`;
+      const width = Math.ceil(ctx.measureText(label).width) + 12;
+      const height = 18;
+      const bounds = weathercomRevisionBadgeBounds(
+        candidate.position,
+        width,
+        height,
+        chartArea,
+      );
+      if (
+        occupiedBounds.some((existing) => chartBoundsOverlap(existing, bounds))
+      ) {
+        continue;
+      }
+      occupiedBounds.push(bounds);
+
+      ctx.fillStyle =
+        candidate.delta > 0
+          ? "rgba(180, 83, 9, 0.96)"
+          : "rgba(30, 64, 175, 0.96)";
+      ctx.strokeStyle =
+        candidate.delta > 0
+          ? "rgba(253, 186, 116, 0.82)"
+          : "rgba(147, 197, 253, 0.82)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(bounds.left, bounds.top, width, height, 3);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillText(
+        label,
+        bounds.left + width / 2,
+        bounds.top + height / 2 + 0.5,
+      );
+    }
+    ctx.restore();
+  },
+};
+
 ChartJS.register(
   LinearScale,
   PointElement,
@@ -390,6 +533,7 @@ ChartJS.register(
   peakTimingPlugin,
   providerPeakPlugin,
   hourlyCloudCoverPlugin,
+  weathercomRevisionBadgePlugin,
 );
 
 const STATION_ICAO = "RKSI";
@@ -1161,6 +1305,193 @@ function formatLocalTime(value, includeSeconds = false) {
   return Number.isFinite(minute) ? minuteLabel(minute) : value || "—";
 }
 
+function formatPredictionTemperature(value, unit) {
+  return Number.isFinite(value) ? `${value.toFixed(1)}°${unit}` : "—";
+}
+
+function formatTemperatureDelta(value, unit) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}°${unit}`;
+}
+
+function temperatureForUnit(source, cField, fField, unit) {
+  const value = source?.[unit === "C" ? cField : fField];
+  return Number.isFinite(value) ? value : null;
+}
+
+function firstFinite(...values) {
+  return values.find(Number.isFinite) ?? null;
+}
+
+function weathercomCaptureValue(diagnostics, captureName, local = false) {
+  const flatField = `${captureName}CapturedAt${local ? "Local" : ""}`;
+  const nestedCapture = diagnostics?.[`${captureName}Capture`];
+  const nestedField = `capturedAt${local ? "Local" : ""}`;
+  return (
+    diagnostics?.[flatField] ??
+    nestedCapture?.[nestedField] ??
+    nestedCapture?.capturedAtUtc ??
+    nestedCapture?.capturedAt ??
+    null
+  );
+}
+
+function formatWeathercomTime(value) {
+  const formatted = formatLocalTime(value);
+  return formatted === "—" ? null : `${formatted} KST`;
+}
+
+function weathercomBaselineDescriptor(source) {
+  const capturedAt =
+    weathercomCaptureValue(source, "baseline", true) ??
+    weathercomCaptureValue(source, "baseline", false);
+  const time = formatLocalTime(capturedAt);
+  const hasTime = time !== "—";
+  const isFallback = source?.baselineSelection === "latest_before_05:00";
+  return {
+    time: hasTime ? time : null,
+    isFallback,
+    label: isFallback
+      ? `${hasTime ? time : "Pre-5:00"} fallback`
+      : hasTime
+        ? `${time} baseline`
+        : "morning baseline",
+  };
+}
+
+function formatWeathercomCadence(value) {
+  const labels = {
+    one_minute: "one-minute capture",
+    five_minute: "five-minute capture",
+    audit_fallback: "audit fallback",
+  };
+  return labels[value] ?? String(value ?? "").replaceAll("_", " ");
+}
+
+function weathercomTooltipDetails(point, unit) {
+  if (point?.weathercomRole !== "latest") {
+    return [];
+  }
+
+  const lines = [];
+  const baseline = temperatureForUnit(
+    point,
+    "baselineTempC",
+    "baselineTempF",
+    unit,
+  );
+  const previousDistinct = temperatureForUnit(
+    point,
+    "previousDistinctTempC",
+    "previousDistinctTempF",
+    unit,
+  );
+  const preHour = temperatureForUnit(
+    point,
+    "preHourTempC",
+    "preHourTempF",
+    unit,
+  );
+  const actual = temperatureForUnit(point, "actualTempC", "actualTempF", unit);
+  const revisionDelta = temperatureForUnit(
+    point,
+    "revisionDeltaC",
+    "revisionDeltaF",
+    unit,
+  );
+  const departureBaseline = temperatureForUnit(
+    point,
+    "departureBaselineC",
+    "departureBaselineF",
+    unit,
+  );
+  const departurePreHour = temperatureForUnit(
+    point,
+    "departurePreHourC",
+    "departurePreHourF",
+    unit,
+  );
+  const latestCapture = formatWeathercomTime(
+    point.latestCapturedAtLocal ?? point.latestCapturedAt,
+  );
+  const baselineCapture = formatWeathercomTime(
+    point.baselineCapturedAtLocal ?? point.baselineCapturedAt,
+  );
+  const preHourCapture = formatWeathercomTime(
+    point.preHourCapturedAtLocal ?? point.preHourCapturedAt,
+  );
+  const actualAt = formatWeathercomTime(
+    point.actualAtLocal ?? point.actualAtUtc,
+  );
+  const revisionDetectedAt = formatWeathercomTime(
+    point.revisionDetectedAtLocal ?? point.revisionDetectedAt,
+  );
+  const baselineDescriptor = weathercomBaselineDescriptor(point);
+
+  if (latestCapture) {
+    lines.push(`Latest stored capture: ${latestCapture}`);
+  }
+  if (Number.isFinite(baseline)) {
+    lines.push(
+      `${baselineDescriptor.label}: ${formatPredictionTemperature(
+        baseline,
+        unit,
+      )}${baselineCapture ? ` · captured ${baselineCapture}` : ""}`,
+    );
+  }
+  if (Number.isFinite(previousDistinct)) {
+    lines.push(
+      `Previous distinct: ${formatPredictionTemperature(
+        previousDistinct,
+        unit,
+      )}`,
+    );
+  }
+  if (Number.isFinite(revisionDelta)) {
+    lines.push(
+      `Revision: ${formatTemperatureDelta(revisionDelta, unit)}${
+        revisionDetectedAt ? ` · first detected ${revisionDetectedAt}` : ""
+      }`,
+    );
+  }
+  if (Number.isFinite(preHour)) {
+    lines.push(
+      `Latest before hour: ${formatPredictionTemperature(preHour, unit)}${
+        preHourCapture ? ` · captured ${preHourCapture}` : ""
+      }`,
+    );
+  }
+  if (Number.isFinite(actual)) {
+    const cadence = point.actualCollectionCadence
+      ? formatWeathercomCadence(point.actualCollectionCadence)
+      : null;
+    lines.push(
+      `Actual AMOS: ${formatPredictionTemperature(actual, unit)}${
+        actualAt ? ` · ${actualAt}` : ""
+      }${cadence ? ` · ${cadence}` : ""}`,
+    );
+  }
+  if (Number.isFinite(departureBaseline)) {
+    lines.push(
+      `Departure vs ${baselineDescriptor.label}: ${formatTemperatureDelta(
+        departureBaseline,
+        unit,
+      )}`,
+    );
+  }
+  if (Number.isFinite(departurePreHour)) {
+    lines.push(
+      `Departure vs pre-hour: ${formatTemperatureDelta(
+        departurePreHour,
+        unit,
+      )}`,
+    );
+  }
+  return lines;
+}
+
 function providerPeakLabel(signal) {
   const knownLabels = {
     weathercom: "Weather.com · Seoul",
@@ -1393,7 +1724,77 @@ function toChartPoints(rows, unit, extra = () => ({})) {
     .filter(Boolean);
 }
 
-function buildChartData(metarRows, amosDisplayRows, providerPeak, unit) {
+function toWeathercomHourlyPoints(diagnostics, unit, role) {
+  const rows = Array.isArray(diagnostics?.points) ? diagnostics.points : [];
+  const latestCapturedAt = weathercomCaptureValue(diagnostics, "latest", false);
+  const latestCapturedAtLocal = weathercomCaptureValue(
+    diagnostics,
+    "latest",
+    true,
+  );
+  const baselineCapturedAt = weathercomCaptureValue(
+    diagnostics,
+    "baseline",
+    false,
+  );
+  const baselineCapturedAtLocal = weathercomCaptureValue(
+    diagnostics,
+    "baseline",
+    true,
+  );
+  const cField = role === "baseline" ? "baselineTempC" : "latestTempC";
+  const fField = role === "baseline" ? "baselineTempF" : "latestTempF";
+
+  return rows
+    .map((row) => {
+      const x = firstFinite(
+        parseMinute(row.forecastTimeLocal),
+        Number.isFinite(row.forecastTimeUtc)
+          ? seoulMinuteForEpoch(row.forecastTimeUtc)
+          : null,
+      );
+      const y = temperatureForUnit(row, cField, fField, unit);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      return {
+        ...row,
+        x,
+        y,
+        weathercomRole: role,
+        latestCapturedAt: row.latestCapturedAt ?? latestCapturedAt,
+        latestCapturedAtLocal:
+          row.latestCapturedAtLocal ?? latestCapturedAtLocal,
+        baselineCapturedAt: row.baselineCapturedAt ?? baselineCapturedAt,
+        baselineCapturedAtLocal:
+          row.baselineCapturedAtLocal ?? baselineCapturedAtLocal,
+        baselineSelection:
+          row.baselineSelection ?? diagnostics?.baselineSelection,
+        cloudCoverPct:
+          role === "latest" && Number.isFinite(row.cloudCoverPct)
+            ? row.cloudCoverPct
+            : null,
+        revisionDelta: temperatureForUnit(
+          row,
+          "revisionDeltaC",
+          "revisionDeltaF",
+          unit,
+        ),
+        revisionDeltaC: Number.isFinite(row.revisionDeltaC)
+          ? row.revisionDeltaC
+          : null,
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildChartData(
+  metarRows,
+  amosDisplayRows,
+  providerPeak,
+  weathercomHourlyDiagnostics,
+  unit,
+) {
   const amosPoints = toChartPoints(amosDisplayRows, unit, (row) => ({
     displayCadence: row.displayCadence,
   }));
@@ -1402,6 +1803,16 @@ function buildChartData(metarRows, amosDisplayRows, providerPeak, unit) {
     rawMetar: row.rawMetar,
     skySummary: metarSkySummary(parseMetarSkyCondition(row.rawMetar)),
   }));
+  const weathercomLatestPoints = toWeathercomHourlyPoints(
+    weathercomHourlyDiagnostics,
+    unit,
+    "latest",
+  );
+  const weathercomBaselinePoints = toWeathercomHourlyPoints(
+    weathercomHourlyDiagnostics,
+    unit,
+    "baseline",
+  );
   const datasets = [
     {
       label: "AMOS · 1 minute",
@@ -1431,6 +1842,48 @@ function buildChartData(metarRows, amosDisplayRows, providerPeak, unit) {
       order: 1,
     },
   ];
+
+  if (weathercomBaselinePoints.length) {
+    const baselineDescriptor = weathercomBaselineDescriptor(
+      weathercomHourlyDiagnostics,
+    );
+    datasets.unshift({
+      label: `Weather.com · ${baselineDescriptor.label}`,
+      data: weathercomBaselinePoints,
+      weathercomRole: "baseline",
+      borderColor: "rgba(147, 197, 253, 0.34)",
+      backgroundColor: "rgba(147, 197, 253, 0.34)",
+      borderWidth: 1.5,
+      borderDash: [2, 7],
+      pointRadius: 0,
+      pointHitRadius: 9,
+      pointHoverRadius: 4,
+      pointBackgroundColor: "#93c5fd",
+      tension: 0.28,
+      spanGaps: false,
+      order: 5,
+    });
+  }
+
+  if (weathercomLatestPoints.length) {
+    datasets.unshift({
+      label: "Weather.com · latest stored",
+      data: weathercomLatestPoints,
+      weathercomRole: "latest",
+      borderColor: "#60a5fa",
+      backgroundColor: "#60a5fa",
+      borderWidth: 2.25,
+      borderDash: [7, 5],
+      pointRadius: 2.25,
+      pointHitRadius: 11,
+      pointHoverRadius: 5,
+      pointBorderColor: "#bfdbfe",
+      pointBorderWidth: 1,
+      tension: 0.28,
+      spanGaps: false,
+      order: 4,
+    });
+  }
 
   if (providerPeak) {
     datasets.unshift({
@@ -1481,6 +1934,429 @@ function SourceCard({ accent, label, value, unit, detail, count }) {
         {detail} · {count} pts
       </p>
     </div>
+  );
+}
+
+function weathercomRunningValue(running, unit) {
+  const bias = temperatureForUnit(running, "biasC", "biasF", unit);
+  if (!Number.isFinite(bias)) {
+    return "awaiting matches";
+  }
+  const status = String(running?.status ?? "").toLowerCase();
+  const state = status.includes("insufficient")
+    ? "tentative"
+    : status.includes("warm")
+      ? "warm"
+      : status.includes("cool")
+        ? "cool"
+        : status.includes("track")
+          ? "on track"
+          : "tentative";
+  return `${formatTemperatureDelta(bias, unit)} · ${state}`;
+}
+
+function weathercomRunningDetail(running) {
+  const sampleCount = Number.isFinite(running?.sampleCount)
+    ? running.sampleCount
+    : 0;
+  const matchedCount = Number.isFinite(running?.matchedCount)
+    ? Math.max(sampleCount, running.matchedCount)
+    : sampleCount;
+  const from = formatLocalTime(running?.fromAtLocal);
+  const to = formatLocalTime(running?.toAtLocal);
+  const window =
+    from !== "—" && to !== "—"
+      ? `${from}–${to} KST`
+      : from !== "—" || to !== "—"
+        ? `${from !== "—" ? from : to} KST`
+        : null;
+  const matches =
+    matchedCount > sampleCount && sampleCount > 0
+      ? `latest ${sampleCount} of ${matchedCount} matched hours`
+      : `${sampleCount} matched hour${sampleCount === 1 ? "" : "s"}`;
+  return window ? `${matches} · ${window}` : matches;
+}
+
+function weathercomDepartureStatusLabel(status) {
+  const labels = {
+    on_track: "On track",
+    running_warm: "Running warm",
+    running_cool: "Running cool",
+  };
+  return (
+    labels[status] ??
+    (status
+      ? String(status).replaceAll("_", " ")
+      : "Awaiting current comparison")
+  );
+}
+
+function WeathercomHourlySummary({ diagnostics, unit, loading }) {
+  if (loading) {
+    return (
+      <div className="mb-3 grid animate-pulse gap-px border border-blue-300/15 bg-white/10 md:grid-cols-3">
+        {[0, 1, 2].map((index) => (
+          <div key={index} className="h-[74px] bg-[#081321] px-4 py-3" />
+        ))}
+      </div>
+    );
+  }
+
+  const points = Array.isArray(diagnostics?.points) ? diagnostics.points : [];
+  const baselineDescriptor = weathercomBaselineDescriptor(diagnostics);
+  const runningBaseline = diagnostics?.runningBaseline ?? null;
+  const runningPreHour = diagnostics?.runningPreHour ?? null;
+  const live =
+    diagnostics?.live ?? diagnostics?.liveLatestCurveDeviation ?? null;
+  const peak = diagnostics?.peak ?? null;
+  const peakLatest = temperatureForUnit(
+    peak,
+    "latestTempC",
+    "latestTempF",
+    unit,
+  );
+  const peakDelta = temperatureForUnit(peak, "deltaC", "deltaF", unit);
+  const peakCapture = formatWeathercomTime(
+    peak?.latestCapturedAtLocal ?? peak?.latestCapturedAt,
+  );
+  const latestAttempt = formatWeathercomTime(
+    diagnostics?.latestAttemptedAtLocal ?? diagnostics?.latestAttemptedAt,
+  );
+  const latestAttemptFailed = diagnostics?.latestAttemptStatus === "error";
+  const isStale = Boolean(diagnostics?.isStale);
+  const hasSummary =
+    points.length > 0 ||
+    Boolean(peak || live) ||
+    (runningBaseline?.sampleCount ?? 0) > 0 ||
+    (runningPreHour?.sampleCount ?? 0) > 0;
+
+  if (!diagnostics || !hasSummary) {
+    const status = String(diagnostics?.status ?? "")
+      .replaceAll("_", " ")
+      .trim();
+    return (
+      <div className="mb-3 border border-blue-300/15 bg-blue-300/[0.035] px-4 py-3">
+        <p className="font-mono text-[10px] uppercase tracking-[0.17em] text-blue-300">
+          Weather.com hourly history
+        </p>
+        <p className="mt-1 text-xs text-slate-400">
+          {diagnostics?.error
+            ? diagnostics.error
+            : status
+              ? `Hourly comparison ${status}.`
+              : "Awaiting stored hourly forecasts and matched AMOS observations."}
+        </p>
+      </div>
+    );
+  }
+
+  const peakDetails = [
+    Number.isFinite(peakDelta)
+      ? `${formatTemperatureDelta(
+          peakDelta,
+          unit,
+        )} vs ${baselineDescriptor.label}`
+      : null,
+    peakCapture ? `peak point captured ${peakCapture}` : null,
+  ].filter(Boolean);
+  const liveActual = temperatureForUnit(
+    live,
+    "actualTempC",
+    "actualTempF",
+    unit,
+  );
+  const liveForecast = temperatureForUnit(
+    live,
+    "forecastTempC",
+    "forecastTempF",
+    unit,
+  );
+  const liveDeparture = temperatureForUnit(
+    live,
+    "departureC",
+    "departureF",
+    unit,
+  );
+  const liveActualAt = formatWeathercomTime(
+    live?.actualAtLocal ?? live?.actualAtUtc,
+  );
+  const liveForecastCapturedAt = formatWeathercomTime(
+    live?.forecastCapturedAtLocal ?? live?.forecastCapturedAt,
+  );
+
+  return (
+    <div
+      aria-label="Weather.com hourly forecast comparison"
+      className="mb-3 grid gap-px border border-blue-300/15 bg-white/10 md:grid-cols-3"
+    >
+      {(latestAttemptFailed || isStale) && (
+        <div className="border-b border-amber-300/15 bg-amber-300/[0.055] px-4 py-2.5 md:col-span-3">
+          <p className="font-mono text-[10px] leading-4 text-amber-100/80">
+            <span className="uppercase tracking-[0.15em] text-amber-300">
+              Weather.com hourly data is stale
+            </span>
+            {diagnostics?.latestAttemptError
+              ? ` · ${diagnostics.latestAttemptError}`
+              : Number.isFinite(diagnostics?.latestAttemptAgeMinutes)
+                ? ` · latest collector attempt is ${diagnostics.latestAttemptAgeMinutes.toFixed(
+                    0,
+                  )} minutes old`
+                : " · no recent successful curve"}
+            {latestAttempt ? ` · latest attempt ${latestAttempt}` : ""}
+            {" · showing the last successful stored values"}
+          </p>
+        </div>
+      )}
+      <div className="bg-[#081321] px-4 py-3">
+        <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-blue-300">
+          Actuals vs {baselineDescriptor.label}
+        </p>
+        <p className="mt-1 text-sm font-medium text-slate-100">
+          {weathercomRunningValue(runningBaseline, unit)}
+        </p>
+        <p className="mt-1 font-mono text-[10px] text-slate-400">
+          {weathercomRunningDetail(runningBaseline)}
+        </p>
+      </div>
+      <div className="bg-[#081321] px-4 py-3">
+        <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-blue-300">
+          Actuals vs latest pre-hour
+        </p>
+        <p className="mt-1 text-sm font-medium text-slate-100">
+          {weathercomRunningValue(runningPreHour, unit)}
+        </p>
+        <p className="mt-1 font-mono text-[10px] text-slate-400">
+          {weathercomRunningDetail(runningPreHour)}
+        </p>
+      </div>
+      <div className="bg-[#081321] px-4 py-3">
+        <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-blue-300">
+          Weather.com hourly curve peak
+        </p>
+        <p className="mt-1 text-sm font-medium text-slate-100">
+          {Number.isFinite(peakLatest)
+            ? formatPredictionTemperature(peakLatest, unit)
+            : "Awaiting curve"}
+        </p>
+        <p className="mt-1 font-mono text-[10px] text-slate-400">
+          {peakDetails.length
+            ? peakDetails.join(" · ")
+            : `${points.length} stored forecast hour${
+                points.length === 1 ? "" : "s"
+              }`}
+        </p>
+      </div>
+      {live && (
+        <div className="bg-[#081321] px-4 py-2.5 md:col-span-3">
+          <p className="font-mono text-[10px] leading-4 text-slate-400">
+            <span className="uppercase tracking-[0.15em] text-cyan-300">
+              Live vs latest pre-observation curve
+            </span>
+            {" · "}
+            <span className="text-slate-300">
+              {weathercomDepartureStatusLabel(live.status)}
+              {Number.isFinite(liveDeparture)
+                ? ` ${formatTemperatureDelta(liveDeparture, unit)}`
+                : ""}
+            </span>
+            {Number.isFinite(liveActual) && Number.isFinite(liveForecast)
+              ? ` · actual ${formatPredictionTemperature(
+                  liveActual,
+                  unit,
+                )} / forecast ${formatPredictionTemperature(
+                  liveForecast,
+                  unit,
+                )}`
+              : ""}
+            {liveActualAt ? ` · ${liveActualAt}` : ""}
+            {liveForecastCapturedAt
+              ? ` · curve captured ${liveForecastCapturedAt}`
+              : ""}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WeathercomHourlyDetails({ diagnostics, unit }) {
+  const points = Array.isArray(diagnostics?.points) ? diagnostics.points : [];
+  if (!points.length) {
+    return null;
+  }
+  const baselineDescriptor = weathercomBaselineDescriptor(diagnostics);
+
+  return (
+    <details className="mt-3 border border-blue-300/15 bg-blue-300/[0.025]">
+      <summary className="cursor-pointer px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-blue-200/75 transition hover:text-blue-100">
+        View Weather.com hourly revisions and departures
+      </summary>
+      <div
+        aria-label="Scrollable Weather.com hourly revision details"
+        className="overflow-x-auto border-t border-blue-300/10 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-300/50"
+        role="region"
+        tabIndex={0}
+      >
+        <table className="w-full min-w-[1540px] border-collapse text-left">
+          <caption className="sr-only">
+            Weather.com hourly latest stored forecasts, morning baseline,
+            revisions, pre-hour forecasts, matched AMOS readings, and departures
+          </caption>
+          <thead>
+            <tr className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
+              <th className="px-3 py-2 font-normal">Valid hour</th>
+              <th className="px-3 py-2 font-normal">
+                {baselineDescriptor.label}
+              </th>
+              <th className="px-3 py-2 font-normal">Latest stored</th>
+              <th className="px-3 py-2 font-normal">Previous distinct</th>
+              <th className="px-3 py-2 font-normal">Last revision</th>
+              <th className="px-3 py-2 font-normal">Latest pre-hour</th>
+              <th className="px-3 py-2 font-normal">Actual AMOS</th>
+              <th className="px-3 py-2 font-normal">Vs baseline</th>
+              <th className="px-3 py-2 font-normal">Vs pre-hour</th>
+            </tr>
+          </thead>
+          <tbody>
+            {points.map((point) => {
+              const baseline = temperatureForUnit(
+                point,
+                "baselineTempC",
+                "baselineTempF",
+                unit,
+              );
+              const latest = temperatureForUnit(
+                point,
+                "latestTempC",
+                "latestTempF",
+                unit,
+              );
+              const previousDistinct = temperatureForUnit(
+                point,
+                "previousDistinctTempC",
+                "previousDistinctTempF",
+                unit,
+              );
+              const revision = temperatureForUnit(
+                point,
+                "revisionDeltaC",
+                "revisionDeltaF",
+                unit,
+              );
+              const preHour = temperatureForUnit(
+                point,
+                "preHourTempC",
+                "preHourTempF",
+                unit,
+              );
+              const actual = temperatureForUnit(
+                point,
+                "actualTempC",
+                "actualTempF",
+                unit,
+              );
+              const departureBaseline = temperatureForUnit(
+                point,
+                "departureBaselineC",
+                "departureBaselineF",
+                unit,
+              );
+              const departurePreHour = temperatureForUnit(
+                point,
+                "departurePreHourC",
+                "departurePreHourF",
+                unit,
+              );
+              const latestCapture = formatLocalTime(
+                point.latestCapturedAtLocal ?? point.latestCapturedAt,
+              );
+              const revisionDetected = formatLocalTime(
+                point.revisionDetectedAtLocal ?? point.revisionDetectedAt,
+              );
+              const preHourCapture = formatLocalTime(
+                point.preHourCapturedAtLocal ?? point.preHourCapturedAt,
+              );
+              const actualAt = formatLocalTime(
+                point.actualAtLocal ?? point.actualAtUtc,
+              );
+
+              return (
+                <tr
+                  key={`weathercom-hour-${point.forecastTimeUtc}`}
+                  className="border-t border-white/[0.06] align-top text-xs text-slate-300"
+                >
+                  <td className="whitespace-nowrap px-3 py-2 font-mono text-[10px] text-blue-200">
+                    {formatLocalTime(point.forecastTimeLocal)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {formatPredictionTemperature(baseline, unit)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <span className="text-slate-100">
+                      {formatPredictionTemperature(latest, unit)}
+                    </span>
+                    {latestCapture !== "—" && (
+                      <span className="ml-1 font-mono text-[10px] text-slate-400">
+                        at {latestCapture}
+                      </span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {formatPredictionTemperature(previousDistinct, unit)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {Number.isFinite(revision) ? (
+                      <>
+                        <span
+                          className={
+                            revision > 0
+                              ? "text-amber-300"
+                              : revision < 0
+                                ? "text-sky-300"
+                                : "text-slate-400"
+                          }
+                        >
+                          {formatTemperatureDelta(revision, unit)}
+                        </span>
+                        {revisionDetected !== "—" && (
+                          <span className="ml-1 font-mono text-[10px] text-slate-400">
+                            first detected {revisionDetected}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {formatPredictionTemperature(preHour, unit)}
+                    {preHourCapture !== "—" && (
+                      <span className="ml-1 font-mono text-[10px] text-slate-400">
+                        at {preHourCapture}
+                      </span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {formatPredictionTemperature(actual, unit)}
+                    {actualAt !== "—" && (
+                      <span className="ml-1 font-mono text-[10px] text-slate-400">
+                        at {actualAt}
+                      </span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {formatTemperatureDelta(departureBaseline, unit)}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    {formatTemperatureDelta(departurePreHour, unit)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }
 
@@ -1544,6 +2420,13 @@ export default function SeoulDayPage() {
   const latestPrediction = normalizePrediction(
     predictionDashboard?.latestPrediction,
   );
+  const weathercomHourlyDiagnostics =
+    predictionDashboard?.weathercomHourlyDiagnostics ?? null;
+  const weathercomHourlyPointCount = Array.isArray(
+    weathercomHourlyDiagnostics?.points,
+  )
+    ? weathercomHourlyDiagnostics.points.length
+    : 0;
   const providerFreshnessNow = Number.isFinite(clockNowMs)
     ? Math.floor(clockNowMs / (60 * 1000)) * 60 * 1000
     : null;
@@ -1639,7 +2522,8 @@ export default function SeoulDayPage() {
   const hasTemperatureChartData =
     metarRows.length +
       amosDisplayRows.length +
-      (preferredProviderPeak ? 1 : 0) >
+      (preferredProviderPeak ? 1 : 0) +
+      weathercomHourlyPointCount >
     0;
   const hasCloudGuidance = hourlyCloudCover.some((hour) =>
     Number.isFinite(hour.coverPct),
@@ -1647,8 +2531,20 @@ export default function SeoulDayPage() {
 
   const chartData = useMemo(
     () =>
-      buildChartData(metarRows, amosDisplayRows, preferredProviderPeak, unit),
-    [amosDisplayRows, metarRows, preferredProviderPeak, unit],
+      buildChartData(
+        metarRows,
+        amosDisplayRows,
+        preferredProviderPeak,
+        weathercomHourlyDiagnostics,
+        unit,
+      ),
+    [
+      amosDisplayRows,
+      metarRows,
+      preferredProviderPeak,
+      unit,
+      weathercomHourlyDiagnostics,
+    ],
   );
 
   const chartOptions = useMemo(
@@ -1715,6 +2611,9 @@ export default function SeoulDayPage() {
                 1,
               )}°${unit}${reportType}${auditFallback}${skyCondition}${forecastCloudCover}`;
             },
+            afterLabel(item) {
+              return weathercomTooltipDetails(item.raw, unit);
+            },
           },
         },
         seoulNowLine: {
@@ -1751,6 +2650,12 @@ export default function SeoulDayPage() {
         seoulHourlyCloudCover: {
           display: hourlyCloudSegments.length > 0,
           hours: hourlyCloudSegments,
+        },
+        seoulWeathercomRevisionBadges: {
+          display: weathercomHourlyPointCount > 0,
+          thresholdC: 0.5,
+          maximumLabels: 16,
+          unit,
         },
       },
       scales: {
@@ -1816,6 +2721,7 @@ export default function SeoulDayPage() {
       preferredProviderPeak,
       sunsetMinute,
       unit,
+      weathercomHourlyPointCount,
     ],
   );
 
@@ -2210,6 +3116,12 @@ export default function SeoulDayPage() {
             </div>
           </div>
 
+          <WeathercomHourlySummary
+            diagnostics={weathercomHourlyDiagnostics}
+            unit={unit}
+            loading={predictionDashboard === undefined}
+          />
+
           <div id="seoul-hourly-cloud-description" className="sr-only">
             <p>
               The hourly sky-cover strip uses meter height to show how much of
@@ -2234,10 +3146,19 @@ export default function SeoulDayPage() {
             )}
           </div>
 
+          <div id="seoul-weathercom-hourly-description" className="sr-only">
+            Weather.com hourly forecast history is drawn as a blue latest-stored
+            curve and a faint dotted morning-baseline curve. Revision badges
+            mark material changes from the previous distinct stored value. Their
+            timestamps show when this system first detected a change, not when
+            Weather.com published it. The expandable table after the chart lists
+            each stored forecast value and matched AMOS departure.
+          </div>
+
           <div
             ref={chartScrollRef}
             aria-label="Scrollable 24-hour temperature and hourly sky-cover chart"
-            aria-describedby="seoul-hourly-cloud-description"
+            aria-describedby="seoul-hourly-cloud-description seoul-weathercom-hourly-description"
             className="relative min-h-[560px] flex-1 overflow-x-auto overscroll-x-contain border border-white/10 bg-[#07111f]/85 shadow-[0_30px_100px_rgba(0,0,0,0.38)]"
             role="region"
             tabIndex={0}
@@ -2262,6 +3183,11 @@ export default function SeoulDayPage() {
               </div>
             )}
           </div>
+
+          <WeathercomHourlyDetails
+            diagnostics={weathercomHourlyDiagnostics}
+            unit={unit}
+          />
 
           <details className="mt-3 border border-white/10 bg-white/[0.02]">
             <summary className="cursor-pointer px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-slate-400 transition hover:text-slate-200">

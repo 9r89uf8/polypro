@@ -1046,6 +1046,9 @@ export default defineSchema({
     ),
     weathercomHourlyStatus: v.optional(seoulProviderStatus),
     weathercomHourlyError: v.optional(v.string()),
+    weathercomHourlyCapturedAt: v.optional(v.number()),
+    weathercomHourlyCapturedAtLocal: v.optional(v.string()),
+    weathercomHourlyCaptureDate: v.optional(v.string()),
     weathercomHourlyRows: v.optional(v.array(seoulHourlyForecastRow)),
     // Legacy fields remain optional so existing captures continue to validate.
     // New Seoul captures and all page selectors use Weather.com only.
@@ -1057,6 +1060,36 @@ export default defineSchema({
     openMeteoHourlyRows: v.optional(v.array(seoulHourlyForecastRow)),
     createdAt: v.number(),
   }).index("by_station_capturedAt", ["stationIcao", "capturedAt"]),
+
+  seoulHourlyForecastPredictions: defineTable({
+    stationIcao: v.string(),
+    provider: v.literal("weathercom"),
+    targetDate: v.string(),
+    forecastTimeUtc: v.number(),
+    forecastTimeLocal: v.string(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    captureDate: v.string(),
+    tempC: v.number(),
+    tempF: v.number(),
+    phrase: v.optional(v.string()),
+    cloudCoverPct: v.optional(v.number()),
+    forecastCaptureId: v.id("seoulForecastCaptures"),
+    createdAt: v.number(),
+  })
+    .index("by_station_provider_target_capturedAt", [
+      "stationIcao",
+      "provider",
+      "targetDate",
+      "capturedAt",
+    ])
+    .index("by_station_provider_valid_capturedAt", [
+      "stationIcao",
+      "provider",
+      "forecastTimeUtc",
+      "capturedAt",
+    ])
+    .index("by_forecast_capture_id", ["forecastCaptureId"]),
 
   seoulAmosDailySummaries: defineTable({
     stationIcao: v.string(),

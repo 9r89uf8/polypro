@@ -21,6 +21,8 @@ const MILLIS_PER_HOUR = 60 * MILLIS_PER_MINUTE;
 const PREDICTION_INTERVAL_MS = 5 * MILLIS_PER_MINUTE;
 const MAX_LIVE_OBSERVATION_AGE_MS = 10 * MILLIS_PER_MINUTE;
 const MAX_PROVIDER_CAPTURE_AGE_MS = 12 * MILLIS_PER_HOUR;
+const WEATHERCOM_BASELINE_WINDOW_MS = 2 * MILLIS_PER_HOUR;
+const WEATHERCOM_HISTORY_STALE_MS = 90 * MILLIS_PER_MINUTE;
 const PREDICTION_HEARTBEAT_MS = 30 * MILLIS_PER_MINUTE;
 const PREDICTION_MODEL_VERSION = "rksi15l-weathercom-v4";
 const MAX_DASHBOARD_REVISIONS = 288;
@@ -219,6 +221,13 @@ function weightedMean(entries) {
 }
 
 function normalizeWeatherComTempPair(value, requestedUnit) {
+  if (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim() === "")
+  ) {
+    return {};
+  }
   const parsed = toFiniteNumber(value);
   if (parsed === null) {
     return {};
@@ -371,6 +380,14 @@ function normalizeWeatherComHourlyRows(payload, requestedUnit, timeZone) {
   );
 
   for (let index = 0; index < rowCount; index += 1) {
+    if (
+      payload?.validTimeUtc?.[index] === null ||
+      payload?.validTimeUtc?.[index] === undefined ||
+      (typeof payload?.validTimeUtc?.[index] === "string" &&
+        payload.validTimeUtc[index].trim() === "")
+    ) {
+      continue;
+    }
     const validTimeUtc = toFiniteNumber(payload?.validTimeUtc?.[index]);
     const forecastTimeUtc =
       validTimeUtc === null ? null : Math.round(validTimeUtc * 1000);
@@ -537,13 +554,43 @@ export const storeForecastCapture = internalMutationGeneric({
       v.literal(WEATHER_STATUS.ERROR),
     ),
     weathercomHourlyError: v.optional(v.string()),
+    weathercomHourlyCapturedAt: v.optional(v.number()),
+    weathercomHourlyCapturedAtLocal: v.optional(v.string()),
+    weathercomHourlyCaptureDate: v.optional(v.string()),
     weathercomHourlyRows: v.array(hourlyForecastRowValidator),
   },
   handler: async (ctx, args) => {
+    const createdAt = Date.now();
+    const weathercomHourlyCapturedAt =
+      args.weathercomHourlyCapturedAt ?? args.capturedAt;
+    const weathercomHourlyCapturedAtLocal =
+      args.weathercomHourlyCapturedAtLocal ?? args.capturedAtLocal;
+    const weathercomHourlyCaptureDate =
+      args.weathercomHourlyCaptureDate ?? args.captureDate;
     const captureId = await ctx.db.insert("seoulForecastCaptures", {
       ...args,
-      createdAt: Date.now(),
+      createdAt,
     });
+    for (const row of args.weathercomHourlyRows) {
+      await ctx.db.insert("seoulHourlyForecastPredictions", {
+        stationIcao: args.stationIcao,
+        provider: "weathercom",
+        targetDate: row.date,
+        forecastTimeUtc: row.forecastTimeUtc,
+        forecastTimeLocal: row.forecastTimeLocal,
+        capturedAt: weathercomHourlyCapturedAt,
+        capturedAtLocal: weathercomHourlyCapturedAtLocal,
+        captureDate: weathercomHourlyCaptureDate,
+        tempC: row.tempC,
+        tempF: row.tempF,
+        ...(row.phrase ? { phrase: row.phrase } : {}),
+        ...(Number.isFinite(row.cloudCoverPct)
+          ? { cloudCoverPct: row.cloudCoverPct }
+          : {}),
+        forecastCaptureId: captureId,
+        createdAt,
+      });
+    }
     return await ctx.db.get(captureId);
   },
 });
@@ -598,12 +645,35 @@ export const collectForecastSnapshot = internalActionGeneric({
             apiKey,
             timeZone: SEOUL_TIMEZONE,
           });
-          return { status: WEATHER_STATUS.OK, rows };
+          const providerCapturedAt = Date.now();
+          return {
+            status: WEATHER_STATUS.OK,
+            rows,
+            capturedAt: providerCapturedAt,
+            capturedAtLocal: formatDateTimeInTimezone(
+              providerCapturedAt,
+              SEOUL_TIMEZONE,
+            ),
+            captureDate: formatDateInTimezone(
+              providerCapturedAt,
+              SEOUL_TIMEZONE,
+            ),
+          };
         } catch (error) {
+          const providerCapturedAt = Date.now();
           return {
             status: WEATHER_STATUS.ERROR,
             error: formatErrorMessage(error),
             rows: [],
+            capturedAt: providerCapturedAt,
+            capturedAtLocal: formatDateTimeInTimezone(
+              providerCapturedAt,
+              SEOUL_TIMEZONE,
+            ),
+            captureDate: formatDateInTimezone(
+              providerCapturedAt,
+              SEOUL_TIMEZONE,
+            ),
           };
         }
       })(),
@@ -643,6 +713,9 @@ export const collectForecastSnapshot = internalActionGeneric({
       ...(weathercomHourly.error
         ? { weathercomHourlyError: weathercomHourly.error }
         : {}),
+      weathercomHourlyCapturedAt: weathercomHourly.capturedAt,
+      weathercomHourlyCapturedAtLocal: weathercomHourly.capturedAtLocal,
+      weathercomHourlyCaptureDate: weathercomHourly.captureDate,
       weathercomHourlyRows,
     });
 
@@ -671,7 +744,8 @@ function canonicalizeRepresentativeAmosRows(rows) {
   for (const row of rows) {
     if (
       row.rwyNo !== RKSI_REPRESENTATIVE_RUNWAY_NO ||
-      row.rwyDir !== RKSI_REPRESENTATIVE_RUNWAY_DIRECTION
+      row.rwyDir !== RKSI_REPRESENTATIVE_RUNWAY_DIRECTION ||
+      !Number.isFinite(row.tempC)
     ) {
       continue;
     }
@@ -768,6 +842,39 @@ function interpolateHourlyTemperature(rows, epochMs) {
     return nearest.tempC;
   }
   return null;
+}
+
+function interpolateBracketedHourlyTemperature(rows, epochMs) {
+  if (!rows.length || !Number.isFinite(epochMs)) {
+    return null;
+  }
+  const ordered = [...rows].sort(
+    (a, b) => a.forecastTimeUtc - b.forecastTimeUtc,
+  );
+  let before = null;
+  let after = null;
+  for (const row of ordered) {
+    if (row.forecastTimeUtc <= epochMs) {
+      before = row;
+    }
+    if (row.forecastTimeUtc >= epochMs) {
+      after = row;
+      break;
+    }
+  }
+  if (!before || !after) {
+    return null;
+  }
+  if (before.forecastTimeUtc === after.forecastTimeUtc) {
+    return before.tempC;
+  }
+  if (after.forecastTimeUtc - before.forecastTimeUtc > 90 * MILLIS_PER_MINUTE) {
+    return null;
+  }
+  const ratio =
+    (epochMs - before.forecastTimeUtc) /
+    (after.forecastTimeUtc - before.forecastTimeUtc);
+  return before.tempC + (after.tempC - before.tempC) * ratio;
 }
 
 function findHighestForecastRow(rows, generatedAt, targetIsToday) {
@@ -1775,6 +1882,503 @@ function toWeatherComOnlyPagePrediction(prediction) {
   };
 }
 
+function toFahrenheitDelta(celsiusDelta) {
+  return roundToTenth((celsiusDelta * 9) / 5);
+}
+
+function departureStatus(departureC) {
+  if (departureC >= 0.5) {
+    return "running_warm";
+  }
+  if (departureC <= -0.5) {
+    return "running_cool";
+  }
+  return "on_track";
+}
+
+function summarizeWeatherComDepartures(points, departureField) {
+  const allMatched = points.filter((point) =>
+    Number.isFinite(point[departureField]),
+  );
+  const matched = allMatched.slice(-3);
+  const bias =
+    matched.length > 0
+      ? roundToTenth(median(matched.map((point) => point[departureField])))
+      : null;
+  return {
+    status: matched.length >= 2 ? departureStatus(bias) : "insufficient_data",
+    sampleCount: matched.length,
+    matchedCount: allMatched.length,
+    ...(Number.isFinite(bias)
+      ? {
+          biasC: bias,
+          biasF: toFahrenheitDelta(bias),
+          fromAtLocal: matched[0].forecastTimeLocal,
+          toAtLocal: matched[matched.length - 1].forecastTimeLocal,
+        }
+      : {}),
+  };
+}
+
+function findNearestAmosObservation(observations, targetTimeUtc) {
+  let nearest = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const observation of observations) {
+    const distance = Math.abs(observation.obsTimeUtc - targetTimeUtc);
+    if (
+      distance < nearestDistance ||
+      (distance === nearestDistance &&
+        observation.obsTimeUtc < (nearest?.obsTimeUtc ?? Infinity))
+    ) {
+      nearest = observation;
+      nearestDistance = distance;
+    }
+    if (observation.obsTimeUtc > targetTimeUtc && distance > nearestDistance) {
+      break;
+    }
+  }
+  return nearestDistance <= 5 * MILLIS_PER_MINUTE ? nearest : null;
+}
+
+function sameForecastCapture(left, right) {
+  return (
+    left &&
+    right &&
+    String(left.forecastCaptureId) === String(right.forecastCaptureId)
+  );
+}
+
+function selectPeakDiagnosticPoint(points, tempField) {
+  let peak = null;
+  for (const point of points) {
+    if (!Number.isFinite(point[tempField])) {
+      continue;
+    }
+    if (
+      !peak ||
+      point[tempField] > peak[tempField] ||
+      (point[tempField] === peak[tempField] &&
+        point.forecastTimeUtc < peak.forecastTimeUtc)
+    ) {
+      peak = point;
+    }
+  }
+  return peak;
+}
+
+function weatherComHourlyHealth({
+  targetDate,
+  todayDate,
+  latestForecastCapture,
+  latestSuccessfulCapture,
+  now,
+}) {
+  if (targetDate < todayDate) {
+    return {};
+  }
+  const latestAttemptStatus =
+    latestForecastCapture?.weathercomHourlyStatus ?? "missing";
+  const latestAttemptedAt =
+    latestForecastCapture?.weathercomHourlyCapturedAt ??
+    latestForecastCapture?.capturedAt;
+  const latestAttemptedAtLocal =
+    latestForecastCapture?.weathercomHourlyCapturedAtLocal ??
+    latestForecastCapture?.capturedAtLocal;
+  const latestAttemptAgeMinutes = Number.isFinite(latestAttemptedAt)
+    ? roundToTenth(Math.max(0, now - latestAttemptedAt) / MILLIS_PER_MINUTE)
+    : null;
+  const latestSuccessAgeMinutes = latestSuccessfulCapture
+    ? roundToTenth(
+        Math.max(0, now - latestSuccessfulCapture.capturedAt) /
+          MILLIS_PER_MINUTE,
+      )
+    : null;
+  const isStale =
+    latestAttemptStatus === WEATHER_STATUS.ERROR ||
+    !Number.isFinite(latestAttemptedAt) ||
+    now - latestAttemptedAt > WEATHERCOM_HISTORY_STALE_MS;
+  return {
+    latestAttemptStatus,
+    ...(latestForecastCapture?.weathercomHourlyError
+      ? {
+          latestAttemptError: latestForecastCapture.weathercomHourlyError,
+        }
+      : {}),
+    ...(Number.isFinite(latestAttemptedAt)
+      ? {
+          latestAttemptedAt,
+          latestAttemptedAtLocal,
+        }
+      : {}),
+    ...(Number.isFinite(latestSuccessAgeMinutes)
+      ? { latestSuccessAgeMinutes }
+      : {}),
+    ...(Number.isFinite(latestAttemptAgeMinutes)
+      ? { latestAttemptAgeMinutes }
+      : {}),
+    isStale,
+  };
+}
+
+function buildWeatherComHourlyDiagnostics({
+  predictionRows,
+  adjacentPredictionRows,
+  rawObservations,
+  targetDate,
+  todayDate,
+  latestForecastCapture,
+  now,
+}) {
+  const emptyRunningBaseline = summarizeWeatherComDepartures(
+    [],
+    "departureBaselineC",
+  );
+  const emptyRunningPreHour = summarizeWeatherComDepartures(
+    [],
+    "departurePreHourC",
+  );
+  if (!predictionRows.length) {
+    const health = weatherComHourlyHealth({
+      targetDate,
+      todayDate,
+      latestForecastCapture,
+      latestSuccessfulCapture: null,
+      now,
+    });
+    return {
+      status: WEATHER_STATUS.ERROR,
+      error:
+        health.latestAttemptError ??
+        `No Weather.com hourly forecast history has been captured for ${targetDate}.`,
+      points: [],
+      runningBaseline: emptyRunningBaseline,
+      runningPreHour: emptyRunningPreHour,
+      peak: null,
+      ...health,
+    };
+  }
+
+  const observations = canonicalizeRepresentativeAmosRows(rawObservations);
+  const orderedRows = [...predictionRows].sort(
+    (left, right) =>
+      left.capturedAt - right.capturedAt ||
+      left.forecastTimeUtc - right.forecastTimeUtc ||
+      left.createdAt - right.createdAt,
+  );
+  const liveOrderedRows = [
+    ...orderedRows,
+    ...(adjacentPredictionRows ?? []),
+  ].sort(
+    (left, right) =>
+      left.capturedAt - right.capturedAt ||
+      left.forecastTimeUtc - right.forecastTimeUtc ||
+      left.createdAt - right.createdAt,
+  );
+  const captureById = new Map();
+  for (const row of orderedRows) {
+    const captureKey = String(row.forecastCaptureId);
+    if (!captureById.has(captureKey)) {
+      captureById.set(captureKey, {
+        forecastCaptureId: row.forecastCaptureId,
+        capturedAt: row.capturedAt,
+        capturedAtLocal: row.capturedAtLocal,
+      });
+    }
+  }
+  const captures = Array.from(captureById.values()).sort(
+    (left, right) => left.capturedAt - right.capturedAt,
+  );
+  const fiveAmLocal = Date.parse(`${targetDate}T05:00:00+09:00`);
+  const morningWindowStart = fiveAmLocal - WEATHERCOM_BASELINE_WINDOW_MS;
+  const morningWindowEnd = fiveAmLocal + WEATHERCOM_BASELINE_WINDOW_MS;
+  const baselineCapture =
+    captures.find(
+      (capture) =>
+        capture.capturedAt >= fiveAmLocal &&
+        capture.capturedAt <= morningWindowEnd,
+    ) ??
+    [...captures]
+      .reverse()
+      .find(
+        (capture) =>
+          capture.capturedAt < fiveAmLocal &&
+          capture.capturedAt >= morningWindowStart,
+      ) ??
+    null;
+  const latestCapture = captures[captures.length - 1] ?? null;
+  const health = weatherComHourlyHealth({
+    targetDate,
+    todayDate,
+    latestForecastCapture,
+    latestSuccessfulCapture: latestCapture,
+    now,
+  });
+
+  const rowsByForecastTime = new Map();
+  for (const row of orderedRows) {
+    let history = rowsByForecastTime.get(row.forecastTimeUtc);
+    if (!history) {
+      history = [];
+      rowsByForecastTime.set(row.forecastTimeUtc, history);
+    }
+    const duplicateIndex = history.findIndex(
+      (existing) =>
+        existing.capturedAt === row.capturedAt &&
+        sameForecastCapture(existing, row),
+    );
+    if (duplicateIndex >= 0) {
+      history[duplicateIndex] = row;
+    } else {
+      history.push(row);
+    }
+  }
+
+  const points = Array.from(rowsByForecastTime.values())
+    .map((history) => {
+      history.sort(
+        (left, right) =>
+          left.capturedAt - right.capturedAt ||
+          left.createdAt - right.createdAt,
+      );
+      const latest = history[history.length - 1];
+      let latestRunStartIndex = history.length - 1;
+      while (
+        latestRunStartIndex > 0 &&
+        history[latestRunStartIndex - 1].tempC === latest.tempC
+      ) {
+        latestRunStartIndex -= 1;
+      }
+      const latestRunStart = history[latestRunStartIndex];
+      const previousDistinct =
+        latestRunStartIndex > 0 ? history[latestRunStartIndex - 1] : null;
+      const baseline =
+        baselineCapture && baselineCapture.capturedAt < latest.forecastTimeUtc
+          ? (history.find((row) => sameForecastCapture(row, baselineCapture)) ??
+            null)
+          : null;
+      const preHour =
+        [...history]
+          .reverse()
+          .find((row) => row.capturedAt < latest.forecastTimeUtc) ?? null;
+      const actual =
+        latest.forecastTimeUtc <= now
+          ? findNearestAmosObservation(observations, latest.forecastTimeUtc)
+          : null;
+      const revisionDeltaC = previousDistinct
+        ? roundToTenth(latest.tempC - previousDistinct.tempC)
+        : null;
+      const departureBaselineC =
+        actual && baseline ? roundToTenth(actual.tempC - baseline.tempC) : null;
+      const departurePreHourC =
+        actual && preHour ? roundToTenth(actual.tempC - preHour.tempC) : null;
+
+      return {
+        forecastTimeUtc: latest.forecastTimeUtc,
+        forecastTimeLocal: latest.forecastTimeLocal,
+        latestTempC: latest.tempC,
+        latestTempF: latest.tempF,
+        latestCapturedAt: latest.capturedAt,
+        latestCapturedAtLocal: latest.capturedAtLocal,
+        latestForecastCaptureId: latest.forecastCaptureId,
+        ...(latest.phrase
+          ? { phrase: latest.phrase, latestPhrase: latest.phrase }
+          : {}),
+        ...(Number.isFinite(latest.cloudCoverPct)
+          ? {
+              cloudCoverPct: latest.cloudCoverPct,
+              latestCloudCoverPct: latest.cloudCoverPct,
+            }
+          : {}),
+        ...(baseline
+          ? {
+              baselineTempC: baseline.tempC,
+              baselineTempF: baseline.tempF,
+              baselineCapturedAt: baseline.capturedAt,
+              baselineCapturedAtLocal: baseline.capturedAtLocal,
+              baselineForecastCaptureId: baseline.forecastCaptureId,
+            }
+          : {}),
+        ...(previousDistinct
+          ? {
+              previousDistinctTempC: previousDistinct.tempC,
+              previousDistinctTempF: previousDistinct.tempF,
+              previousDistinctCapturedAt: previousDistinct.capturedAt,
+              previousDistinctCapturedAtLocal: previousDistinct.capturedAtLocal,
+              revisionDeltaC,
+              revisionDeltaF: toFahrenheitDelta(revisionDeltaC),
+              revisionDetectedAt: latestRunStart.capturedAt,
+              revisionDetectedAtLocal: latestRunStart.capturedAtLocal,
+            }
+          : {}),
+        ...(preHour
+          ? {
+              preHourTempC: preHour.tempC,
+              preHourTempF: preHour.tempF,
+              preHourCapturedAt: preHour.capturedAt,
+              preHourCapturedAtLocal: preHour.capturedAtLocal,
+              preHourForecastCaptureId: preHour.forecastCaptureId,
+            }
+          : {}),
+        ...(actual
+          ? {
+              actualTempC: actual.tempC,
+              actualTempF: actual.tempF ?? toFahrenheit(actual.tempC),
+              actualAtUtc: actual.obsTimeUtc,
+              actualAtLocal: actual.obsTimeLocal,
+              ...(actual.collectionCadence
+                ? {
+                    actualCollectionCadence: actual.collectionCadence,
+                  }
+                : {}),
+            }
+          : {}),
+        ...(Number.isFinite(departureBaselineC)
+          ? {
+              departureBaselineC,
+              departureBaselineF: toFahrenheitDelta(departureBaselineC),
+            }
+          : {}),
+        ...(Number.isFinite(departurePreHourC)
+          ? {
+              departurePreHourC,
+              departurePreHourF: toFahrenheitDelta(departurePreHourC),
+            }
+          : {}),
+      };
+    })
+    .sort((left, right) => left.forecastTimeUtc - right.forecastTimeUtc);
+
+  const runningBaseline = summarizeWeatherComDepartures(
+    points,
+    "departureBaselineC",
+  );
+  const runningPreHour = summarizeWeatherComDepartures(
+    points,
+    "departurePreHourC",
+  );
+  const latestPeak = selectPeakDiagnosticPoint(points, "latestTempC");
+  const baselinePeak = selectPeakDiagnosticPoint(points, "baselineTempC");
+  const peakDeltaC =
+    latestPeak && baselinePeak
+      ? roundToTenth(latestPeak.latestTempC - baselinePeak.baselineTempC)
+      : null;
+  const peak = latestPeak
+    ? {
+        latestTempC: latestPeak.latestTempC,
+        latestTempF: latestPeak.latestTempF,
+        latestForecastTimeUtc: latestPeak.forecastTimeUtc,
+        latestForecastTimeLocal: latestPeak.forecastTimeLocal,
+        latestCapturedAt: latestPeak.latestCapturedAt,
+        latestCapturedAtLocal: latestPeak.latestCapturedAtLocal,
+        ...(baselinePeak
+          ? {
+              baselineTempC: baselinePeak.baselineTempC,
+              baselineTempF: baselinePeak.baselineTempF,
+              baselineForecastTimeUtc: baselinePeak.forecastTimeUtc,
+              baselineForecastTimeLocal: baselinePeak.forecastTimeLocal,
+              baselineCapturedAt: baselinePeak.baselineCapturedAt,
+              baselineCapturedAtLocal: baselinePeak.baselineCapturedAtLocal,
+            }
+          : {}),
+        ...(Number.isFinite(peakDeltaC)
+          ? {
+              deltaC: peakDeltaC,
+              deltaF: toFahrenheitDelta(peakDeltaC),
+            }
+          : {}),
+      }
+    : null;
+
+  let live = null;
+  const latestObservation = observations[observations.length - 1] ?? null;
+  if (
+    targetDate === todayDate &&
+    latestObservation &&
+    now - latestObservation.obsTimeUtc <= MAX_LIVE_OBSERVATION_AGE_MS &&
+    latestObservation.obsTimeUtc <= now + 2 * MILLIS_PER_MINUTE
+  ) {
+    let liveForecastCapture = null;
+    let liveForecastC = null;
+    for (const capture of [...captures].reverse()) {
+      if (capture.capturedAt >= latestObservation.obsTimeUtc) {
+        continue;
+      }
+      const curve = liveOrderedRows.filter((row) =>
+        sameForecastCapture(row, capture),
+      );
+      const candidate = interpolateBracketedHourlyTemperature(
+        curve,
+        latestObservation.obsTimeUtc,
+      );
+      if (Number.isFinite(candidate)) {
+        liveForecastCapture = capture;
+        liveForecastC = candidate;
+        break;
+      }
+    }
+    if (Number.isFinite(liveForecastC)) {
+      const departureC = roundToTenth(latestObservation.tempC - liveForecastC);
+      const forecastTempC = roundToTenth(liveForecastC);
+      live = {
+        status: departureStatus(departureC),
+        actualAtUtc: latestObservation.obsTimeUtc,
+        actualAtLocal: latestObservation.obsTimeLocal,
+        actualTempC: latestObservation.tempC,
+        actualTempF:
+          latestObservation.tempF ?? toFahrenheit(latestObservation.tempC),
+        ...(latestObservation.collectionCadence
+          ? {
+              actualCollectionCadence: latestObservation.collectionCadence,
+            }
+          : {}),
+        forecastTempC,
+        forecastTempF: toFahrenheit(forecastTempC),
+        departureC,
+        departureF: toFahrenheitDelta(departureC),
+        forecastCapturedAt: liveForecastCapture.capturedAt,
+        forecastCapturedAtLocal: liveForecastCapture.capturedAtLocal,
+      };
+    }
+  }
+
+  return {
+    status: health.isStale ? "stale" : WEATHER_STATUS.OK,
+    captureCount: captures.length,
+    pointCount: points.length,
+    ...health,
+    ...(baselineCapture
+      ? {
+          baselineCapturedAt: baselineCapture.capturedAt,
+          baselineCapturedAtLocal: baselineCapture.capturedAtLocal,
+          baselineForecastCaptureId: baselineCapture.forecastCaptureId,
+          baselineSelection:
+            baselineCapture.capturedAt >= fiveAmLocal
+              ? "first_at_or_after_05:00"
+              : "latest_before_05:00",
+          baselineCapture,
+        }
+      : {}),
+    ...(latestCapture
+      ? {
+          latestCapturedAt: latestCapture.capturedAt,
+          latestCapturedAtLocal: latestCapture.capturedAtLocal,
+          latestForecastCaptureId: latestCapture.forecastCaptureId,
+          latestCapture,
+        }
+      : {}),
+    points,
+    runningBaseline,
+    runningPreHour,
+    peak,
+    ...(live
+      ? {
+          live,
+          liveLatestCurveDeviation: live,
+        }
+      : {}),
+  };
+}
+
 export const getHighPredictionDashboard = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
@@ -1784,9 +2388,12 @@ export const getHighPredictionDashboard = queryGeneric({
     const stationIcao = String(
       args.stationIcao ?? SEOUL_STATION.stationIcao,
     ).toUpperCase();
-    const todayDate = formatDateInTimezone(Date.now(), SEOUL_TIMEZONE);
+    const now = Date.now();
+    const todayDate = formatDateInTimezone(now, SEOUL_TIMEZONE);
     const date = args.date ?? todayDate;
     assertDateKey(date);
+    const nextDate = addUtcDays(date, 1);
+    const nextMidnightUtc = Date.parse(`${nextDate}T00:00:00+09:00`);
 
     const [
       summary,
@@ -1794,6 +2401,9 @@ export const getHighPredictionDashboard = queryGeneric({
       forecastCaptureRows,
       evaluation,
       accuracyRows,
+      weathercomHourlyRows,
+      adjacentWeathercomHourlyRows,
+      recentWeathercomAmosObservations,
     ] = await Promise.all([
       ctx.db
         .query("seoulAmosDailySummaries")
@@ -1828,7 +2438,64 @@ export const getHighPredictionDashboard = queryGeneric({
         )
         .order("desc")
         .take(30),
+      ctx.db
+        .query("seoulHourlyForecastPredictions")
+        .withIndex("by_station_provider_target_capturedAt", (query) =>
+          query
+            .eq("stationIcao", stationIcao)
+            .eq("provider", "weathercom")
+            .eq("targetDate", date),
+        )
+        .collect(),
+      ctx.db
+        .query("seoulHourlyForecastPredictions")
+        .withIndex("by_station_provider_valid_capturedAt", (query) =>
+          query
+            .eq("stationIcao", stationIcao)
+            .eq("provider", "weathercom")
+            .eq("forecastTimeUtc", nextMidnightUtc),
+        )
+        .collect(),
+      ctx.db
+        .query("seoulAmosObservations")
+        .withIndex("by_station_date_rwy_ts", (query) =>
+          query
+            .eq("stationIcao", stationIcao)
+            .eq("date", date)
+            .eq("rwyNo", RKSI_REPRESENTATIVE_RUNWAY_NO)
+            .eq("rwyDir", RKSI_REPRESENTATIVE_RUNWAY_DIRECTION),
+        )
+        .order("desc")
+        .take(32),
     ]);
+    const weathercomForecastTimes = Array.from(
+      new Set(
+        weathercomHourlyRows
+          .map((row) => row.forecastTimeUtc)
+          .filter(Number.isFinite),
+      ),
+    );
+    const weathercomObservationBuckets = await Promise.all(
+      weathercomForecastTimes.map((forecastTimeUtc) =>
+        ctx.db
+          .query("seoulAmosObservations")
+          .withIndex("by_station_date_rwy_ts", (query) =>
+            query
+              .eq("stationIcao", stationIcao)
+              .eq("date", date)
+              .eq("rwyNo", RKSI_REPRESENTATIVE_RUNWAY_NO)
+              .eq("rwyDir", RKSI_REPRESENTATIVE_RUNWAY_DIRECTION)
+              .gte("obsTimeUtc", forecastTimeUtc - 5 * MILLIS_PER_MINUTE)
+              .lte("obsTimeUtc", forecastTimeUtc + 5 * MILLIS_PER_MINUTE),
+          )
+          .collect(),
+      ),
+    );
+    const weathercomRawObservations = [
+      ...weathercomObservationBuckets.flat(),
+      ...recentWeathercomAmosObservations,
+    ];
+    const latestAttemptedForecastCapture = forecastCaptureRows[0] ?? null;
     const latestPrediction = toWeatherComOnlyPagePrediction(
       revisionRows[0] ?? null,
     );
@@ -1838,7 +2505,7 @@ export const getHighPredictionDashboard = queryGeneric({
     const latestWeatherComCapture = selectLatestUsableWeatherComCapture({
       captures: forecastCaptureRows,
       targetDate: date,
-      generatedAt: Date.now(),
+      generatedAt: now,
     });
     const mergedWeatherComHourlyRows = mergeWeatherComHourlyRows(
       forecastCaptureRows,
@@ -1868,9 +2535,30 @@ export const getHighPredictionDashboard = queryGeneric({
                   latestWeatherComCapture.weathercomHourlyError,
               }
             : {}),
+          ...(Number.isFinite(
+            latestWeatherComCapture.weathercomHourlyCapturedAt,
+          )
+            ? {
+                weathercomHourlyCapturedAt:
+                  latestWeatherComCapture.weathercomHourlyCapturedAt,
+                weathercomHourlyCapturedAtLocal:
+                  latestWeatherComCapture.weathercomHourlyCapturedAtLocal,
+                weathercomHourlyCaptureDate:
+                  latestWeatherComCapture.weathercomHourlyCaptureDate,
+              }
+            : {}),
           weathercomHourlyRows: mergedWeatherComHourlyRows,
         }
       : null;
+    const weathercomHourlyDiagnostics = buildWeatherComHourlyDiagnostics({
+      predictionRows: weathercomHourlyRows,
+      adjacentPredictionRows: adjacentWeathercomHourlyRows,
+      rawObservations: weathercomRawObservations,
+      targetDate: date,
+      todayDate,
+      latestForecastCapture: latestAttemptedForecastCapture,
+      now,
+    });
 
     return {
       station: {
@@ -1891,6 +2579,7 @@ export const getHighPredictionDashboard = queryGeneric({
       latestPrediction,
       revisions,
       latestForecastCapture,
+      weathercomHourlyDiagnostics,
       evaluation,
       accuracy: summarizeEvaluations(accuracyRows),
     };
