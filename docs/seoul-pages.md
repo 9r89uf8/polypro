@@ -74,26 +74,59 @@ series remain legible. Y-axis labels retain one decimal place, matching the
 AMOS sensor resolution instead of rounding several fractional ticks to the
 same whole degree.
 
-The chart also reserves a narrow `METAR SKY` ribbon immediately above the
-temperature plot. It parses the coded sky groups already preserved in each raw
-METAR:
+The chart reserves a 24-cell `HOURLY SKY COVER` strip immediately above the
+temperature plot. Meter height is the primary visual encoding, so a user can
+compare past and coming hours without decoding aviation abbreviations:
 
-- `FEW`, `SCT`, `BKN`, and `OVC` appear with progressively stronger slate
-  shading;
-- `OVC` and vertical-visibility (`VV`) periods also use diagonal hatching, so
-  overcast or obscured conditions are not identified by color alone;
-- sufficiently wide runs are labeled with their code and reported layer base,
-  such as `OVC · 8,000 FT`;
-- the latest normalized sky state and every inferred overcast interval appear
-  as text above the chart, and METAR temperature tooltips include the sky
-  detail and aviation ceiling.
+- solid slate cells summarize completed-hour METAR observations;
+- the current hour is clipped at the live `NOW` boundary: its elapsed observed
+  portion uses an amber top edge and its not-yet-observed remainder stays
+  hatched;
+- diagonally patterned cyan cells show upcoming model cloud-cover percentages;
+- missing or non-quantifiable hours stay hatched and explicitly say `NO DATA`,
+  `NO LOW CLOUD`, `SKY HIDDEN`, `VARIABLE`, or `PARTIAL` rather than looking
+  like clear sky.
 
-Each coded sky state is treated as a report-time observation and carried
-forward only until the next METAR/SPECI, with a maximum hold of 45 minutes.
-Longer reporting gaps remain blank. This creates an explicitly inferred visual
-interval rather than claiming continuous cloud sensing. AMOS `cld1`, `cld2`,
-and `cld3` values are detected layer bases without `FEW/SCT/BKN/OVC` coverage,
-so they are not used to infer overcast conditions.
+For observed hours, each coded sky state is carried forward only until the next
+METAR/SPECI, with a maximum hold of 45 minutes. The bounded intervals are
+intersected with each KST hour. An estimate is shown only when at least 45
+minutes of a completed hour have explicit, quantifiable coverage. The current
+hour needs at least 15 represented minutes. Category midpoints are
+duration-weighted and rounded to the nearest 10 percent, with an `≈` prefix.
+Because ordinary METAR spacing can leave part of an hour unrepresented, the
+result estimates the represented METAR sample rather than claiming continuous
+whole-hour measurement. A value is never presented as exact unless the full
+window is represented. The details table preserves the range implied by the
+time-weighted METAR category bounds:
+
+- `FEW`: greater than 0 through 25 percent;
+- `SCT`: 38–50 percent;
+- `BKN`: 63–88 percent;
+- `OVC`: 100 percent;
+- `SKC`: 0 percent.
+
+`CAVOK`, `NSC`, `NCD`, and automated `CLR` do not prove zero total cloud
+cover, while `VV` means the sky is obscured rather than a known percentage.
+Those states therefore remain textual. AMOS `cld1`, `cld2`, and `cld3` are
+detected layer bases without coverage amount and are not used.
+
+Upcoming full-hour cells use `cloudCoverPct` from the same stored hourly
+forecast input as the temperature curve. Google Weather's hourly `cloudCover`
+already represents its one-hour interval. Open-Meteo requests instantaneous
+hourly `cloud_cover`, which is available without the Google key; adjacent
+hour-boundary values are averaged to estimate the matching forward-hour
+interval. Available values use the same Google `0.35` and Open-Meteo `0.45`
+provider weights as the temperature ensemble and retain `cloudProviderCount`.
+The current hour's hourly guidance is not relabeled as a forecast for only the
+remaining minutes.
+
+The header repeats the latest observed-hour summary and next available
+full forecast-hour percentage. `Jump to now` and a one-time initial scroll
+position keep the observed/forecast boundary visible on the 2,400-pixel chart.
+A collapsible semantic table lists all 24 hours, sources, values, ranges, and
+data coverage; the same information is attached to the chart for screen
+readers. METAR temperature tooltips retain the original sky/ceiling detail,
+while forecast temperature tooltips include cloud-cover percentage.
 
 The rest of the interface is deliberately compact:
 

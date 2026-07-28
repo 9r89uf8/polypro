@@ -17,6 +17,7 @@ const seoulHourlyForecastRow = v.object({
   tempC: v.number(),
   tempF: v.number(),
   phrase: v.optional(v.string()),
+  cloudCoverPct: v.optional(v.number()),
 });
 
 const seoulProviderDetail = v.object({
@@ -1118,6 +1119,8 @@ export default defineSchema({
         tempC: v.number(),
         tempF: v.number(),
         providerCount: v.number(),
+        cloudCoverPct: v.optional(v.number()),
+        cloudProviderCount: v.optional(v.number()),
       }),
     ),
     createdAt: v.number(),
