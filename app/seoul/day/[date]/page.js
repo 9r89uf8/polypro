@@ -157,6 +157,127 @@ const peakTimingPlugin = {
   },
 };
 
+const metarSkyPlugin = {
+  id: "seoulMetarSky",
+  afterDraw(chart, _args, options) {
+    const runs = Array.isArray(options?.runs) ? options.runs : [];
+    if (!options?.display || !runs.length) {
+      return;
+    }
+
+    const { ctx, chartArea, scales } = chart;
+    const railHeight = 12;
+    const railTop = chartArea.top - 19;
+    const styles = {
+      clear: {
+        fill: "rgba(148, 163, 184, 0.08)",
+        text: "#94a3b8",
+      },
+      no_significant_cloud: {
+        fill: "rgba(148, 163, 184, 0.09)",
+        text: "#94a3b8",
+      },
+      cavok: {
+        fill: "rgba(125, 211, 252, 0.10)",
+        text: "#bae6fd",
+      },
+      few: {
+        fill: "rgba(148, 163, 184, 0.13)",
+        text: "#cbd5e1",
+      },
+      scattered: {
+        fill: "rgba(148, 163, 184, 0.18)",
+        text: "#cbd5e1",
+      },
+      broken: {
+        fill: "rgba(148, 163, 184, 0.28)",
+        text: "#e2e8f0",
+      },
+      overcast: {
+        fill: "rgba(148, 163, 184, 0.43)",
+        text: "#f8fafc",
+      },
+      obscured: {
+        fill: "rgba(100, 116, 139, 0.55)",
+        text: "#f8fafc",
+      },
+    };
+
+    ctx.save();
+    ctx.fillStyle = "rgba(15, 23, 42, 0.72)";
+    ctx.fillRect(
+      chartArea.left,
+      railTop,
+      chartArea.right - chartArea.left,
+      railHeight,
+    );
+
+    for (const run of runs) {
+      const style = styles[run.conditionKey];
+      if (!style) {
+        continue;
+      }
+      const left = Math.max(
+        chartArea.left,
+        scales.x.getPixelForValue(run.startMinute),
+      );
+      const right = Math.min(
+        chartArea.right,
+        scales.x.getPixelForValue(run.endMinute),
+      );
+      if (right <= left) {
+        continue;
+      }
+
+      ctx.fillStyle = style.fill;
+      ctx.fillRect(left, railTop, right - left, railHeight);
+
+      if (run.conditionKey === "overcast" || run.conditionKey === "obscured") {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(left, railTop, right - left, railHeight);
+        ctx.clip();
+        ctx.strokeStyle = "rgba(248, 250, 252, 0.25)";
+        ctx.lineWidth = 1;
+        for (
+          let hatchX = left - railHeight;
+          hatchX < right + railHeight;
+          hatchX += 8
+        ) {
+          ctx.beginPath();
+          ctx.moveTo(hatchX, railTop + railHeight);
+          ctx.lineTo(hatchX + railHeight, railTop);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      if (right - left >= 58) {
+        ctx.fillStyle = style.text;
+        ctx.font = "600 8px IBM Plex Mono, monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(
+          run.ribbonLabel,
+          left + (right - left) / 2,
+          railTop + railHeight / 2 + 0.5,
+          right - left - 5,
+        );
+      }
+    }
+
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.24)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(
+      chartArea.left,
+      railTop,
+      chartArea.right - chartArea.left,
+      railHeight,
+    );
+    ctx.restore();
+  },
+};
+
 ChartJS.register(
   LinearScale,
   PointElement,
@@ -166,6 +287,7 @@ ChartJS.register(
   nowLinePlugin,
   sunsetLinePlugin,
   peakTimingPlugin,
+  metarSkyPlugin,
 );
 
 const STATION_ICAO = "RKSI";
@@ -175,6 +297,14 @@ const RKSI_LONGITUDE = 126.4407;
 const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const METAR_SKY_DEFAULT_HOLD_MINUTES = 30;
+const METAR_SKY_MAX_HOLD_MINUTES = 45;
+const METAR_SKY_AMOUNT_RANK = Object.freeze({
+  FEW: 1,
+  SCT: 2,
+  BKN: 3,
+  OVC: 4,
+});
 const HISTORICAL_PEAK_REFERENCE = Object.freeze({
   averageMinute: 13 * 60 + 39,
   medianMinute: 13 * 60 + 44,
@@ -210,6 +340,19 @@ function seoulTodayKey() {
     new Date(),
   );
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function seoulMinuteForEpoch(epochMs) {
+  const parts = getDateParts(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: SEOUL_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }),
+    new Date(epochMs),
+  );
+  return Number(parts.hour) * 60 + Number(parts.minute);
 }
 
 function parseDateKey(dateKey) {
@@ -320,6 +463,275 @@ function minuteLabel(totalMinutes) {
   return `${hour12}:${String(minute).padStart(2, "0")} ${
     hour24 >= 12 ? "PM" : "AM"
   }`;
+}
+
+function metarObservedTokens(rawMetar) {
+  const tokens = String(rawMetar ?? "")
+    .trim()
+    .toUpperCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  const stopIndex = tokens.findIndex(
+    (token) =>
+      /^(?:M?\d{2}|\/\/)\/(?:M?\d{2}|\/\/)$/.test(token) ||
+      /^(?:Q|A)\d{4}$/.test(token) ||
+      /^(?:NOSIG|BECMG|TEMPO|INTER|RMK)$/.test(token) ||
+      /^FM\d{6}$/.test(token) ||
+      /^PROB\d{2}$/.test(token),
+  );
+  return stopIndex >= 0 ? tokens.slice(0, stopIndex) : tokens;
+}
+
+function parseMetarSkyCondition(rawMetar) {
+  const tokens = metarObservedTokens(rawMetar);
+  if (!tokens.length) {
+    return null;
+  }
+
+  const layers = tokens
+    .map((token) => {
+      const match = /^(FEW|SCT|BKN|OVC)(\d{3}|\/\/\/)(CB|TCU)?$/.exec(token);
+      return match
+        ? {
+            amount: match[1],
+            code: match[0],
+            heightFeet:
+              match[2] === "///" ? null : Number.parseInt(match[2], 10) * 100,
+            modifier: match[3] ?? null,
+          }
+        : null;
+    })
+    .filter(Boolean);
+  const verticalVisibilityMatch = tokens
+    .map((token) => /^VV(\d{3}|\/\/\/)$/.exec(token))
+    .find(Boolean);
+  const verticalVisibility = verticalVisibilityMatch
+    ? {
+        amount: "VV",
+        code: verticalVisibilityMatch[0],
+        heightFeet:
+          verticalVisibilityMatch[1] === "///"
+            ? null
+            : Number.parseInt(verticalVisibilityMatch[1], 10) * 100,
+        modifier: null,
+      }
+    : null;
+
+  if (verticalVisibility) {
+    return {
+      conditionKey: "obscured",
+      conditionLabel: "Sky obscured",
+      primaryCode: verticalVisibility.code,
+      primaryHeightFeet: verticalVisibility.heightFeet,
+      ceilingFeet: verticalVisibility.heightFeet,
+      layers: [verticalVisibility, ...layers],
+    };
+  }
+
+  if (layers.length) {
+    const primaryLayer = [...layers].sort((left, right) => {
+      const rankDifference =
+        METAR_SKY_AMOUNT_RANK[right.amount] -
+        METAR_SKY_AMOUNT_RANK[left.amount];
+      if (rankDifference) {
+        return rankDifference;
+      }
+      return (
+        (left.heightFeet ?? Number.POSITIVE_INFINITY) -
+        (right.heightFeet ?? Number.POSITIVE_INFINITY)
+      );
+    })[0];
+    const ceilingFeet =
+      layers
+        .filter((layer) => layer.amount === "BKN" || layer.amount === "OVC")
+        .map((layer) => layer.heightFeet)
+        .filter(Number.isFinite)
+        .sort((left, right) => left - right)[0] ?? null;
+    const conditionByAmount = {
+      FEW: ["few", "Few clouds"],
+      SCT: ["scattered", "Scattered clouds"],
+      BKN: ["broken", "Broken clouds"],
+      OVC: ["overcast", "Overcast"],
+    };
+    const [conditionKey, conditionLabel] =
+      conditionByAmount[primaryLayer.amount];
+
+    return {
+      conditionKey,
+      conditionLabel,
+      primaryCode: primaryLayer.code,
+      primaryHeightFeet: primaryLayer.heightFeet,
+      ceilingFeet,
+      layers,
+    };
+  }
+
+  if (tokens.includes("CAVOK")) {
+    return {
+      conditionKey: "cavok",
+      conditionLabel: "CAVOK",
+      primaryCode: "CAVOK",
+      primaryHeightFeet: null,
+      ceilingFeet: null,
+      layers: [],
+    };
+  }
+  if (tokens.includes("NSC") || tokens.includes("NCD")) {
+    const primaryCode = tokens.includes("NSC") ? "NSC" : "NCD";
+    return {
+      conditionKey: "no_significant_cloud",
+      conditionLabel: "No significant cloud",
+      primaryCode,
+      primaryHeightFeet: null,
+      ceilingFeet: null,
+      layers: [],
+    };
+  }
+  if (tokens.includes("SKC") || tokens.includes("CLR")) {
+    const primaryCode = tokens.includes("SKC") ? "SKC" : "CLR";
+    return {
+      conditionKey: "clear",
+      conditionLabel: "Clear",
+      primaryCode,
+      primaryHeightFeet: null,
+      ceilingFeet: null,
+      layers: [],
+    };
+  }
+  return null;
+}
+
+function formatFeet(value) {
+  return Number.isFinite(value)
+    ? new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value)
+    : null;
+}
+
+function metarSkySummary(sky) {
+  if (!sky) {
+    return "Sky condition unavailable";
+  }
+  const primaryHeight = formatFeet(sky.primaryHeightFeet);
+  const ceilingHeight = formatFeet(sky.ceilingFeet);
+  const primaryDetail = primaryHeight
+    ? `${sky.primaryCode.replace(/(?:CB|TCU)$/, "")} ${primaryHeight} ft`
+    : sky.primaryCode;
+  const ceilingDetail =
+    ceilingHeight &&
+    sky.ceilingFeet !== sky.primaryHeightFeet &&
+    (sky.conditionKey === "overcast" || sky.conditionKey === "broken")
+      ? ` · ceiling ${ceilingHeight} ft`
+      : "";
+  return `${sky.conditionLabel} · ${primaryDetail}${ceilingDetail}`;
+}
+
+function metarSkyRibbonLabel(conditionKey, baseFeetValues) {
+  const codeByCondition = {
+    clear: "CLR",
+    no_significant_cloud: "NSC",
+    cavok: "CAVOK",
+    few: "FEW",
+    scattered: "SCT",
+    broken: "BKN",
+    overcast: "OVC",
+    obscured: "VV",
+  };
+  const finiteBases = [...new Set(baseFeetValues.filter(Number.isFinite))].sort(
+    (left, right) => left - right,
+  );
+  if (!finiteBases.length) {
+    return codeByCondition[conditionKey];
+  }
+  const baseLabel =
+    finiteBases.length === 1
+      ? formatFeet(finiteBases[0])
+      : `${formatFeet(finiteBases[0])}–${formatFeet(finiteBases.at(-1))}`;
+  return `${codeByCondition[conditionKey]} · ${baseLabel} FT`;
+}
+
+function buildMetarSkyRuns(metarRows, currentMinute = null) {
+  const reports = [...metarRows]
+    .sort((left, right) => left.obsTimeUtc - right.obsTimeUtc)
+    .map((row) => ({
+      row,
+      minute: parseMinute(row.obsTimeLocal),
+      sky: parseMetarSkyCondition(row.rawMetar),
+    }));
+  const intervals = [];
+
+  for (let index = 0; index < reports.length; index += 1) {
+    const report = reports[index];
+    if (!Number.isFinite(report.minute) || !report.sky) {
+      continue;
+    }
+    const nextReport = reports[index + 1] ?? null;
+    const gapMinutes =
+      nextReport && Number.isFinite(nextReport.row.obsTimeUtc)
+        ? (nextReport.row.obsTimeUtc - report.row.obsTimeUtc) / 60000
+        : null;
+    const holdMinutes =
+      Number.isFinite(gapMinutes) &&
+      gapMinutes > 0 &&
+      gapMinutes <= METAR_SKY_MAX_HOLD_MINUTES
+        ? gapMinutes
+        : METAR_SKY_DEFAULT_HOLD_MINUTES;
+    const endMinute = Math.min(
+      1439,
+      report.minute + holdMinutes,
+      Number.isFinite(currentMinute) ? currentMinute : 1439,
+    );
+    if (endMinute <= report.minute) {
+      continue;
+    }
+    intervals.push({
+      conditionKey: report.sky.conditionKey,
+      conditionLabel: report.sky.conditionLabel,
+      startMinute: report.minute,
+      endMinute,
+      reportCount: 1,
+      baseFeetValues: Number.isFinite(report.sky.primaryHeightFeet)
+        ? [report.sky.primaryHeightFeet]
+        : [],
+      ceilingFeetValues: Number.isFinite(report.sky.ceilingFeet)
+        ? [report.sky.ceilingFeet]
+        : [],
+      firstReportTimeLocal: report.row.obsTimeLocal,
+      lastReportTimeLocal: report.row.obsTimeLocal,
+    });
+  }
+
+  const runs = [];
+  for (const interval of intervals) {
+    const previous = runs.at(-1);
+    if (
+      previous &&
+      previous.conditionKey === interval.conditionKey &&
+      interval.startMinute <= previous.endMinute + 1
+    ) {
+      previous.endMinute = Math.max(previous.endMinute, interval.endMinute);
+      previous.reportCount += interval.reportCount;
+      previous.baseFeetValues.push(...interval.baseFeetValues);
+      previous.ceilingFeetValues.push(...interval.ceilingFeetValues);
+      previous.lastReportTimeLocal = interval.lastReportTimeLocal;
+      continue;
+    }
+    runs.push({ ...interval });
+  }
+
+  return runs.map((run) => ({
+    ...run,
+    ribbonLabel: metarSkyRibbonLabel(run.conditionKey, run.baseFeetValues),
+  }));
+}
+
+function overcastRunSummary(run) {
+  if (!run) {
+    return null;
+  }
+  const baseLabel = metarSkyRibbonLabel("overcast", run.baseFeetValues);
+  return `${minuteLabel(run.startMinute)}–${minuteLabel(
+    run.endMinute,
+  )} · ${baseLabel}`;
 }
 
 function formatClock(epochMs, includeSeconds = false) {
@@ -590,6 +1002,7 @@ function buildChartData(metarRows, amosDisplayRows, forecastRows, unit) {
   const metarPoints = toChartPoints(metarRows, unit, (row) => ({
     reportType: row.reportType,
     rawMetar: row.rawMetar,
+    skySummary: metarSkySummary(parseMetarSkyCondition(row.rawMetar)),
   }));
   const forecastPoints = toForecastPoints(forecastRows, unit);
 
@@ -786,6 +1199,7 @@ export default function SeoulDayPage() {
   const isToday = isDateValid && date === today;
   const previousDate = shiftDateKey(date, -1);
   const nextDate = shiftDateKey(date, 1);
+  const currentSeoulMinute = isToday ? seoulMinuteForEpoch(clockNowMs) : null;
 
   const dayData = useQuery(
     "seoul:getDayStationRows",
@@ -818,6 +1232,38 @@ export default function SeoulDayPage() {
 
   const latestMetar = metarRows.at(-1) ?? null;
   const latestAmos = amosDisplayRows.at(-1) ?? null;
+  const metarSkyRuns = useMemo(
+    () => buildMetarSkyRuns(metarRows, currentSeoulMinute),
+    [currentSeoulMinute, metarRows],
+  );
+  const overcastRuns = useMemo(
+    () => metarSkyRuns.filter((run) => run.conditionKey === "overcast"),
+    [metarSkyRuns],
+  );
+  const latestMetarSky = useMemo(
+    () => parseMetarSkyCondition(latestMetar?.rawMetar),
+    [latestMetar?.rawMetar],
+  );
+  const overcastReportCount = overcastRuns.reduce(
+    (total, run) => total + run.reportCount,
+    0,
+  );
+  const overcastHeaderSummary =
+    overcastRuns.length === 1
+      ? `${overcastRunSummary(overcastRuns[0])} · ${
+          overcastRuns[0].reportCount
+        } ${overcastRuns[0].reportCount === 1 ? "report" : "reports"}`
+      : overcastRuns.length > 1
+        ? `${overcastRuns.length} periods · ${overcastReportCount} reports`
+        : null;
+  const overcastTitle = overcastRuns
+    .map(
+      (run) =>
+        `${overcastRunSummary(run)} · ${run.reportCount} ${
+          run.reportCount === 1 ? "report" : "reports"
+        }`,
+    )
+    .join("; ");
   const latestPrediction = normalizePrediction(
     predictionDashboard?.latestPrediction,
   );
@@ -957,21 +1403,6 @@ export default function SeoulDayPage() {
       predictionEvaluation.finalizedAt)
     : (latestPrediction?.generatedAtLocal ?? latestPrediction?.generatedAt);
   const sunsetMinute = useMemo(() => sunsetMinuteForDate(date), [date]);
-  const currentSeoulMinute = useMemo(() => {
-    if (!isToday) {
-      return null;
-    }
-    const parts = getDateParts(
-      new Intl.DateTimeFormat("en-US", {
-        timeZone: SEOUL_TIMEZONE,
-        hour: "2-digit",
-        minute: "2-digit",
-        hourCycle: "h23",
-      }),
-      new Date(clockNowMs),
-    );
-    return Number(parts.hour) * 60 + Number(parts.minute);
-  }, [clockNowMs, isToday]);
   const forecastPeakStartMinute = parseMinute(latestPrediction?.peakStartLocal);
   const forecastPeakEndMinute = parseMinute(latestPrediction?.peakEndLocal);
 
@@ -999,7 +1430,7 @@ export default function SeoulDayPage() {
         intersect: false,
       },
       layout: {
-        padding: { top: 12, right: 8, bottom: 2, left: 2 },
+        padding: { top: 34, right: 8, bottom: 2, left: 2 },
       },
       plugins: {
         legend: {
@@ -1038,9 +1469,12 @@ export default function SeoulDayPage() {
                 item.raw?.displayCadence === "audit_fallback"
                   ? " · five-minute audit fallback"
                   : "";
+              const skyCondition = item.raw?.skySummary
+                ? ` · ${item.raw.skySummary}`
+                : "";
               return `${item.dataset.label}: ${item.parsed.y.toFixed(
                 1,
-              )}°${unit}${reportType}${auditFallback}`;
+              )}°${unit}${reportType}${auditFallback}${skyCondition}`;
             },
           },
         },
@@ -1069,6 +1503,10 @@ export default function SeoulDayPage() {
             windowStartMinute: forecastPeakStartMinute,
             windowEndMinute: forecastPeakEndMinute,
           },
+        },
+        seoulMetarSky: {
+          display: metarSkyRuns.length > 0,
+          runs: metarSkyRuns,
         },
       },
       scales: {
@@ -1130,6 +1568,7 @@ export default function SeoulDayPage() {
       forecastPeakEndMinute,
       forecastPeakStartMinute,
       isToday,
+      metarSkyRuns,
       sunsetMinute,
       unit,
     ],
@@ -1661,6 +2100,25 @@ export default function SeoulDayPage() {
               <h2 className="mt-1 text-lg font-medium text-slate-200">
                 {date}
               </h2>
+              <div className="mt-2 font-mono text-[9px] uppercase leading-4 tracking-[0.14em]">
+                <p className="text-slate-300">
+                  METAR sky ·{" "}
+                  {latestMetarSky
+                    ? metarSkySummary(latestMetarSky)
+                    : "awaiting coded sky condition"}
+                  {latestMetar && (
+                    <> · {formatLocalTime(latestMetar.obsTimeLocal)} KST</>
+                  )}
+                </p>
+                {overcastHeaderSummary && (
+                  <p
+                    className="text-slate-500"
+                    title={`Observed METAR overcast periods: ${overcastTitle}. Each report is carried forward only until the next report, capped at ${METAR_SKY_MAX_HOLD_MINUTES} minutes.`}
+                  >
+                    Overcast observed · {overcastHeaderSummary}
+                  </p>
+                )}
+              </div>
             </div>
             <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
               {latestPrediction && (
@@ -1696,8 +2154,30 @@ export default function SeoulDayPage() {
             </div>
           </div>
 
+          <div id="seoul-metar-sky-description" className="sr-only">
+            <p>
+              The METAR sky ribbon shows coded sky conditions carried from each
+              report until the next report for no more than{" "}
+              {METAR_SKY_MAX_HOLD_MINUTES} minutes. Hatched segments are
+              overcast or obscured.
+            </p>
+            {metarSkyRuns.length > 0 && (
+              <ul>
+                {metarSkyRuns.map((run, index) => (
+                  <li key={`${run.conditionKey}-${run.startMinute}-${index}`}>
+                    {run.conditionLabel} from {minuteLabel(run.startMinute)} to{" "}
+                    {minuteLabel(run.endMinute)} KST, based on {run.reportCount}{" "}
+                    {run.reportCount === 1 ? "report" : "reports"}
+                    {run.ribbonLabel ? `, ${run.ribbonLabel}` : ""}.
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           <div
             aria-label="Scrollable 24-hour temperature chart"
+            aria-describedby="seoul-metar-sky-description"
             className="relative min-h-[560px] flex-1 overflow-x-auto overscroll-x-contain border border-white/10 bg-[#07111f]/85 shadow-[0_30px_100px_rgba(0,0,0,0.38)]"
             role="region"
             tabIndex={0}
@@ -1723,7 +2203,8 @@ export default function SeoulDayPage() {
         <footer className="flex flex-col gap-2 py-4 font-mono text-[10px] leading-5 text-slate-600 md:flex-row md:items-center md:justify-between">
           <p>
             AMOS uses the feed row designated 15L. Five-minute snapshots remain
-            available only as an audit fallback for missed minute captures.
+            available only as an audit fallback for missed minute captures. The
+            sky ribbon uses observed METAR codes, not AMOS inference.
           </p>
           <p>
             NOAA TGFTP METAR · KMA AMOS MOBILE FEED · MULTI-PROVIDER FORECAST

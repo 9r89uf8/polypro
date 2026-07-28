@@ -74,6 +74,27 @@ series remain legible. Y-axis labels retain one decimal place, matching the
 AMOS sensor resolution instead of rounding several fractional ticks to the
 same whole degree.
 
+The chart also reserves a narrow `METAR SKY` ribbon immediately above the
+temperature plot. It parses the coded sky groups already preserved in each raw
+METAR:
+
+- `FEW`, `SCT`, `BKN`, and `OVC` appear with progressively stronger slate
+  shading;
+- `OVC` and vertical-visibility (`VV`) periods also use diagonal hatching, so
+  overcast or obscured conditions are not identified by color alone;
+- sufficiently wide runs are labeled with their code and reported layer base,
+  such as `OVC · 8,000 FT`;
+- the latest normalized sky state and every inferred overcast interval appear
+  as text above the chart, and METAR temperature tooltips include the sky
+  detail and aviation ceiling.
+
+Each coded sky state is treated as a report-time observation and carried
+forward only until the next METAR/SPECI, with a maximum hold of 45 minutes.
+Longer reporting gaps remain blank. This creates an explicitly inferred visual
+interval rather than claiming continuous cloud sensing. AMOS `cld1`, `cld2`,
+and `cld3` values are detected layer bases without `FEW/SCT/BKN/OVC` coverage,
+so they are not used to infer overcast conditions.
+
 The rest of the interface is deliberately compact:
 
 - RKSI/live status and Seoul clock
