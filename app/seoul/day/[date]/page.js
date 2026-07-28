@@ -113,14 +113,6 @@ const peakTimingPlugin = {
         "rgba(167, 139, 250, 0.055)",
       );
     }
-    if (options?.forecast?.display) {
-      drawMinuteBand(
-        chart,
-        options.forecast.windowStartMinute,
-        options.forecast.windowEndMinute,
-        "rgba(251, 191, 36, 0.075)",
-      );
-    }
   },
   afterDatasetsDraw(chart, _args, options) {
     if (
@@ -1214,30 +1206,12 @@ function formatTemperature(row, unit) {
   return Number.isFinite(value) ? `${value.toFixed(1)}°` : "—";
 }
 
-function firstFinite(...values) {
-  return values.find(Number.isFinite) ?? null;
-}
-
-function celsiusToFahrenheit(value) {
-  return Number.isFinite(value) ? (value * 9) / 5 + 32 : null;
-}
-
 function formatLocalTime(value, includeSeconds = false) {
   if (Number.isFinite(value)) {
     return formatClock(value, includeSeconds);
   }
   const minute = parseMinute(value);
   return Number.isFinite(minute) ? minuteLabel(minute) : value || "—";
-}
-
-function formatPeakWindow(start, end) {
-  if (!start && !end) {
-    return "Still calculating";
-  }
-  if (!start || !end) {
-    return formatLocalTime(start || end);
-  }
-  return `${formatLocalTime(start)}–${formatLocalTime(end)}`;
 }
 
 function providerPeakLabel(signal) {
@@ -1397,54 +1371,8 @@ function normalizePrediction(prediction) {
   if (!prediction) {
     return null;
   }
-  const observedCurrent = prediction.observedCurrent ?? {};
-  const expectedCurrent = prediction.expectedCurrent ?? {};
-  const liveBias = prediction.liveBias ?? {};
-  const expectedNowC =
-    prediction.expectedNowC ??
-    prediction.expectedCurrentC ??
-    expectedCurrent.tempC;
-  const deviationC =
-    prediction.deviationC ?? prediction.liveBiasC ?? liveBias.tempC;
   return {
     ...prediction,
-    revisionNumber: prediction.revisionNumber ?? prediction.revision,
-    peakStartLocal:
-      prediction.peakStartLocal ??
-      prediction.peakWindowStartLocal ??
-      prediction.peakWindowStart,
-    peakEndLocal:
-      prediction.peakEndLocal ??
-      prediction.peakWindowEndLocal ??
-      prediction.peakWindowEnd,
-    currentTempC:
-      prediction.currentTempC ??
-      prediction.observedCurrentC ??
-      observedCurrent.tempC,
-    currentTempF:
-      prediction.currentTempF ??
-      prediction.observedCurrentF ??
-      observedCurrent.tempF,
-    currentObsTimeLocal:
-      prediction.currentObsTimeLocal ??
-      prediction.observedCurrentAtLocal ??
-      prediction.observedCurrentTimeLocal ??
-      observedCurrent.obsTimeLocal ??
-      observedCurrent.timeLocal,
-    expectedNowC,
-    expectedNowF:
-      prediction.expectedNowF ??
-      prediction.expectedCurrentF ??
-      expectedCurrent.tempF ??
-      celsiusToFahrenheit(expectedNowC),
-    deviationC,
-    deviationF:
-      prediction.deviationF ??
-      prediction.liveBiasF ??
-      liveBias.tempF ??
-      (Number.isFinite(deviationC) ? deviationC * 1.8 : null),
-    warmingRate30CPerHour:
-      prediction.warmingRate30CPerHour ?? prediction.slope30mCPerHour,
     hourlyCurve: prediction.hourlyCurve ?? prediction.hourlyEnsembleCurve ?? [],
   };
 }
@@ -1529,40 +1457,7 @@ function toChartPoints(rows, unit, extra = () => ({})) {
     .filter(Boolean);
 }
 
-function toForecastPoints(rows, unit) {
-  return (rows ?? [])
-    .map((row) => {
-      const x = parseMinute(
-        row.forecastTimeLocal ?? row.timeLocal ?? row.validTimeLocal,
-      );
-      const y =
-        unit === "C"
-          ? firstFinite(row.tempC, row.ensembleTempC, row.predictedTempC)
-          : firstFinite(row.tempF, row.ensembleTempF, row.predictedTempF);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
-        return null;
-      }
-      return {
-        x,
-        y,
-        forecastTimeUtc: row.forecastTimeUtc ?? row.timeUtc,
-        forecastTimeLocal:
-          row.forecastTimeLocal ?? row.timeLocal ?? row.validTimeLocal,
-        cloudCoverPct: Number.isFinite(row.cloudCoverPct)
-          ? row.cloudCoverPct
-          : null,
-      };
-    })
-    .filter(Boolean);
-}
-
-function buildChartData(
-  metarRows,
-  amosDisplayRows,
-  forecastRows,
-  providerPeak,
-  unit,
-) {
+function buildChartData(metarRows, amosDisplayRows, providerPeak, unit) {
   const amosPoints = toChartPoints(amosDisplayRows, unit, (row) => ({
     displayCadence: row.displayCadence,
   }));
@@ -1571,8 +1466,6 @@ function buildChartData(
     rawMetar: row.rawMetar,
     skySummary: metarSkySummary(parseMetarSkyCondition(row.rawMetar)),
   }));
-  const forecastPoints = toForecastPoints(forecastRows, unit);
-
   const datasets = [
     {
       label: "AMOS · 1 minute",
@@ -1602,23 +1495,6 @@ function buildChartData(
       order: 1,
     },
   ];
-
-  if (forecastPoints.length) {
-    datasets.unshift({
-      label: "15L high forecast",
-      data: forecastPoints,
-      borderColor: "#fbbf24",
-      backgroundColor: "#fbbf24",
-      borderWidth: 2.5,
-      borderDash: [9, 7],
-      pointRadius: 2,
-      pointHitRadius: 10,
-      pointHoverRadius: 5,
-      tension: 0.3,
-      spanGaps: false,
-      order: 3,
-    });
-  }
 
   if (providerPeak) {
     datasets.unshift({
@@ -1707,9 +1583,6 @@ export default function SeoulDayPage() {
   );
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
   const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
-  const recomputeHighPrediction = useAction(
-    "seoulWeather:recomputeTodayHighPrediction",
-  );
 
   const metarRows = dayData?.rows ?? [];
   const amosRows = dayData?.amosRows ?? [];
@@ -1821,12 +1694,9 @@ export default function SeoulDayPage() {
     );
   }, [hourlyCloudCover]);
   const sunsetMinute = useMemo(() => sunsetMinuteForDate(date), [date]);
-  const forecastPeakStartMinute = parseMinute(latestPrediction?.peakStartLocal);
-  const forecastPeakEndMinute = parseMinute(latestPrediction?.peakEndLocal);
   const hasTemperatureChartData =
     metarRows.length +
       amosDisplayRows.length +
-      (latestPrediction?.hourlyCurve?.length ?? 0) +
       (preferredProviderPeak ? 1 : 0) >
     0;
   const hasCloudGuidance = hourlyCloudCover.some((hour) =>
@@ -1835,20 +1705,8 @@ export default function SeoulDayPage() {
 
   const chartData = useMemo(
     () =>
-      buildChartData(
-        metarRows,
-        amosDisplayRows,
-        latestPrediction?.hourlyCurve,
-        preferredProviderPeak,
-        unit,
-      ),
-    [
-      amosDisplayRows,
-      latestPrediction?.hourlyCurve,
-      metarRows,
-      preferredProviderPeak,
-      unit,
-    ],
+      buildChartData(metarRows, amosDisplayRows, preferredProviderPeak, unit),
+    [amosDisplayRows, metarRows, preferredProviderPeak, unit],
   );
 
   const chartOptions = useMemo(
@@ -1935,13 +1793,6 @@ export default function SeoulDayPage() {
             title: "MAR–JUL TYPICAL",
             label: minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute),
           },
-          forecast: {
-            display:
-              Number.isFinite(forecastPeakStartMinute) &&
-              Number.isFinite(forecastPeakEndMinute),
-            windowStartMinute: forecastPeakStartMinute,
-            windowEndMinute: forecastPeakEndMinute,
-          },
         },
         seoulProviderPeak: {
           display: Boolean(preferredProviderPeak),
@@ -2015,8 +1866,6 @@ export default function SeoulDayPage() {
     [
       currentSeoulMinute,
       date,
-      forecastPeakEndMinute,
-      forecastPeakStartMinute,
       hasTemperatureChartData,
       hourlyCloudSegments,
       isToday,
@@ -2096,22 +1945,9 @@ export default function SeoulDayPage() {
         console.error(failure.reason);
       }
 
-      let predictionFailure = null;
-      try {
-        await recomputeHighPrediction({ date });
-      } catch (error) {
-        predictionFailure = error;
-        console.error(error);
-      }
-
-      let message = "Live sources refreshed · forecast guidance recalculated";
-      if (predictionFailure && sourceFailures.length) {
-        message = `${2 - sourceFailures.length}/2 sources refreshed · forecast recalculation failed`;
-      } else if (predictionFailure) {
-        message = "Live sources refreshed · forecast recalculation failed";
-      } else if (sourceFailures.length) {
-        message = `${2 - sourceFailures.length}/2 sources refreshed · guidance recalculated`;
-      }
+      const message = sourceFailures.length
+        ? `${2 - sourceFailures.length}/2 live sources refreshed`
+        : "Live sources refreshed";
       setRefreshState({ active: false, message });
     } finally {
       refreshInFlight.current = false;
@@ -2389,27 +2225,6 @@ export default function SeoulDayPage() {
                   KST
                 </p>
               )}
-              {latestPrediction && (
-                <p
-                  className={
-                    preferredProviderPeak
-                      ? "mt-1 text-amber-300/70"
-                      : "text-amber-300"
-                  }
-                >
-                  Tracker window ·{" "}
-                  {formatPeakWindow(
-                    latestPrediction.peakStartLocal,
-                    latestPrediction.peakEndLocal,
-                  )}{" "}
-                  KST · rev {latestPrediction.revisionNumber ?? "—"} at{" "}
-                  {formatLocalTime(
-                    latestPrediction.generatedAtLocal ??
-                      latestPrediction.generatedAt,
-                  )}{" "}
-                  KST
-                </p>
-              )}
               <p
                 className="mt-1 text-violet-300"
                 title={`Median first occurrence of the daily 15L maximum across ${HISTORICAL_PEAK_REFERENCE.sampleSize} complete days (${HISTORICAL_PEAK_REFERENCE.firstDate}–${HISTORICAL_PEAK_REFERENCE.lastDate}).`}
@@ -2424,11 +2239,7 @@ export default function SeoulDayPage() {
                 {dayData === undefined
                   ? "Loading telemetry…"
                   : refreshState.message ||
-                    `${
-                      metarRows.length + amosDisplayRows.length
-                    } observations · ${
-                      latestPrediction?.hourlyCurve?.length ?? 0
-                    } forecast points`}
+                    `${metarRows.length + amosDisplayRows.length} observations`}
               </p>
               {isToday && Number.isFinite(currentSeoulMinute) && (
                 <button
@@ -2486,7 +2297,7 @@ export default function SeoulDayPage() {
                   </p>
                   <p className="mt-2 text-sm text-slate-600">
                     {hasCloudGuidance
-                      ? "No temperature tracker has been generated for this date; hourly cloud guidance is shown above."
+                      ? "No temperature observations are available for this date; hourly cloud guidance is shown above."
                       : "This Seoul local date has no stored RKSI observations."}
                   </p>
                 </div>
