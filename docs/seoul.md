@@ -85,12 +85,14 @@ The Seoul page now has one active forecast source: **Weather.com**. It does not
 collect, select, blend, or display another provider for the Seoul high marker
 or forecast cloud guidance.
 
-The Weather.com forecast is deliberately requested for its canonical Seoul
-city location, not the RKSI airport point. This matches the Weather.com Seoul
-forecast users see: during the 2026-07-29 KST verification the Seoul location
-returned a 32 °C calendar-day high, while the RKSI point returned 29 °C. The
-chart therefore labels the marker `Weather.com · Seoul`; its AMOS and METAR
-observation lines remain RKSI/Incheon measurements.
+The Weather.com forecast is requested explicitly for Incheon International
+Airport with `icaoCode=RKSI`, not a Seoul city place ID or a
+coordinate-to-locality lookup. During live verification on 2026-07-29 KST,
+Weather.com's location service returned `airportName=Incheon Intl Airport` and
+`icaoCode=RKSI`; the former coordinate lookup resolved to the `Unseo-dong`
+neighborhood without an airport identifier. The chart therefore labels the
+marker `Weather.com · RKSI`, matching its RKSI/Incheon AMOS and METAR
+observation lines.
 
 The two Weather.com products have separate jobs:
 

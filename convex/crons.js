@@ -247,9 +247,9 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
-// Captures immutable Weather.com Seoul daily and hourly forecasts. The daily
-// calendar high supplies the chart value; hourly values supply its time estimate,
-// revision history, and observed-versus-forecast diagnostics.
+// Captures immutable Weather.com RKSI airport daily and hourly forecasts. The
+// daily calendar high supplies the chart value; hourly values supply its time
+// estimate, revision history, and observed-versus-forecast diagnostics.
 crons.cron(
   "seoul_weathercom_forecast_every_15_min",
   "2,17,32,47 * * * *",

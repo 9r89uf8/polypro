@@ -1497,7 +1497,7 @@ function weathercomTooltipDetails(point, unit) {
 
 function providerPeakLabel(signal) {
   const knownLabels = {
-    weathercom: "Weather.com · Seoul",
+    weathercom: "Weather.com · RKSI",
   };
   const provider = String(signal?.provider ?? "");
   return (
@@ -1623,7 +1623,7 @@ function selectLatestCaptureHourlyProviderPeak(
   }
   return {
     provider: "weathercom",
-    providerLabel: "Weather.com · Seoul",
+    providerLabel: "Weather.com · RKSI",
     minute,
     temperature: daily[dailyTemperatureField],
     peakTimeUtc: peak.forecastTimeUtc,
@@ -2394,7 +2394,7 @@ export default function SeoulDayPage() {
   );
   const predictionDashboard = useQuery(
     "seoulWeather:getHighPredictionDashboard",
-    isDateValid ? { date } : "skip",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
   const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
@@ -3061,7 +3061,7 @@ export default function SeoulDayPage() {
               {preferredProviderPeak && (
                 <p
                   className="text-rose-300"
-                  title="The temperature is Weather.com's Seoul calendar-day high. The time is the first tied maximum in its returned hourly values."
+                  title="The temperature is Weather.com's RKSI airport calendar-day high. The time is the first tied maximum in its returned hourly values."
                 >
                   {preferredProviderPeak.providerLabel} forecast high ·{" "}
                   {preferredProviderPeak.temperature.toFixed(1)}°{unit} · first
@@ -3248,7 +3248,8 @@ export default function SeoulDayPage() {
             cloud-cover percentages.
           </p>
           <p>
-            NOAA TGFTP METAR · KMA AMOS MOBILE FEED · WEATHER.COM SEOUL FORECAST
+            NOAA TGFTP METAR · KMA AMOS MOBILE FEED · WEATHER.COM RKSI AIRPORT
+            FORECAST
           </p>
         </footer>
       </div>

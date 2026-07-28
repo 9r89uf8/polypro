@@ -12,8 +12,6 @@ const WEATHERCOM_DAILY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast
 const WEATHERCOM_HOURLY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/hourly/10day`;
 const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
 const WEATHERCOM_FALLBACK_API_KEY = "71f92ea9dd2f4790b92ea9dd2f779061";
-const SEOUL_WEATHERCOM_PLACE_ID =
-  "3bee6716da8e17a02afd2a6ab2d45025839d2616b95bb871cbea1cfc6f15018e";
 const RKSI_REPRESENTATIVE_RUNWAY_NO = "2";
 const RKSI_REPRESENTATIVE_RUNWAY_DIRECTION = "15L";
 const MILLIS_PER_MINUTE = 60 * 1000;
@@ -318,7 +316,7 @@ function getWeatherComApiKey() {
 }
 
 async function fetchWeatherComDailyForecast({
-  placeId,
+  icaoCode,
   durationDays,
   unit,
   language,
@@ -326,7 +324,7 @@ async function fetchWeatherComDailyForecast({
   timeZone,
 }) {
   const url = new URL(WEATHERCOM_DAILY_FORECAST_URL);
-  url.searchParams.set("placeid", placeId);
+  url.searchParams.set("icaoCode", icaoCode);
   url.searchParams.set("units", toWeatherComUnits(unit));
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
@@ -420,14 +418,14 @@ function normalizeWeatherComHourlyRows(payload, requestedUnit, timeZone) {
 }
 
 async function fetchWeatherComHourlyForecast({
-  placeId,
+  icaoCode,
   unit,
   language,
   apiKey,
   timeZone,
 }) {
   const url = new URL(WEATHERCOM_HOURLY_FORECAST_URL);
-  url.searchParams.set("placeid", placeId);
+  url.searchParams.set("icaoCode", icaoCode);
   url.searchParams.set("units", toWeatherComUnits(unit));
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
@@ -480,7 +478,7 @@ export const getDayPageWeather = actionGeneric({
       }
       try {
         const days = await fetchWeatherComDailyForecast({
-          placeId: SEOUL_WEATHERCOM_PLACE_ID,
+          icaoCode: SEOUL_STATION.stationIcao,
           durationDays: 5,
           unit,
           language,
@@ -620,7 +618,7 @@ export const collectForecastSnapshot = internalActionGeneric({
       (async () => {
         try {
           const rows = await fetchWeatherComDailyForecast({
-            placeId: SEOUL_WEATHERCOM_PLACE_ID,
+            icaoCode: stationIcao,
             durationDays: 5,
             unit: "metric",
             language: DEFAULT_WEATHERCOM_LANGUAGE,
@@ -639,7 +637,7 @@ export const collectForecastSnapshot = internalActionGeneric({
       (async () => {
         try {
           const rows = await fetchWeatherComHourlyForecast({
-            placeId: SEOUL_WEATHERCOM_PLACE_ID,
+            icaoCode: stationIcao,
             unit: "metric",
             language: DEFAULT_WEATHERCOM_LANGUAGE,
             apiKey,
@@ -984,7 +982,7 @@ function buildWeatherComProvider({
       : null;
   const detail = {
     provider: "weathercom",
-    label: "Weather.com · Seoul",
+    label: "Weather.com · RKSI",
     status: usable ? WEATHER_STATUS.OK : WEATHER_STATUS.ERROR,
     ...(!usable
       ? {

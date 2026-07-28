@@ -53,25 +53,28 @@ on a forecast-provider response.
 
 Peak timing has two deliberately separate visual references:
 
-- a rose point, vertical line, and in-plot label mark Weather.com's Seoul
-  calendar-day high and the first tied maximum in its returned hourly values;
+- a rose point, vertical line, and in-plot label mark Weather.com's RKSI
+  airport calendar-day high and the first tied maximum in its returned hourly
+  values;
 - a violet historical reference shows the median first occurrence of the daily
   15L maximum at `13:44 KST`, with a low-opacity middle-50% band from
   `12:20–14:39 KST`.
 
 The marker is Weather.com-only. Its vertical value is
-`calendarDayTemperatureMax` from Weather.com's Seoul daily forecast. Its
-horizontal position is the earliest tied maximum among Weather.com's hourly
-temperatures for the same date. The latter is a discrete peak-time estimate,
-not an exact instant. Weather.com's daily and hourly products can disagree, so
-the UI does not claim that the daily maximum literally occurs at that hourly
-value.
+`calendarDayTemperatureMax` from Weather.com's RKSI airport daily forecast.
+Its horizontal position is the earliest tied maximum among Weather.com's
+hourly temperatures for the same date. The latter is a discrete peak-time
+estimate, not an exact instant. Weather.com's daily and hourly products can
+disagree, so the UI does not claim that the daily maximum literally occurs at
+that hourly value.
 
-Both calls use Weather.com's canonical Seoul-city place rather than RKSI's
-airport coordinates. This is why the marker is labeled `Weather.com · Seoul`
-while the observed AMOS and METAR lines remain RKSI/Incheon data. Live
-verification on 2026-07-29 KST returned 32 °C for Seoul and 29 °C for the RKSI
-point.
+Both calls select Incheon International Airport explicitly with
+`icaoCode=RKSI`, rather than Weather.com's canonical Seoul-city place ID or a
+coordinate-to-locality lookup. This is why the marker is labeled
+`Weather.com · RKSI`. Live Weather.com location verification on 2026-07-29 KST
+returned `airportName=Incheon Intl Airport` and `icaoCode=RKSI`; the former
+coordinate lookup resolved to the `Unseo-dong` neighborhood without an airport
+identifier.
 
 For today and future dates, the chart can read a fresh Weather.com capture
 directly so provider revisions appear after the next scheduled capture. The
@@ -244,7 +247,8 @@ behavior.
 ## Forecast-capture data dependency
 
 The page subscribes to
-`seoulWeather:getHighPredictionDashboard({ date })`. The route consumes:
+`seoulWeather:getHighPredictionDashboard({ stationIcao: "RKSI", date })`. The
+route consumes:
 
 - `latestPrediction.providerDetails`, filtered to `provider="weathercom"`, for
   a retained daily high, hourly time estimate, and capture age
@@ -289,11 +293,12 @@ trigger recomputation.
 ## Backend prediction collectors
 
 - `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
-  `:32`, and `:47` and stores Weather.com Seoul daily and hourly results and
-  errors together. Daily and hourly status/error fields remain independent.
-  The hourly response has its own completion timestamp, and each successful
-  hourly value is also appended to query-friendly immutable history. A usable
-  latest capture can remain an explicit fallback for at most twelve hours.
+  `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
+  and errors together. Both requests use the explicit `icaoCode=RKSI`
+  selector. Daily and hourly status/error fields remain independent. The
+  hourly response has its own completion timestamp, and each successful hourly
+  value is also appended to query-friendly immutable history. A usable latest
+  capture can remain an explicit fallback for at most twelve hours.
 - `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
   date. Material changes create immutable revisions; no-op runs retain the
   preceding revision, with a 30-minute heartbeat.
@@ -421,7 +426,7 @@ times.
 
 ### `seoulForecastCaptures`
 
-Immutable Weather.com Seoul forecast captures. Daily rows hold the
+Immutable Weather.com RKSI airport forecast captures. Daily rows hold the
 calendar-day high; hourly rows hold temperature, time, phrase, and cloud cover.
 Daily and hourly status/error fields are independent, so a partial provider
 response remains diagnosable. The hourly product's optional
