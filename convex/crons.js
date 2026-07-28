@@ -247,8 +247,9 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
-// Captures immutable Weather.com daily, Google hourly (when configured), and
-// Open-Meteo hourly forecasts for the RKSI 15L daily-high predictor.
+// Captures immutable Weather.com daily/hourly, Google hourly (when configured),
+// and Open-Meteo hourly forecasts for the RKSI 15L daily-high predictor and
+// Weather.com revision diagnostics.
 crons.cron(
   "seoul_forecast_capture_hourly",
   "2 * * * *",

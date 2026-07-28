@@ -42,11 +42,16 @@ Below the prediction is one full-day chart with two observed series:
   - captured by the AMOS minute-rollover watcher
   - cyan high-resolution line
   - silently uses a five-minute audit snapshot only when the matching
-    one-minute timestamp is missing
+    one-minute timestamp has no usable temperature
 
-The chart adds one forecast dataset, `15L high forecast`. It is the hourly curve
-from the latest prediction and is drawn as a clearly distinct amber dashed
-line. It does not add a five-minute AMOS series.
+The chart keeps the predictor's `15L high forecast` dataset. It is the hourly
+ensemble curve from the latest prediction and is drawn as a clearly distinct
+amber dashed line. Weather.com hourly guidance is an additional diagnostic
+layer: `Weather.com · latest stored` is a blue dashed curve and the
+capture-time-labeled morning baseline is a faint blue dotted curve. Material
+per-hour revisions receive signed badges such as `↑ +1.0 °C`. The Weather.com
+curves do not add a five-minute AMOS series and do not currently contribute to
+the predictor's hourly ensemble.
 
 The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
 is marked when the selected date is today. A date-specific orange sunset line
@@ -126,7 +131,12 @@ position keep the observed/forecast boundary visible on the 2,400-pixel chart.
 A collapsible semantic table lists all 24 hours, sources, values, ranges, and
 data coverage; the same information is attached to the chart for screen
 readers. METAR temperature tooltips retain the original sky/ceiling detail,
-while forecast temperature tooltips include cloud-cover percentage.
+while ensemble forecast temperature tooltips include cloud-cover percentage.
+Weather.com tooltips instead show the forecast-valid hour, the morning
+baseline, the latest captured value and capture time, the signed revision, and
+the matched AMOS temperature/departure when those values exist. A separate
+collapsible semantic table exposes the same per-hour revision and departure
+details without requiring pointer access to the canvas.
 
 The rest of the interface is deliberately compact:
 
@@ -142,6 +152,87 @@ The rest of the interface is deliberately compact:
 The previous correlation, publish-race, raw-METAR, and raw-observation panels
 are no longer part of the primary Seoul page.
 
+## Weather.com hourly revision diagnostics
+
+Weather.com's daily maximum and hourly forecast are captured as separate
+products with separate status and error fields. A successful daily response
+does not hide a failed hourly response in the hourly diagnostics, and a
+successful hourly response does not change the daily product's health.
+The daily product uses `weathercomStatus`/`weathercomError`; the hourly product
+uses `weathercomHourlyStatus`/`weathercomHourlyError` and
+`weathercomHourlyRows`. The hourly product also records its own response
+completion timestamp instead of borrowing the time from before the parallel
+provider requests began. That provider-specific timestamp is the forecast
+vintage used by revision and no-lookahead logic.
+The hourly rows preserve both their forecast-valid timestamps and their
+capture timestamps, so revisions can be reconstructed rather than overwriting
+the preceding value.
+
+For a selected Seoul-local date, the morning baseline is the first successful
+Weather.com hourly capture from `05:00–07:00 KST`. If that capture is missing,
+the latest successful capture from `03:00–05:00 KST` is an explicit fallback.
+A capture outside that four-hour window is not mislabeled as a morning
+baseline. The UI always shows the selected capture time and identifies the
+pre-05:00 fallback. A baseline value is used only when its capture is strictly
+earlier than the forecast-valid hour. The latest curve uses the newest
+successful stored value for each forecast-valid hour. A revision is the
+difference from that hour's preceding distinct stored prediction; unchanged
+captures do not create a change badge.
+
+The hourly collector runs only at minute `:02`, so the UI describes the capture
+where a change first appeared as **first detected**. It must not claim that
+Weather.com published the revision at that exact time; the upstream change
+could have happened at any point since the preceding successful capture.
+
+Observed-departure scoring deliberately prevents lookahead:
+
+- for an already observed forecast-valid hour, the comparison forecast is the
+  latest successful capture whose capture time is strictly before that hour;
+- an `08:02` capture can therefore never be used to score the `08:00`
+  observation;
+- the representative `15L` AMOS observation must be within ±5 minutes of the
+  forecast-valid time, otherwise that hour remains unmatched;
+- departure is `actual AMOS temperature - Weather.com forecast temperature`.
+
+The Weather.com running signal uses the median of the latest three matched
+hourly departures. It requires at least two matched hours. A median of
+`+0.5 °C` or warmer is labeled running warm, `-0.5 °C` or cooler is labeled
+running cool, and values between those thresholds are on track. This is
+separate from the predictor's existing live-bias status.
+
+The chart shows both the latest stored Weather.com curve and the faint,
+capture-time-labeled morning baseline. Revision badges identify every
+forecast-valid hour whose latest distinct change is at least `1.0 °C`; a
+`31 °C` to `28 °C` change therefore remains visible as `↓ -3.0 °C` after later
+captures repeat `28 °C`. Smaller changes remain available in the tooltip
+without adding label clutter. Tooltips and the semantic details table expose
+the baseline, latest, and previous distinct values, signed change,
+first-detection capture time, matched AMOS value, and departures against the
+morning baseline and the selected latest strictly pre-hour forecast when
+available. The compact three-part summary reports actuals versus the selected
+morning capture, actuals versus latest pre-hour guidance, the matched-hour
+counts, and the latest Weather.com forecast peak.
+
+A separate `Live vs latest pre-observation curve` line chooses the newest
+successful Weather.com capture that is strictly older than the freshest AMOS
+observation and has valid hourly points bracketing that observation time. It
+does not substitute a lone future hour or interpolate across a gap longer than
+90 minutes. Near the end of the selected day, the following day's `00:00` row
+is eligible only as that interpolation bracket; it is not added to the
+selected day's chart, peak, or revision history. This live result is not
+substituted for the strictly pre-hour history used by the scored running
+signal. If the newest hourly attempt failed or no collector attempt has
+completed for more than 90 minutes, the UI keeps the last stored history
+visible but marks it stale and exposes the latest attempt error/time.
+Unavailable baseline or observation data is shown as unavailable rather than
+fabricated.
+
+Weather.com hourly guidance is diagnostic-only for now. It is not assigned an
+hourly ensemble weight, does not alter `predictedHighC`, and does not duplicate
+the existing Weather.com daily-provider signal. This separation allows the
+revision and observed-departure history to be evaluated before it affects the
+daily-high model.
+
 ## Prediction dashboard behavior
 
 The page subscribes to
@@ -152,6 +243,8 @@ The page subscribes to
 - `summary`: observed-day aggregates
 - `evaluation`: current/final forecast evaluation
 - `latestForecastCapture`: the most recent provider capture and provider health
+- `weathercomHourlyDiagnostics`: baseline/latest curves, detected revisions,
+  matched AMOS departures, forecast peak, and running states
 - `accuracy`: finalized accuracy fields when the day is complete
 
 The UI treats every part of the dashboard as optional. While the query is
@@ -199,8 +292,11 @@ trigger recomputation.
 ## Prediction collectors
 
 - `seoul_forecast_capture_hourly` runs at minute `:02` and stores independent
-  Weather.com, Google Weather, and Open-Meteo results and errors. A usable
-  provider capture can remain an explicit fallback for at most twelve hours.
+  Weather.com daily, Weather.com hourly, Google Weather hourly, and Open-Meteo
+  hourly results and errors. Weather.com's daily and hourly health remain
+  separate even though both products are requested in the same collector run.
+  A usable provider-product capture can remain an explicit fallback for at
+  most twelve hours.
 - `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
   date. Material changes create immutable revisions; no-op runs retain the
   preceding revision, with a 30-minute heartbeat.
@@ -229,10 +325,11 @@ separate chart series.
 
 Rows stored before cadence tagging remain valid because the schema field is
 optional. The displayed AMOS line starts with legacy/five-minute audit rows and
-then replaces every matching timestamp with its one-minute capture:
+then replaces every matching timestamp with its usable one-minute capture:
 
 - normal live coverage therefore shows only the one-minute observations
-- a five-minute or legacy row appears only where no one-minute row exists
+- a five-minute or legacy row appears only where no usable one-minute
+  temperature exists
 - fallback points are identified as audit fallbacks in the tooltip
 
 ## Fast one-minute AMOS collector
@@ -326,10 +423,36 @@ times.
 
 ### `seoulForecastCaptures`
 
-Immutable multi-provider forecast captures. Weather.com contributes a daily
-high while Google Weather and Open-Meteo can contribute hourly curves. Provider
-status and error text are stored independently so a missing key or failed
-provider does not discard the usable inputs.
+Immutable multi-provider forecast captures. Weather.com contributes both daily
+forecast rows and its raw hourly curve, while Google Weather and Open-Meteo
+also contribute hourly curves. Weather.com's daily and hourly status/error
+fields are separate; the other provider status and errors remain independent
+as well. A missing key or one failed product therefore does not discard usable
+inputs from another product. The hourly product also stores its own
+response-completion timestamp and Seoul-local capture date, so its children
+are never backdated to the start of the parallel collector run.
+
+### `seoulHourlyForecastPredictions`
+
+Immutable, query-friendly child rows for each Weather.com hourly value. Each
+row links to its parent `seoulForecastCaptures` record and stores the provider,
+station, Seoul target date, forecast-valid timestamp, capture timestamp,
+temperature, and available phrase/cloud metadata. Captures are appended, not
+updated in place, so all predictions made for the same forecast-valid hour
+remain available.
+
+The table has `by_station_provider_target_capturedAt` for rebuilding a date's
+latest and morning-baseline curves,
+`by_station_provider_valid_capturedAt` for the ordered revision history and
+strictly pre-hour lookup for one valid timestamp, and
+`by_forecast_capture_id` for tracing child rows to one raw capture. Revision
+deltas and AMOS departures are derived at query time rather than stored as
+mutable truth.
+
+The table intentionally retains every detected hourly vintage and therefore
+adds up to 48 child rows per successful hourly capture. There is no historical
+backfill for captures made before Weather.com hourly collection was deployed,
+and there is currently no automatic retention/archive policy.
 
 ### `seoulHighPredictions`
 

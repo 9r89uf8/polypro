@@ -12,12 +12,16 @@
 - KORD forecast snapshots and current temperature sources:
   - `docs/kord-forecast-snapshots.md`
   - Summary: documents `/kord/forecast-snapshots` UI, hourly collector in `convex/forecastCollector.js`, Microsoft+source ingest details, NOAA official-max table wiring, and provider-extension plan.
+- GitHub and Vercel deployment:
+  - `docs/github-vercel-deployment.md`
+  - Summary: documents the safe branch/PR workflow, Vercel's `main` deployment trigger, Convex deployment order, production verification, and recovery from common push/deployment problems.
 
 When editing `/kord/month` or `/kord/day/[date]`, update `docs/kord-pages.md` in the same change.
 When editing live METAR ingest functions in `convex/weather.js` (`pollLatestNoaaMetar`, `backfillTodayOfficialFromIem`, `upsertOfficialObservation`) or `/kord/day/[date]` live-mode polling behavior, update `docs/kord-live-today.md` in the same change.
 When editing `/kord/today`, `convex/kordPhone.js`, `convex/kordPhoneNode.js`, `convex/http.js`, `convex/crons.js`, or `kordPhoneCalls` schema fields/indexes, update `docs/kord-phone-calls.md` in the same change.
 When editing `/kord/forecast-snapshots`, `convex/forecastCollector.js`, or `kordForecastSnapshots` schema fields/indexes, update `docs/kord-forecast-snapshots.md` in the same change.
-
+When asked to push or deploy this repository, follow `docs/github-vercel-deployment.md`. Never force-push `main`.
 
 # important
+
 Next.js build does not run in this environment because the Linux SWC binary is missing.
