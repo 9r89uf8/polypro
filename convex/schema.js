@@ -44,6 +44,8 @@ const seoulProviderDetail = v.object({
   captureAgeMinutes: v.optional(v.number()),
   peakTimeUtc: v.optional(v.number()),
   peakTimeLocal: v.optional(v.string()),
+  peakSourceCapturedAt: v.optional(v.number()),
+  peakSourceCapturedAtLocal: v.optional(v.string()),
   pointCount: v.number(),
 });
 
@@ -1042,12 +1044,17 @@ export default defineSchema({
         nightPhrase: v.optional(v.string()),
       }),
     ),
-    googleStatus: seoulProviderStatus,
+    weathercomHourlyStatus: v.optional(seoulProviderStatus),
+    weathercomHourlyError: v.optional(v.string()),
+    weathercomHourlyRows: v.optional(v.array(seoulHourlyForecastRow)),
+    // Legacy fields remain optional so existing captures continue to validate.
+    // New Seoul captures and all page selectors use Weather.com only.
+    googleStatus: v.optional(seoulProviderStatus),
     googleError: v.optional(v.string()),
-    googleHourlyRows: v.array(seoulHourlyForecastRow),
-    openMeteoStatus: seoulProviderStatus,
+    googleHourlyRows: v.optional(v.array(seoulHourlyForecastRow)),
+    openMeteoStatus: v.optional(seoulProviderStatus),
     openMeteoError: v.optional(v.string()),
-    openMeteoHourlyRows: v.array(seoulHourlyForecastRow),
+    openMeteoHourlyRows: v.optional(v.array(seoulHourlyForecastRow)),
     createdAt: v.number(),
   }).index("by_station_capturedAt", ["stationIcao", "capturedAt"]),
 

@@ -1,6 +1,6 @@
 # RKSI: fastest current-temperature source
 
-Last researched: **2026-07-27 KST**.
+Last researched: **2026-07-29 KST**.
 
 ## Bottom line
 
@@ -81,75 +81,51 @@ chart path:
 
 ## RKSI 15L forecast capture and backend evaluation
 
-The Seoul prediction backend targets one precise value: the highest 0.1 °C
-temperature reported during the Seoul-local calendar day by the representative
-AMOS row `rwyNo=2`, `rwyDir=15L`. The target is not a central-Seoul city
-temperature and is not the rounded METAR maximum. Its revisions remain stored
-for historical provider-peak retention and evaluation, but the page does not
-render the backend predicted maximum, live ensemble temperature curve, or
-tracker peak window. The only forecast-temperature overlay is the native
-maximum and first tied peak hour from one selected complete hourly provider.
+The Seoul page now has one active forecast source: **Weather.com**. It does not
+collect, select, blend, or display another provider for the Seoul high marker
+or forecast cloud guidance.
 
-The retained backend model is a transparent live ensemble:
+The Weather.com forecast is deliberately requested for its canonical Seoul
+city location, not the RKSI airport point. This matches the Weather.com Seoul
+forecast users see: during the 2026-07-29 KST verification the Seoul location
+returned a 32 °C calendar-day high, while the RKSI point returned 29 °C. The
+chart therefore labels the marker `Weather.com · Seoul`; its AMOS and METAR
+observation lines remain RKSI/Incheon measurements.
 
-- Weather.com contributes a daily-high forecast and remains an advisory or
-  fallback input.
-- Google Weather contributes an hourly curve when
-  `GOOGLE_WEATHER_API_KEY` is configured.
-- Open-Meteo contributes an hourly curve without requiring a key.
-- The freshest 15L observation, when no more than ten minutes old, measures how
-  warm or cool the live sensor is running against the hourly forecast. That
-  bias decays with forecast lead time instead of being applied indefinitely.
-- Fifteen-, thirty-, and sixty-minute AMOS slopes describe the recent warming
-  or cooling trend.
+The two Weather.com products have separate jobs:
 
-Provider forecasts are captured immutably every hour. The backend prediction is
-checked every five minutes by its scheduled job; the page's manual `Sync now`
-action no longer triggers it. A new immutable revision is stored for a material
-change in the temperature, status, peak window, observed high, or provider
-capture; unchanged runs reuse the previous revision, with a periodic heartbeat.
+- Daily `/v3/wx/forecast/daily/5day`
+  `calendarDayTemperatureMax` supplies the displayed maximum. This field
+  covers the local midnight-to-midnight calendar day.
+- Hourly `/v3/wx/forecast/hourly/10day` temperature values supply the
+  horizontal time estimate. The earliest returned hour wins when the hottest
+  hourly value is tied. Captures retain the five calendar dates covered by the
+  daily product.
+- Hourly `cloudCover` supplies coming-hour cloud guidance.
 
-Every backend prediction record contains:
+The rose chart point consequently uses the Weather.com daily high as its
+vertical value and the first hottest Weather.com hourly value as its horizontal
+position. That hour is a discrete **peak-time estimate**, not an exact instant.
+The daily and hourly products can occasionally disagree, so the UI does not
+claim that the daily maximum literally occurs at that hourly value.
 
-```text
-predicted high and confidence interval
-most likely one-hour peak window
-observed 15L high and first occurrence so far
-current 15L temperature and observation age
-expected temperature now and live bias
-15/30/60-minute temperature slopes
-provider inputs and capture ages
-each complete hourly provider's native full-day maximum and peak forecast hour
-hourly ensemble curve
-on-track / running-warm / running-cool / revised / peak-passed status
-plain-language reason
-```
+Forecasts are captured immutably every 15 minutes and the UI repeats the
+capture time because the provider can revise both the high and hourly timing.
+Weather.com's today response begins at the current hour rather than replaying
+elapsed hours. The backend therefore merges recent immutable Weather.com
+captures by forecast timestamp: the newest value replaces each still-returned
+hour, while an elapsed hour remains available from the last response that
+contained it. The merge reads 112 captures, covering 28 hours at the current
+cadence. A fresh direct capture is the UI fallback before a new backend revision
+exists. When the selected hourly maximum came from an earlier capture, the UI
+shows that peak-hour source time separately from the latest provider capture.
 
-The prediction has a hard truth constraint: it can never be lower than the
-maximum already observed by 15L. A stale 15L row is still valid for the
-observed daily maximum but is not used as the current reading or live bias.
-Transient provider failures can reuse that provider's latest successful
-capture for up to twelve hours, and the provider capture age remains visible in
-the stored prediction. The backend-only tracker retains a bias-adjusted warmest
-remaining hour for evaluation, but the page does not display it. Separately, a
-provider's native full-calendar-day maximum and peak forecast hour are stored
-only when its capture contains all 24 Seoul-local hours. The first occurrence
-wins when temperatures tie.
-
-The page selects one marker from the highest-weight usable, complete hourly
-provider. Open-Meteo (`0.45`) is preferred over Google Weather (`0.35`);
-Weather.com is excluded because its daily product has no peak hour. The value
-and hour always come from the same native provider capture. This is a
-deterministic operational rule rather than a provider-accuracy ranking. Today
-and future dates use the latest forecast capture immediately; historical dates
-use the pair retained in their immutable prediction revision. Weather.com's
-daily high can therefore differ substantially from the visible hourly-provider
-marker; the page does not combine its temperature with another provider's hour.
-
-Open-Meteo is requested with one UTC past day in addition to its forecast
-window. Seoul's `00:00–08:00 KST` hours fall on the preceding UTC date, so this
-extra range is required before a current-day capture can pass the 24-hour
-coverage check. A partial local day never receives a full-day peak label.
+The backend still stores numbered evaluation revisions, but the page does not
+render its predicted maximum, temperature curve, or tracker window. Model
+version `rksi15l-weathercom-v4` records only a Weather.com provider detail and a
+Weather.com hourly curve. Old stored provider fields and revisions remain in
+the database solely for schema compatibility; page selectors explicitly ignore
+them and do not backfill a marker when no Weather.com peak-time estimate exists.
 
 At 00:10 KST the completed day is finalized against the canonical 15L series.
 One-minute rows win when duplicate timestamps also have five-minute or legacy
@@ -162,10 +138,10 @@ statistics are instead recorded at fixed 09:00, 12:00, and 15:00 KST cutoffs.
 The AMOS 15L display record also exposes dew point, QNH, average/minimum/maximum
 wind direction and speed, crosswind/headwind-tailwind fields, visibility, RVR,
 precipitation, and cloud fields in the raw payload. These remain possible
-backend evaluation inputs, but model version `rksi15l-ensemble-v3` uses provider
-temperature curves plus live temperature bias and trend. Its output is not a
-page forecast. Fixed-cutoff scores should accumulate before adding more
-features or claiming that a more complex model is better.
+backend evaluation inputs, but model version `rksi15l-weathercom-v4` keeps the
+forecast side Weather.com-only. Its output is not a separate page forecast.
+Fixed-cutoff scores should accumulate before adding more features or claiming
+that a more complex model is better.
 
 ## Ranked findings
 

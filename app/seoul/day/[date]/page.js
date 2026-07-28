@@ -400,22 +400,6 @@ const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_PROVIDER_CAPTURE_AGE_MINUTES = 12 * 60;
-const HOURLY_PROVIDER_CONFIGS = Object.freeze([
-  {
-    provider: "open_meteo",
-    providerLabel: "Open-Meteo",
-    weight: 0.45,
-    statusField: "openMeteoStatus",
-    rowsField: "openMeteoHourlyRows",
-  },
-  {
-    provider: "google",
-    providerLabel: "Google Weather",
-    weight: 0.35,
-    statusField: "googleStatus",
-    rowsField: "googleHourlyRows",
-  },
-]);
 const METAR_SKY_DEFAULT_HOLD_MINUTES = 30;
 const METAR_SKY_MAX_HOLD_MINUTES = 45;
 const METAR_SKY_AMOUNT_RANK = Object.freeze({
@@ -1015,8 +999,6 @@ function forecastCloudHour(hour, forecast) {
   const rawCoverPct = forecast?.cloudCoverPct;
   if (Number.isFinite(rawCoverPct)) {
     const coverPct = Math.round(rawCoverPct / 5) * 5;
-    const providerCount =
-      forecast.cloudProviderCount ?? forecast.providerCount ?? 1;
     return {
       hour,
       startMinute,
@@ -1030,9 +1012,7 @@ function forecastCloudHour(hour, forecast) {
       summaryLabel: `${cloudCoverDescription(coverPct)} · ${coverPct}%`,
       detail: `${cloudCoverDescription(
         coverPct,
-      )}; ${coverPct}% forecast total cloud cover; ${providerCount} ${
-        providerCount === 1 ? "provider" : "providers"
-      }.`,
+      )}; ${coverPct}% Weather.com hourly forecast total cloud cover.`,
     };
   }
 
@@ -1132,59 +1112,26 @@ function buildHourlyCloudSegments(hourlyCloudCover, currentMinute) {
   });
 }
 
-function buildForecastCloudRows({ predictionRows, forecastCapture, date }) {
-  const storedPredictionRows = (predictionRows ?? []).filter((row) =>
-    Number.isFinite(row.cloudCoverPct),
-  );
-  if (storedPredictionRows.length) {
-    return storedPredictionRows;
+function buildForecastCloudRows({ forecastCapture, date, nowMs }) {
+  const capturedAt = Number(forecastCapture?.capturedAt);
+  if (
+    forecastCapture?.weathercomHourlyStatus !== "ok" ||
+    !Number.isFinite(capturedAt) ||
+    (Number.isFinite(nowMs) &&
+      (capturedAt > nowMs + 60 * 1000 ||
+        nowMs - capturedAt > MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000))
+  ) {
+    return [];
   }
 
-  const points = new Map();
-  const providerRows = [
-    {
-      rows:
-        forecastCapture?.googleStatus === "ok"
-          ? forecastCapture.googleHourlyRows
-          : [],
-      weight: 0.35,
-    },
-    {
-      rows:
-        forecastCapture?.openMeteoStatus === "ok"
-          ? forecastCapture.openMeteoHourlyRows
-          : [],
-      weight: 0.45,
-    },
-  ];
-  for (const provider of providerRows) {
-    const { rows, weight } = provider;
-    for (const row of rows ?? []) {
-      if (row.date !== date || !Number.isFinite(row.cloudCoverPct)) {
-        continue;
-      }
-      const key = row.forecastTimeUtc ?? row.forecastTimeLocal;
-      const point = points.get(key) ?? {
-        forecastTimeUtc: row.forecastTimeUtc,
-        forecastTimeLocal: row.forecastTimeLocal,
-        values: [],
-      };
-      point.values.push({ value: row.cloudCoverPct, weight });
-      points.set(key, point);
-    }
-  }
-
-  return [...points.values()]
+  return (forecastCapture.weathercomHourlyRows ?? [])
+    .filter((row) => row.date === date && Number.isFinite(row.cloudCoverPct))
     .sort((left, right) => left.forecastTimeUtc - right.forecastTimeUtc)
-    .map((point) => ({
-      forecastTimeUtc: point.forecastTimeUtc,
-      forecastTimeLocal: point.forecastTimeLocal,
-      cloudCoverPct:
-        point.values.reduce(
-          (sum, value) => sum + value.value * value.weight,
-          0,
-        ) / point.values.reduce((sum, value) => sum + value.weight, 0),
-      cloudProviderCount: point.values.length,
+    .map((row) => ({
+      forecastTimeUtc: row.forecastTimeUtc,
+      forecastTimeLocal: row.forecastTimeLocal,
+      cloudCoverPct: row.cloudCoverPct,
+      cloudProviderCount: 1,
     }));
 }
 
@@ -1216,8 +1163,7 @@ function formatLocalTime(value, includeSeconds = false) {
 
 function providerPeakLabel(signal) {
   const knownLabels = {
-    google: "Google Weather",
-    open_meteo: "Open-Meteo",
+    weathercom: "Weather.com · Seoul",
   };
   const provider = String(signal?.provider ?? "");
   return (
@@ -1236,6 +1182,9 @@ function selectStoredHourlyProviderPeak(providerDetails, unit, nowMs = null) {
   return (
     (Array.isArray(providerDetails) ? providerDetails : [])
       .map((signal) => {
+        if (signal?.provider !== "weathercom") {
+          return null;
+        }
         const minute = parseMinute(signal?.dailyPeakTimeLocal);
         const temperature = signal?.[temperatureField];
         const weight = Number(signal?.weight);
@@ -1267,6 +1216,8 @@ function selectStoredHourlyProviderPeak(providerDetails, unit, nowMs = null) {
           temperature,
           peakTimeUtc: signal.dailyPeakTimeUtc,
           peakTimeLocal: signal.dailyPeakTimeLocal,
+          peakSourceCapturedAt: signal.peakSourceCapturedAt,
+          peakSourceCapturedAtLocal: signal.peakSourceCapturedAtLocal,
           weight,
           capturedAt,
           capturedAtLocal: signal.capturedAtLocal,
@@ -1299,72 +1250,57 @@ function selectLatestCaptureHourlyProviderPeak(
     return null;
   }
 
-  const temperatureField = unit === "C" ? "tempC" : "tempF";
-  return (
-    HOURLY_PROVIDER_CONFIGS.map((config) => {
-      if (forecastCapture?.[config.statusField] !== "ok") {
-        return null;
-      }
-      const rows = (
-        Array.isArray(forecastCapture?.[config.rowsField])
-          ? forecastCapture[config.rowsField]
-          : []
-      ).filter(
-        (row) =>
-          row?.date === date &&
-          Number.isFinite(row?.forecastTimeUtc) &&
-          Number.isFinite(row?.[temperatureField]),
-      );
-      const coveredHours = new Set(
-        rows
-          .map((row) => parseMinute(row.forecastTimeLocal))
-          .filter(Number.isFinite)
-          .map((minute) => Math.floor(minute / 60)),
-      );
-      if (
-        coveredHours.size !== 24 ||
-        !Array.from({ length: 24 }, (_, hour) => hour).every((hour) =>
-          coveredHours.has(hour),
-        )
-      ) {
-        return null;
-      }
-
-      let peak = null;
-      for (const row of rows) {
-        if (
-          !peak ||
-          row[temperatureField] > peak[temperatureField] ||
-          (row[temperatureField] === peak[temperatureField] &&
-            row.forecastTimeUtc < peak.forecastTimeUtc)
-        ) {
-          peak = row;
-        }
-      }
-      const minute = parseMinute(peak?.forecastTimeLocal);
-      if (!peak || !Number.isFinite(minute)) {
-        return null;
-      }
-      return {
-        provider: config.provider,
-        providerLabel: config.providerLabel,
-        minute,
-        temperature: peak[temperatureField],
-        peakTimeUtc: peak.forecastTimeUtc,
-        peakTimeLocal: peak.forecastTimeLocal,
-        weight: config.weight,
-        capturedAt,
-        capturedAtLocal: forecastCapture.capturedAtLocal,
-        source: "latest_capture",
-      };
-    })
-      .filter(Boolean)
-      .sort(
-        (left, right) =>
-          right.weight - left.weight ||
-          left.provider.localeCompare(right.provider),
-      )[0] ?? null
+  if (
+    forecastCapture?.weathercomStatus !== "ok" ||
+    forecastCapture?.weathercomHourlyStatus !== "ok"
+  ) {
+    return null;
+  }
+  const dailyTemperatureField = unit === "C" ? "maxTempC" : "maxTempF";
+  const hourlyTemperatureField = unit === "C" ? "tempC" : "tempF";
+  const daily = (forecastCapture.weathercomForecastDays ?? []).find(
+    (row) =>
+      row?.date === date && Number.isFinite(row?.[dailyTemperatureField]),
   );
+  const rows = (forecastCapture.weathercomHourlyRows ?? []).filter(
+    (row) =>
+      row?.date === date &&
+      Number.isFinite(row?.forecastTimeUtc) &&
+      Number.isFinite(row?.[hourlyTemperatureField]),
+  );
+  if (!daily || !rows.length) {
+    return null;
+  }
+
+  let peak = null;
+  for (const row of rows) {
+    if (
+      !peak ||
+      row[hourlyTemperatureField] > peak[hourlyTemperatureField] ||
+      (row[hourlyTemperatureField] === peak[hourlyTemperatureField] &&
+        row.forecastTimeUtc < peak.forecastTimeUtc)
+    ) {
+      peak = row;
+    }
+  }
+  const minute = parseMinute(peak?.forecastTimeLocal);
+  if (!peak || !Number.isFinite(minute)) {
+    return null;
+  }
+  return {
+    provider: "weathercom",
+    providerLabel: "Weather.com · Seoul",
+    minute,
+    temperature: daily[dailyTemperatureField],
+    peakTimeUtc: peak.forecastTimeUtc,
+    peakTimeLocal: peak.forecastTimeLocal,
+    peakSourceCapturedAt: peak.peakSourceCapturedAt,
+    peakSourceCapturedAtLocal: peak.peakSourceCapturedAtLocal,
+    weight: 1,
+    capturedAt,
+    capturedAtLocal: forecastCapture.capturedAtLocal,
+    source: "latest_capture",
+  };
 }
 
 function normalizePrediction(prediction) {
@@ -1498,7 +1434,7 @@ function buildChartData(metarRows, amosDisplayRows, providerPeak, unit) {
 
   if (providerPeak) {
     datasets.unshift({
-      label: `${providerPeak.providerLabel} daily forecast peak`,
+      label: `${providerPeak.providerLabel} daily high · hourly time estimate`,
       data: [
         {
           x: providerPeak.minute,
@@ -1643,21 +1579,27 @@ export default function SeoulDayPage() {
       unit,
     ],
   );
-  const preferredProviderPeak =
-    date >= today
-      ? (latestCaptureProviderPeak ?? storedProviderPeak)
-      : storedProviderPeak;
+  let preferredProviderPeak = storedProviderPeak;
+  if (
+    date >= today &&
+    latestCaptureProviderPeak &&
+    (!storedProviderPeak ||
+      latestCaptureProviderPeak.capturedAt > storedProviderPeak.capturedAt)
+  ) {
+    preferredProviderPeak = latestCaptureProviderPeak;
+  }
   const forecastCloudRows = useMemo(
     () =>
       buildForecastCloudRows({
-        predictionRows: latestPrediction?.hourlyCurve,
         forecastCapture: predictionDashboard?.latestForecastCapture,
         date,
+        nowMs: date >= today ? providerFreshnessNow : null,
       }),
     [
       date,
-      latestPrediction?.hourlyCurve,
       predictionDashboard?.latestForecastCapture,
+      providerFreshnessNow,
+      today,
     ],
   );
   const hourlyCloudCover = useMemo(
@@ -1799,9 +1741,11 @@ export default function SeoulDayPage() {
           minute: preferredProviderPeak?.minute,
           temperature: preferredProviderPeak?.temperature,
           label: preferredProviderPeak
-            ? `${preferredProviderPeak.providerLabel.toUpperCase()} PEAK HOUR · ${preferredProviderPeak.temperature.toFixed(
+            ? `${preferredProviderPeak.providerLabel.toUpperCase()} HIGH · ${preferredProviderPeak.temperature.toFixed(
                 1,
-              )}°${unit} · ${minuteLabel(preferredProviderPeak.minute)} KST`
+              )}°${unit} · FIRST HOURLY PEAK ${minuteLabel(
+                preferredProviderPeak.minute,
+              )} KST`
             : "",
         },
         seoulHourlyCloudCover: {
@@ -2208,11 +2152,11 @@ export default function SeoulDayPage() {
               {preferredProviderPeak && (
                 <p
                   className="text-rose-300"
-                  title="Highest-weight usable provider with all 24 Seoul-local forecast hours."
+                  title="The temperature is Weather.com's Seoul calendar-day high. The time is the first tied maximum in its returned hourly values."
                 >
-                  {preferredProviderPeak.providerLabel} forecast peak hour ·{" "}
-                  {preferredProviderPeak.temperature.toFixed(1)}°{unit} ·{" "}
-                  {minuteLabel(preferredProviderPeak.minute)} KST
+                  {preferredProviderPeak.providerLabel} forecast high ·{" "}
+                  {preferredProviderPeak.temperature.toFixed(1)}°{unit} · first
+                  hourly peak {minuteLabel(preferredProviderPeak.minute)} KST
                 </p>
               )}
               {preferredProviderPeak && (
@@ -2225,6 +2169,19 @@ export default function SeoulDayPage() {
                   KST
                 </p>
               )}
+              {preferredProviderPeak &&
+                Number.isFinite(preferredProviderPeak.peakSourceCapturedAt) &&
+                preferredProviderPeak.peakSourceCapturedAt + 60 * 1000 <
+                  preferredProviderPeak.capturedAt && (
+                  <p className="mt-1 text-rose-300/50">
+                    Peak-hour value retained from ·{" "}
+                    {formatLocalTime(
+                      preferredProviderPeak.peakSourceCapturedAtLocal ??
+                        preferredProviderPeak.peakSourceCapturedAt,
+                    )}{" "}
+                    KST
+                  </p>
+                )}
               <p
                 className="mt-1 text-violet-300"
                 title={`Median first occurrence of the daily 15L maximum across ${HISTORICAL_PEAK_REFERENCE.sampleSize} complete days (${HISTORICAL_PEAK_REFERENCE.firstDate}–${HISTORICAL_PEAK_REFERENCE.lastDate}).`}
@@ -2259,18 +2216,19 @@ export default function SeoulDayPage() {
               the sky is covered. Solid cells are past METAR observations. Their
               percentages are approximate ranges derived only from explicit
               cloud-amount reports. Diagonally patterned cells are upcoming
-              model forecasts. Hatched cells without a percentage mean total
-              cloud cover is unavailable, not clear sky. The current hour ends
-              at the NOW line; its remaining time stays hatched until observed.
+              Weather.com hourly forecasts. Hatched cells without a percentage
+              mean total cloud cover is unavailable, not clear sky. The current
+              hour ends at the NOW line; its remaining time stays hatched until
+              observed.
             </p>
             {preferredProviderPeak && (
               <p>
-                The selected hourly provider is{" "}
-                {preferredProviderPeak.providerLabel}. Its latest stored
-                full-day forecast reaches{" "}
+                The displayed high comes from the latest stored Weather.com
+                Seoul calendar-day forecast:{" "}
                 {preferredProviderPeak.temperature.toFixed(1)}
-                degrees {unit === "C" ? "Celsius" : "Fahrenheit"} in the first
-                tied peak forecast hour, beginning at{" "}
+                degrees {unit === "C" ? "Celsius" : "Fahrenheit"}. Its
+                horizontal position is the first tied maximum among the
+                Weather.com hourly values returned for that date, beginning at{" "}
                 {minuteLabel(preferredProviderPeak.minute)} Korea Standard Time.
               </p>
             )}
@@ -2356,11 +2314,11 @@ export default function SeoulDayPage() {
           <p>
             AMOS uses the feed row designated 15L. Five-minute snapshots remain
             available only as an audit fallback for missed minute captures. Past
-            sky cover comes from METAR ranges; coming hours use model
+            sky cover comes from METAR ranges; coming hours use Weather.com
             cloud-cover percentages.
           </p>
           <p>
-            NOAA TGFTP METAR · KMA AMOS MOBILE FEED · MULTI-PROVIDER FORECAST
+            NOAA TGFTP METAR · KMA AMOS MOBILE FEED · WEATHER.COM SEOUL FORECAST
           </p>
         </footer>
       </div>

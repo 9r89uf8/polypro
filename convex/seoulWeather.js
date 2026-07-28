@@ -9,15 +9,11 @@ import { v } from "convex/values";
 const SEOUL_TIMEZONE = "Asia/Seoul";
 const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
 const WEATHERCOM_DAILY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/daily/5day`;
-const GOOGLE_HOURLY_FORECAST_URL =
-  "https://weather.googleapis.com/v1/forecast/hours:lookup";
-const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
+const WEATHERCOM_HOURLY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/hourly/10day`;
 const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
-const DEFAULT_GOOGLE_LANGUAGE = "en";
-const GOOGLE_HOURLY_FORECAST_HOURS = 120;
-const GOOGLE_HOURLY_PAGE_SIZE = 24;
-const OPEN_METEO_FORECAST_DAYS = 6;
 const WEATHERCOM_FALLBACK_API_KEY = "71f92ea9dd2f4790b92ea9dd2f779061";
+const SEOUL_WEATHERCOM_PLACE_ID =
+  "3bee6716da8e17a02afd2a6ab2d45025839d2616b95bb871cbea1cfc6f15018e";
 const RKSI_REPRESENTATIVE_RUNWAY_NO = "2";
 const RKSI_REPRESENTATIVE_RUNWAY_DIRECTION = "15L";
 const MILLIS_PER_MINUTE = 60 * 1000;
@@ -26,8 +22,9 @@ const PREDICTION_INTERVAL_MS = 5 * MILLIS_PER_MINUTE;
 const MAX_LIVE_OBSERVATION_AGE_MS = 10 * MILLIS_PER_MINUTE;
 const MAX_PROVIDER_CAPTURE_AGE_MS = 12 * MILLIS_PER_HOUR;
 const PREDICTION_HEARTBEAT_MS = 30 * MILLIS_PER_MINUTE;
-const PREDICTION_MODEL_VERSION = "rksi15l-ensemble-v3";
+const PREDICTION_MODEL_VERSION = "rksi15l-weathercom-v4";
 const MAX_DASHBOARD_REVISIONS = 288;
+const MAX_FORECAST_CAPTURES_FOR_DAY = 112;
 const WEATHER_STATUS = {
   OK: "ok",
   PARTIAL: "partial",
@@ -166,21 +163,6 @@ function extractIsoDate(rawValue) {
   return `${year}-${month}-${day}`;
 }
 
-function parseValidUtcEpoch(value) {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-  const normalized = String(value).includes("T")
-    ? String(value)
-    : String(value).replace(" ", "T");
-  const hasTimezone = /Z$|[+-]\d{2}:?\d{2}$/.test(normalized);
-  const epoch = Date.parse(hasTimezone ? normalized : `${normalized}Z`);
-  return Number.isFinite(epoch) ? epoch : null;
-}
-
 function assertDateKey(date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) {
     throw new Error("Date must be in YYYY-MM-DD format.");
@@ -288,10 +270,12 @@ function normalizeWeatherComForecastDays(
         ? formatDateInTimezone(validTimeUtc * 1000, timeZone)
         : null) ??
       addUtcDays(fallbackStartDate, i);
+    // The chart covers a Seoul calendar day (midnight to midnight), so use
+    // Weather.com's calendar-day fields before its narrower daypart fields.
     const maxValue =
-      payload?.temperatureMax?.[i] ?? payload?.calendarDayTemperatureMax?.[i];
+      payload?.calendarDayTemperatureMax?.[i] ?? payload?.temperatureMax?.[i];
     const minValue =
-      payload?.temperatureMin?.[i] ?? payload?.calendarDayTemperatureMin?.[i];
+      payload?.calendarDayTemperatureMin?.[i] ?? payload?.temperatureMin?.[i];
     const maximum = normalizeWeatherComTempPair(maxValue, requestedUnit);
     const minimum = normalizeWeatherComTempPair(minValue, requestedUnit);
     const dayPhrase =
@@ -325,7 +309,7 @@ function getWeatherComApiKey() {
 }
 
 async function fetchWeatherComDailyForecast({
-  geocode,
+  placeId,
   durationDays,
   unit,
   language,
@@ -333,7 +317,7 @@ async function fetchWeatherComDailyForecast({
   timeZone,
 }) {
   const url = new URL(WEATHERCOM_DAILY_FORECAST_URL);
-  url.searchParams.set("geocode", geocode);
+  url.searchParams.set("placeid", placeId);
   url.searchParams.set("units", toWeatherComUnits(unit));
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
@@ -369,15 +353,6 @@ async function fetchWeatherComDailyForecast({
   return forecastDays;
 }
 
-function celsiusTempPair(value) {
-  const parsed = toFiniteNumber(value);
-  if (parsed === null) {
-    return {};
-  }
-  const tempC = roundToTenth(parsed);
-  return { tempC, tempF: toFahrenheit(tempC) };
-}
-
 function normalizeCloudCover(value) {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -386,31 +361,33 @@ function normalizeCloudCover(value) {
   return parsed === null ? null : Math.round(clamp(parsed, 0, 100));
 }
 
-function extractGoogleDescription(node) {
-  return (
-    toNonEmptyString(node?.weatherCondition?.description?.text) ??
-    toNonEmptyString(node?.weatherCondition?.description) ??
-    toNonEmptyString(node?.weatherCondition?.type)
-  );
-}
-
-function normalizeGoogleHourlyRows(payload, timeZone) {
+function normalizeWeatherComHourlyRows(payload, requestedUnit, timeZone) {
   const rows = [];
-  const forecastHours = Array.isArray(payload?.forecastHours)
-    ? payload.forecastHours
-    : [];
+  const rowCount = Math.max(
+    Array.isArray(payload?.validTimeUtc) ? payload.validTimeUtc.length : 0,
+    Array.isArray(payload?.temperature) ? payload.temperature.length : 0,
+    Array.isArray(payload?.cloudCover) ? payload.cloudCover.length : 0,
+    Array.isArray(payload?.wxPhraseLong) ? payload.wxPhraseLong.length : 0,
+  );
 
-  for (const row of forecastHours) {
-    const forecastTimeUtc = parseValidUtcEpoch(row?.interval?.startTime);
-    const temperature = celsiusTempPair(row?.temperature?.degrees);
+  for (let index = 0; index < rowCount; index += 1) {
+    const validTimeUtc = toFiniteNumber(payload?.validTimeUtc?.[index]);
+    const forecastTimeUtc =
+      validTimeUtc === null ? null : Math.round(validTimeUtc * 1000);
+    const temperature = normalizeWeatherComTempPair(
+      payload?.temperature?.[index],
+      requestedUnit,
+    );
     if (
       !Number.isFinite(forecastTimeUtc) ||
       !Number.isFinite(temperature.tempC)
     ) {
       continue;
     }
-    const phrase = extractGoogleDescription(row);
-    const cloudCoverPct = normalizeCloudCover(row?.cloudCover);
+    const phrase =
+      toNonEmptyString(payload?.wxPhraseLong?.[index]) ??
+      toNonEmptyString(payload?.wxPhraseShort?.[index]);
+    const cloudCoverPct = normalizeCloudCover(payload?.cloudCover?.[index]);
     rows.push({
       date: formatDateInTimezone(forecastTimeUtc, timeZone),
       forecastTimeUtc,
@@ -425,116 +402,19 @@ function normalizeGoogleHourlyRows(payload, timeZone) {
   return rows;
 }
 
-async function fetchGoogleHourlyForecast({
-  station,
-  hours,
+async function fetchWeatherComHourlyForecast({
+  placeId,
+  unit,
   language,
   apiKey,
   timeZone,
 }) {
-  const rows = [];
-  let nextPageToken = null;
-
-  do {
-    const url = new URL(GOOGLE_HOURLY_FORECAST_URL);
-    url.searchParams.set("key", apiKey);
-    url.searchParams.set("location.latitude", String(station.lat));
-    url.searchParams.set("location.longitude", String(station.lon));
-    url.searchParams.set("unitsSystem", "METRIC");
-    url.searchParams.set("languageCode", language);
-    url.searchParams.set("hours", String(hours));
-    url.searchParams.set("pageSize", String(GOOGLE_HOURLY_PAGE_SIZE));
-    if (nextPageToken) {
-      url.searchParams.set("pageToken", nextPageToken);
-    }
-
-    const response = await fetch(url.toString(), {
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-        "Cache-Control": "no-cache",
-      },
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Google hourly forecast failed (${response.status}): ${text.slice(0, 220)}`,
-      );
-    }
-
-    const payload = await response.json();
-    rows.push(...normalizeGoogleHourlyRows(payload, timeZone));
-    nextPageToken = toNonEmptyString(payload?.nextPageToken);
-  } while (nextPageToken);
-
-  if (!rows.length) {
-    throw new Error("Google hourly forecast returned no usable rows.");
-  }
-  rows.sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc);
-  return rows;
-}
-
-function normalizeOpenMeteoHourlyRows(payload, timeZone) {
-  const timestamps = Array.isArray(payload?.hourly?.time)
-    ? payload.hourly.time
-    : [];
-  const temperatures = Array.isArray(payload?.hourly?.temperature_2m)
-    ? payload.hourly.temperature_2m
-    : [];
-  const cloudCoverValues = Array.isArray(payload?.hourly?.cloud_cover)
-    ? payload.hourly.cloud_cover
-    : [];
-  const rows = [];
-
-  for (let index = 0; index < timestamps.length; index += 1) {
-    const rawTimestamp = toFiniteNumber(timestamps[index]);
-    const temperature = celsiusTempPair(temperatures[index]);
-    const cloudCoverAtStart = normalizeCloudCover(cloudCoverValues[index]);
-    const nextRawTimestamp = toFiniteNumber(timestamps[index + 1]);
-    const cloudCoverAtEnd = normalizeCloudCover(cloudCoverValues[index + 1]);
-    // Open-Meteo values are instantaneous at each timestamp. A forward
-    // trapezoidal mean makes this slot comparable with Google's hourly mean.
-    const cloudCoverPct =
-      Number.isFinite(rawTimestamp) &&
-      Number.isFinite(nextRawTimestamp) &&
-      nextRawTimestamp - rawTimestamp === 60 * 60 &&
-      Number.isFinite(cloudCoverAtStart) &&
-      Number.isFinite(cloudCoverAtEnd)
-        ? Math.round((cloudCoverAtStart + cloudCoverAtEnd) / 2)
-        : null;
-    const forecastTimeUtc =
-      rawTimestamp === null ? null : Math.round(rawTimestamp * 1000);
-    if (
-      !Number.isFinite(forecastTimeUtc) ||
-      !Number.isFinite(temperature.tempC)
-    ) {
-      continue;
-    }
-    rows.push({
-      date: formatDateInTimezone(forecastTimeUtc, timeZone),
-      forecastTimeUtc,
-      forecastTimeLocal: formatDateTimeInTimezone(forecastTimeUtc, timeZone),
-      tempC: temperature.tempC,
-      tempF: temperature.tempF,
-      ...(Number.isFinite(cloudCoverPct) ? { cloudCoverPct } : {}),
-    });
-  }
-
-  return rows;
-}
-
-async function fetchOpenMeteoHourlyForecast({ station, timeZone }) {
-  const url = new URL(OPEN_METEO_FORECAST_URL);
-  url.searchParams.set("latitude", String(station.lat));
-  url.searchParams.set("longitude", String(station.lon));
-  url.searchParams.set("hourly", "temperature_2m,cloud_cover");
-  url.searchParams.set("temperature_unit", "celsius");
-  url.searchParams.set("timeformat", "unixtime");
-  url.searchParams.set("timezone", "UTC");
-  url.searchParams.set("forecast_days", String(OPEN_METEO_FORECAST_DAYS));
-  // A Seoul-local day starts at 15:00 UTC on the preceding date. Keep one UTC
-  // past day so today's provider peak can be evaluated across all 24 KST hours.
-  url.searchParams.set("past_days", "1");
+  const url = new URL(WEATHERCOM_HOURLY_FORECAST_URL);
+  url.searchParams.set("placeid", placeId);
+  url.searchParams.set("units", toWeatherComUnits(unit));
+  url.searchParams.set("language", language);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("apiKey", apiKey);
 
   const response = await fetch(url.toString(), {
     cache: "no-store",
@@ -546,15 +426,16 @@ async function fetchOpenMeteoHourlyForecast({ station, timeZone }) {
   if (!response.ok) {
     const text = await response.text();
     throw new Error(
-      `Open-Meteo hourly forecast failed (${response.status}): ${text.slice(0, 220)}`,
+      `Weather.com hourly forecast failed (${response.status}): ${text.slice(0, 220)}`,
     );
   }
 
   const payload = await response.json();
-  const rows = normalizeOpenMeteoHourlyRows(payload, timeZone);
+  const rows = normalizeWeatherComHourlyRows(payload, unit, timeZone);
   if (!rows.length) {
-    throw new Error("Open-Meteo hourly forecast returned no usable rows.");
+    throw new Error("Weather.com hourly forecast returned no usable rows.");
   }
+  rows.sort((left, right) => left.forecastTimeUtc - right.forecastTimeUtc);
   return rows;
 }
 
@@ -568,7 +449,6 @@ export const getDayPageWeather = actionGeneric({
     }
 
     const apiKey = getWeatherComApiKey();
-    const geocode = `${SEOUL_STATION.lat},${SEOUL_STATION.lon}`;
     const unit = "metric";
     const language = DEFAULT_WEATHERCOM_LANGUAGE;
     const todayDate = formatDateInTimezone(Date.now(), SEOUL_STATION.timeZone);
@@ -583,7 +463,7 @@ export const getDayPageWeather = actionGeneric({
       }
       try {
         const days = await fetchWeatherComDailyForecast({
-          geocode,
+          placeId: SEOUL_WEATHERCOM_PLACE_ID,
           durationDays: 5,
           unit,
           language,
@@ -652,18 +532,12 @@ export const storeForecastCapture = internalMutationGeneric({
     ),
     weathercomError: v.optional(v.string()),
     weathercomForecastDays: v.array(forecastDayValidator),
-    googleStatus: v.union(
+    weathercomHourlyStatus: v.union(
       v.literal(WEATHER_STATUS.OK),
       v.literal(WEATHER_STATUS.ERROR),
     ),
-    googleError: v.optional(v.string()),
-    googleHourlyRows: v.array(hourlyForecastRowValidator),
-    openMeteoStatus: v.union(
-      v.literal(WEATHER_STATUS.OK),
-      v.literal(WEATHER_STATUS.ERROR),
-    ),
-    openMeteoError: v.optional(v.string()),
-    openMeteoHourlyRows: v.array(hourlyForecastRowValidator),
+    weathercomHourlyError: v.optional(v.string()),
+    weathercomHourlyRows: v.array(hourlyForecastRowValidator),
   },
   handler: async (ctx, args) => {
     const captureId = await ctx.db.insert("seoulForecastCaptures", {
@@ -694,43 +568,16 @@ export const collectForecastSnapshot = internalActionGeneric({
       SEOUL_TIMEZONE,
     );
     const captureDate = formatDateInTimezone(capturedAt, SEOUL_TIMEZONE);
-    const geocode = `${SEOUL_STATION.lat},${SEOUL_STATION.lon}`;
-    const googleApiKey = toNonEmptyString(process.env.GOOGLE_WEATHER_API_KEY);
-
-    const [weathercom, google, openMeteo] = await Promise.all([
+    const apiKey = getWeatherComApiKey();
+    const [weathercomDaily, weathercomHourly] = await Promise.all([
       (async () => {
         try {
           const rows = await fetchWeatherComDailyForecast({
-            geocode,
+            placeId: SEOUL_WEATHERCOM_PLACE_ID,
             durationDays: 5,
             unit: "metric",
             language: DEFAULT_WEATHERCOM_LANGUAGE,
-            apiKey: getWeatherComApiKey(),
-            timeZone: SEOUL_TIMEZONE,
-          });
-          return { status: WEATHER_STATUS.OK, rows };
-        } catch (error) {
-          return {
-            status: WEATHER_STATUS.ERROR,
-            error: formatErrorMessage(error),
-            rows: [],
-          };
-        }
-      })(),
-      (async () => {
-        if (!googleApiKey) {
-          return {
-            status: WEATHER_STATUS.ERROR,
-            error: "Missing GOOGLE_WEATHER_API_KEY.",
-            rows: [],
-          };
-        }
-        try {
-          const rows = await fetchGoogleHourlyForecast({
-            station: SEOUL_STATION,
-            hours: GOOGLE_HOURLY_FORECAST_HOURS,
-            language: DEFAULT_GOOGLE_LANGUAGE,
-            apiKey: googleApiKey,
+            apiKey,
             timeZone: SEOUL_TIMEZONE,
           });
           return { status: WEATHER_STATUS.OK, rows };
@@ -744,8 +591,11 @@ export const collectForecastSnapshot = internalActionGeneric({
       })(),
       (async () => {
         try {
-          const rows = await fetchOpenMeteoHourlyForecast({
-            station: SEOUL_STATION,
+          const rows = await fetchWeatherComHourlyForecast({
+            placeId: SEOUL_WEATHERCOM_PLACE_ID,
+            unit: "metric",
+            language: DEFAULT_WEATHERCOM_LANGUAGE,
+            apiKey,
             timeZone: SEOUL_TIMEZONE,
           });
           return { status: WEATHER_STATUS.OK, rows };
@@ -759,15 +609,23 @@ export const collectForecastSnapshot = internalActionGeneric({
       })(),
     ]);
 
-    const okCount = [weathercom, google, openMeteo].filter(
+    const okCount = [weathercomDaily, weathercomHourly].filter(
       (provider) => provider.status === WEATHER_STATUS.OK,
     ).length;
     const status =
-      okCount === 3
+      okCount === 2
         ? WEATHER_STATUS.OK
         : okCount > 0
           ? WEATHER_STATUS.PARTIAL
           : WEATHER_STATUS.ERROR;
+    const capturedForecastDates = new Set(
+      Array.from({ length: 5 }, (_value, offset) =>
+        addUtcDays(captureDate, offset),
+      ),
+    );
+    const weathercomHourlyRows = weathercomHourly.rows.filter((row) =>
+      capturedForecastDates.has(row.date),
+    );
 
     const capture = await ctx.runMutation("seoulWeather:storeForecastCapture", {
       stationIcao,
@@ -776,23 +634,23 @@ export const collectForecastSnapshot = internalActionGeneric({
       capturedAtLocal,
       captureDate,
       status,
-      weathercomStatus: weathercom.status,
-      ...(weathercom.error ? { weathercomError: weathercom.error } : {}),
-      weathercomForecastDays: weathercom.rows,
-      googleStatus: google.status,
-      ...(google.error ? { googleError: google.error } : {}),
-      googleHourlyRows: google.rows,
-      openMeteoStatus: openMeteo.status,
-      ...(openMeteo.error ? { openMeteoError: openMeteo.error } : {}),
-      openMeteoHourlyRows: openMeteo.rows,
+      weathercomStatus: weathercomDaily.status,
+      ...(weathercomDaily.error
+        ? { weathercomError: weathercomDaily.error }
+        : {}),
+      weathercomForecastDays: weathercomDaily.rows,
+      weathercomHourlyStatus: weathercomHourly.status,
+      ...(weathercomHourly.error
+        ? { weathercomHourlyError: weathercomHourly.error }
+        : {}),
+      weathercomHourlyRows,
     });
 
     return {
       ...capture,
       providerCounts: {
-        weathercomDays: weathercom.rows.length,
-        googleHours: google.rows.length,
-        openMeteoHours: openMeteo.rows.length,
+        weathercomDays: weathercomDaily.rows.length,
+        weathercomHours: weathercomHourlyRows.length,
       },
     };
   },
@@ -912,22 +770,6 @@ function interpolateHourlyTemperature(rows, epochMs) {
   return null;
 }
 
-function adjustHourlyRows(rows, liveBiasC, generatedAt) {
-  return rows.map((row) => {
-    const leadHours = Math.max(
-      0,
-      (row.forecastTimeUtc - generatedAt) / MILLIS_PER_HOUR,
-    );
-    const biasRetention = clamp(1 - leadHours / 16, 0.25, 1);
-    const tempC = roundToTenth(row.tempC + liveBiasC * biasRetention);
-    return {
-      ...row,
-      tempC,
-      tempF: toFahrenheit(tempC),
-    };
-  });
-}
-
 function findHighestForecastRow(rows, generatedAt, targetIsToday) {
   const remaining = targetIsToday
     ? rows.filter(
@@ -949,29 +791,8 @@ function findHighestForecastRow(rows, generatedAt, targetIsToday) {
   return selected;
 }
 
-function hasCompleteHourlyDay(rows, targetDate) {
-  const hours = new Set();
-  for (const row of rows) {
-    if (row.date !== targetDate || !Number.isFinite(row.tempC)) {
-      continue;
-    }
-    const match = /(?:^|[ T])(\d{2}):\d{2}/.exec(row.forecastTimeLocal ?? "");
-    const hour = match ? Number(match[1]) : null;
-    if (Number.isInteger(hour) && hour >= 0 && hour <= 23) {
-      hours.add(hour);
-    }
-  }
-  return (
-    hours.size === 24 &&
-    Array.from({ length: 24 }, (_, hour) => hour).every((hour) =>
-      hours.has(hour),
-    )
-  );
-}
-
-function selectLatestUsableProviderCapture({
+function selectLatestUsableWeatherComCapture({
   captures,
-  provider,
   targetDate,
   generatedAt,
 }) {
@@ -983,157 +804,109 @@ function selectLatestUsableProviderCapture({
       ) {
         return false;
       }
-      if (provider === "weathercom") {
-        return (
-          capture.weathercomStatus === WEATHER_STATUS.OK &&
-          capture.weathercomForecastDays.some(
-            (row) => row.date === targetDate && Number.isFinite(row.maxTempC),
-          )
-        );
-      }
-      const statusField =
-        provider === "google" ? "googleStatus" : "openMeteoStatus";
-      const rowsField =
-        provider === "google" ? "googleHourlyRows" : "openMeteoHourlyRows";
       return (
-        capture[statusField] === WEATHER_STATUS.OK &&
-        capture[rowsField].some((row) => row.date === targetDate)
+        capture.weathercomStatus === WEATHER_STATUS.OK &&
+        capture.weathercomHourlyStatus === WEATHER_STATUS.OK &&
+        (capture.weathercomForecastDays ?? []).some(
+          (row) => row.date === targetDate && Number.isFinite(row.maxTempC),
+        ) &&
+        (capture.weathercomHourlyRows ?? []).some(
+          (row) => row.date === targetDate && Number.isFinite(row.tempC),
+        )
       );
     }) ?? null
   );
 }
 
-function buildHourlyProvider({
-  provider,
-  label,
-  configuredWeight,
-  status,
-  error,
-  rows,
-  targetDate,
-  targetIsToday,
-  generatedAt,
-  observedCurrentC,
-  capturedAt,
-  capturedAtLocal,
-}) {
-  const dateRows = rows.filter((row) => row.date === targetDate);
-  const usable = status === WEATHER_STATUS.OK && dateRows.length > 0;
-  const expectedCurrentC =
-    usable && targetIsToday
-      ? interpolateHourlyTemperature(dateRows, generatedAt)
-      : null;
-  const liveBiasC =
-    Number.isFinite(observedCurrentC) && Number.isFinite(expectedCurrentC)
-      ? clamp(observedCurrentC - expectedCurrentC, -4, 4)
-      : 0;
-  const adjustedRows = usable
-    ? adjustHourlyRows(dateRows, liveBiasC, generatedAt)
-    : [];
-  const rawPeak = findHighestForecastRow(dateRows, generatedAt, targetIsToday);
-  const adjustedPeak = findHighestForecastRow(
-    adjustedRows,
-    generatedAt,
-    targetIsToday,
+function mergeWeatherComHourlyRows(captures, targetDate) {
+  const rowsByTime = new Map();
+  for (const capture of [...captures].sort(
+    (left, right) => left.capturedAt - right.capturedAt,
+  )) {
+    if (
+      capture.weathercomStatus !== WEATHER_STATUS.OK ||
+      capture.weathercomHourlyStatus !== WEATHER_STATUS.OK ||
+      !(capture.weathercomForecastDays ?? []).some(
+        (day) => day.date === targetDate && Number.isFinite(day.maxTempC),
+      )
+    ) {
+      continue;
+    }
+    for (const row of capture.weathercomHourlyRows ?? []) {
+      if (row.date === targetDate && Number.isFinite(row.forecastTimeUtc)) {
+        // New captures replace still-future values, while an elapsed hour
+        // remains available from the last capture in which Weather.com sent it.
+        rowsByTime.set(row.forecastTimeUtc, {
+          ...row,
+          peakSourceCapturedAt: capture.capturedAt,
+          peakSourceCapturedAtLocal: capture.capturedAtLocal,
+        });
+      }
+    }
+  }
+  return [...rowsByTime.values()].sort(
+    (left, right) => left.forecastTimeUtc - right.forecastTimeUtc,
   );
-  const dailyPeak = hasCompleteHourlyDay(dateRows, targetDate)
-    ? findHighestForecastRow(dateRows, generatedAt, false)
-    : null;
-  const detail = {
-    provider,
-    label,
-    status: usable ? WEATHER_STATUS.OK : WEATHER_STATUS.ERROR,
-    ...(!usable
-      ? {
-          error:
-            error ?? `No ${label} hourly temperature rows for ${targetDate}.`,
-        }
-      : {}),
-    weight: usable ? configuredWeight : 0,
-    ...(rawPeak
-      ? {
-          rawHighC: rawPeak.tempC,
-          rawHighF: rawPeak.tempF,
-        }
-      : {}),
-    ...(adjustedPeak
-      ? {
-          adjustedHighC: adjustedPeak.tempC,
-          adjustedHighF: adjustedPeak.tempF,
-          peakTimeUtc: adjustedPeak.forecastTimeUtc,
-          peakTimeLocal: adjustedPeak.forecastTimeLocal,
-        }
-      : {}),
-    ...(dailyPeak
-      ? {
-          dailyHighC: dailyPeak.tempC,
-          dailyHighF: dailyPeak.tempF,
-          dailyPeakTimeUtc: dailyPeak.forecastTimeUtc,
-          dailyPeakTimeLocal: dailyPeak.forecastTimeLocal,
-        }
-      : {}),
-    ...(Number.isFinite(expectedCurrentC)
-      ? { liveBiasC: roundToTenth(liveBiasC) }
-      : {}),
-    ...(Number.isFinite(capturedAt)
-      ? {
-          capturedAt,
-          capturedAtLocal,
-          captureAgeMinutes: roundToTenth(
-            Math.max(0, generatedAt - capturedAt) / MILLIS_PER_MINUTE,
-          ),
-        }
-      : {}),
-    pointCount: dateRows.length,
-  };
-  return {
-    detail,
-    adjustedRows,
-    expectedCurrentC,
-    liveBiasC: Number.isFinite(expectedCurrentC) ? liveBiasC : null,
-  };
 }
 
 function buildWeatherComProvider({
   capture,
+  hourlyRows,
   targetDate,
-  hourlyBiasC,
   targetIsToday,
   generatedAt,
 }) {
   const day = capture?.weathercomForecastDays?.find(
     (row) => row.date === targetDate,
   );
-  const usable =
+  const dailyUsable =
     capture?.weathercomStatus === WEATHER_STATUS.OK &&
     Number.isFinite(day?.maxTempC);
-  const retainedBias = Number.isFinite(hourlyBiasC)
-    ? clamp(hourlyBiasC * (targetIsToday ? 0.5 : 0), -2, 2)
-    : 0;
-  const adjustedHighC = usable
-    ? roundToTenth(day.maxTempC + retainedBias)
+  const dateRows = (hourlyRows ?? []).filter(
+    (row) => row.date === targetDate && Number.isFinite(row.tempC),
+  );
+  const hourlyPeak = findHighestForecastRow(dateRows, generatedAt, false);
+  const usable = dailyUsable && Boolean(hourlyPeak);
+  const dailyHighC = dailyUsable ? roundToTenth(day.maxTempC) : null;
+  const dailyHighF = dailyUsable
+    ? (day.maxTempF ?? toFahrenheit(dailyHighC))
     : null;
-  return {
+  const expectedCurrentC =
+    targetIsToday && dateRows.length
+      ? interpolateHourlyTemperature(dateRows, generatedAt)
+      : null;
+  const detail = {
     provider: "weathercom",
-    label: "Weather.com daily",
+    label: "Weather.com · Seoul",
     status: usable ? WEATHER_STATUS.OK : WEATHER_STATUS.ERROR,
     ...(!usable
       ? {
-          error:
-            capture?.weathercomError ??
-            `No Weather.com daily maximum for ${targetDate}.`,
+          error: !dailyUsable
+            ? (capture?.weathercomError ??
+              `No Weather.com daily maximum for ${targetDate}.`)
+            : (capture?.weathercomHourlyError ??
+              `No Weather.com hourly peak-time estimate for ${targetDate}.`),
         }
       : {}),
-    weight: usable ? 0.2 : 0,
+    weight: usable ? 1 : 0,
+    ...(dailyUsable
+      ? {
+          rawHighC: dailyHighC,
+          rawHighF: dailyHighF,
+          adjustedHighC: dailyHighC,
+          adjustedHighF: dailyHighF,
+        }
+      : {}),
     ...(usable
       ? {
-          rawHighC: day.maxTempC,
-          rawHighF: day.maxTempF ?? toFahrenheit(day.maxTempC),
-          adjustedHighC,
-          adjustedHighF: toFahrenheit(adjustedHighC),
-          ...(Number.isFinite(hourlyBiasC)
-            ? { liveBiasC: roundToTenth(retainedBias) }
-            : {}),
+          dailyHighC,
+          dailyHighF,
+          dailyPeakTimeUtc: hourlyPeak.forecastTimeUtc,
+          dailyPeakTimeLocal: hourlyPeak.forecastTimeLocal,
+          peakTimeUtc: hourlyPeak.forecastTimeUtc,
+          peakTimeLocal: hourlyPeak.forecastTimeLocal,
+          peakSourceCapturedAt: hourlyPeak.peakSourceCapturedAt,
+          peakSourceCapturedAtLocal: hourlyPeak.peakSourceCapturedAtLocal,
           capturedAt: capture.capturedAt,
           capturedAtLocal: capture.capturedAtLocal,
           captureAgeMinutes: roundToTenth(
@@ -1141,7 +914,14 @@ function buildWeatherComProvider({
           ),
         }
       : {}),
-    pointCount: usable ? 1 : 0,
+    pointCount: dateRows.length,
+  };
+  return {
+    detail,
+    rows: dateRows,
+    expectedCurrentC,
+    adjustedHighC: dailyHighC,
+    hourlyPeak,
   };
 }
 
@@ -1388,33 +1168,14 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
         query.eq("stationIcao", args.stationIcao),
       )
       .order("desc")
-      .take(48);
-    const latestCapture = captures[0] ?? null;
-    const weathercomCapture = selectLatestUsableProviderCapture({
+      .take(MAX_FORECAST_CAPTURES_FOR_DAY);
+    const weathercomCapture = selectLatestUsableWeatherComCapture({
       captures,
-      provider: "weathercom",
       targetDate: args.date,
       generatedAt,
     });
-    const googleCapture = selectLatestUsableProviderCapture({
-      captures,
-      provider: "google",
-      targetDate: args.date,
-      generatedAt,
-    });
-    const openMeteoCapture = selectLatestUsableProviderCapture({
-      captures,
-      provider: "open_meteo",
-      targetDate: args.date,
-      generatedAt,
-    });
-    const selectedCaptures = [
-      weathercomCapture,
-      googleCapture,
-      openMeteoCapture,
-    ].filter(Boolean);
-    selectedCaptures.sort((a, b) => b.capturedAt - a.capturedAt);
-    const primaryCapture = selectedCaptures[0] ?? null;
+    const weathercomHourlyRows = mergeWeatherComHourlyRows(captures, args.date);
+    const primaryCapture = weathercomCapture;
     const previousPrediction = await ctx.db
       .query("seoulHighPredictions")
       .withIndex("by_station_date_revision", (query) =>
@@ -1435,79 +1196,40 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
         ? latestRow
         : null;
 
-    const google = buildHourlyProvider({
-      provider: "google",
-      label: "Google Weather hourly",
-      configuredWeight: 0.35,
-      status: googleCapture?.googleStatus ?? WEATHER_STATUS.ERROR,
-      error:
-        googleCapture?.googleError ??
-        latestCapture?.googleError ??
-        "No fresh successful Google Weather capture.",
-      rows: googleCapture?.googleHourlyRows ?? [],
-      targetDate: args.date,
-      targetIsToday,
-      generatedAt,
-      observedCurrentC: liveLatestRow?.tempC,
-      capturedAt: googleCapture?.capturedAt,
-      capturedAtLocal: googleCapture?.capturedAtLocal,
-    });
-    const openMeteo = buildHourlyProvider({
-      provider: "open_meteo",
-      label: "Open-Meteo hourly",
-      configuredWeight: 0.45,
-      status: openMeteoCapture?.openMeteoStatus ?? WEATHER_STATUS.ERROR,
-      error:
-        openMeteoCapture?.openMeteoError ??
-        latestCapture?.openMeteoError ??
-        "No fresh successful Open-Meteo capture.",
-      rows: openMeteoCapture?.openMeteoHourlyRows ?? [],
-      targetDate: args.date,
-      targetIsToday,
-      generatedAt,
-      observedCurrentC: liveLatestRow?.tempC,
-      capturedAt: openMeteoCapture?.capturedAt,
-      capturedAtLocal: openMeteoCapture?.capturedAtLocal,
-    });
-    const hourlyBiasC = mean(
-      [google.liveBiasC, openMeteo.liveBiasC].filter(Number.isFinite),
-    );
     const weathercom = buildWeatherComProvider({
       capture: weathercomCapture,
+      hourlyRows: weathercomHourlyRows,
       targetDate: args.date,
-      hourlyBiasC,
       targetIsToday,
       generatedAt,
     });
-    const providerDetails = [weathercom, google.detail, openMeteo.detail];
+    const providerDetails = [weathercom.detail];
     const preferredDailyPeakProvider =
       selectPreferredDailyPeakProvider(providerDetails);
     const previousPreferredDailyPeakProvider = selectPreferredDailyPeakProvider(
       previousPrediction?.providerDetails ?? [],
     );
-    const hourlyEnsembleCurve = buildHourlyEnsembleCurve([
-      {
-        rows: google.adjustedRows,
-        weight: google.detail.weight,
-      },
-      {
-        rows: openMeteo.adjustedRows,
-        weight: openMeteo.detail.weight,
-      },
-    ]);
+    const hourlyEnsembleCurve =
+      weathercom.detail.weight > 0
+        ? buildHourlyEnsembleCurve([
+            {
+              rows: weathercom.rows,
+              weight: weathercom.detail.weight,
+            },
+          ])
+        : [];
 
-    const expectedCurrentC = mean(
-      [google.expectedCurrentC, openMeteo.expectedCurrentC].filter(
-        Number.isFinite,
-      ),
-    );
+    const expectedCurrentC = weathercom.expectedCurrentC;
     const ensemblePeak = findHighestForecastRow(
       hourlyEnsembleCurve,
       generatedAt,
       targetIsToday,
     );
-    let forecastHighC = ensemblePeak?.tempC ?? weathercom.adjustedHighC;
-    if (!Number.isFinite(forecastHighC) && previousPrediction) {
+    let forecastHighC = weathercom.adjustedHighC;
+    if (
+      !Number.isFinite(forecastHighC) &&
+      previousPrediction?.modelVersion === PREDICTION_MODEL_VERSION
+    ) {
       forecastHighC = previousPrediction.predictedHighC;
     }
     if (!Number.isFinite(forecastHighC) && maxRow) {
@@ -1643,9 +1365,6 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
       ...(Number.isFinite(slope60mCPerHour) ? { slope60mCPerHour } : {}),
       ...(Number.isFinite(expectedCurrentC)
         ? { expectedCurrentC: roundToTenth(expectedCurrentC) }
-        : {}),
-      ...(Number.isFinite(hourlyBiasC)
-        ? { liveBiasC: roundToTenth(hourlyBiasC) }
         : {}),
       predictedHighC,
       predictedHighF,
@@ -2040,6 +1759,22 @@ export const getHighPredictionAccuracy = queryGeneric({
   },
 });
 
+function toWeatherComOnlyPagePrediction(prediction) {
+  if (!prediction) {
+    return null;
+  }
+  return {
+    ...prediction,
+    providerDetails: (prediction.providerDetails ?? []).filter(
+      (provider) => provider.provider === "weathercom",
+    ),
+    hourlyEnsembleCurve:
+      prediction.modelVersion === PREDICTION_MODEL_VERSION
+        ? prediction.hourlyEnsembleCurve
+        : [],
+  };
+}
+
 export const getHighPredictionDashboard = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
@@ -2056,7 +1791,7 @@ export const getHighPredictionDashboard = queryGeneric({
     const [
       summary,
       revisionRows,
-      latestForecastCapture,
+      forecastCaptureRows,
       evaluation,
       accuracyRows,
     ] = await Promise.all([
@@ -2079,7 +1814,7 @@ export const getHighPredictionDashboard = queryGeneric({
           query.eq("stationIcao", stationIcao),
         )
         .order("desc")
-        .first(),
+        .take(MAX_FORECAST_CAPTURES_FOR_DAY),
       ctx.db
         .query("seoulHighEvaluations")
         .withIndex("by_station_date", (query) =>
@@ -2094,8 +1829,48 @@ export const getHighPredictionDashboard = queryGeneric({
         .order("desc")
         .take(30),
     ]);
-    const latestPrediction = revisionRows[0] ?? null;
-    const revisions = [...revisionRows].reverse();
+    const latestPrediction = toWeatherComOnlyPagePrediction(
+      revisionRows[0] ?? null,
+    );
+    const revisions = [...revisionRows]
+      .reverse()
+      .map(toWeatherComOnlyPagePrediction);
+    const latestWeatherComCapture = selectLatestUsableWeatherComCapture({
+      captures: forecastCaptureRows,
+      targetDate: date,
+      generatedAt: Date.now(),
+    });
+    const mergedWeatherComHourlyRows = mergeWeatherComHourlyRows(
+      forecastCaptureRows,
+      date,
+    );
+    const latestForecastCapture = latestWeatherComCapture
+      ? {
+          _id: latestWeatherComCapture._id,
+          _creationTime: latestWeatherComCapture._creationTime,
+          stationIcao: latestWeatherComCapture.stationIcao,
+          stationName: latestWeatherComCapture.stationName,
+          capturedAt: latestWeatherComCapture.capturedAt,
+          capturedAtLocal: latestWeatherComCapture.capturedAtLocal,
+          captureDate: latestWeatherComCapture.captureDate,
+          status: latestWeatherComCapture.status,
+          weathercomStatus: latestWeatherComCapture.weathercomStatus,
+          ...(latestWeatherComCapture.weathercomError
+            ? { weathercomError: latestWeatherComCapture.weathercomError }
+            : {}),
+          weathercomForecastDays:
+            latestWeatherComCapture.weathercomForecastDays,
+          weathercomHourlyStatus:
+            latestWeatherComCapture.weathercomHourlyStatus,
+          ...(latestWeatherComCapture.weathercomHourlyError
+            ? {
+                weathercomHourlyError:
+                  latestWeatherComCapture.weathercomHourlyError,
+              }
+            : {}),
+          weathercomHourlyRows: mergedWeatherComHourlyRows,
+        }
+      : null;
 
     return {
       station: {
