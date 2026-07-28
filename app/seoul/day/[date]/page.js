@@ -157,6 +157,94 @@ const peakTimingPlugin = {
   },
 };
 
+function providerPeakPosition(chart, options) {
+  if (
+    !options?.display ||
+    !Number.isFinite(options.minute) ||
+    !Number.isFinite(options.temperature)
+  ) {
+    return null;
+  }
+
+  const { chartArea, scales } = chart;
+  const x = scales.x.getPixelForValue(options.minute);
+  const y = scales.y.getPixelForValue(options.temperature);
+  if (
+    x < chartArea.left ||
+    x > chartArea.right ||
+    y < chartArea.top ||
+    y > chartArea.bottom
+  ) {
+    return null;
+  }
+
+  return { x, y };
+}
+
+const providerPeakPlugin = {
+  id: "seoulProviderPeak",
+  beforeDatasetsDraw(chart, _args, options) {
+    const position = providerPeakPosition(chart, options);
+    if (!position) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    ctx.save();
+    ctx.strokeStyle = "rgba(244, 114, 182, 0.56)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 5]);
+    ctx.beginPath();
+    ctx.moveTo(position.x, chartArea.top);
+    ctx.lineTo(position.x, chartArea.bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+  afterDatasetsDraw(chart, _args, options) {
+    const position = providerPeakPosition(chart, options);
+    if (!position || !options?.label) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    const boxHeight = 24;
+    const horizontalPadding = 9;
+
+    ctx.save();
+    ctx.font = "600 10px IBM Plex Mono, monospace";
+    const boxWidth = Math.min(
+      ctx.measureText(options.label).width + horizontalPadding * 2,
+      chartArea.right - chartArea.left - 8,
+    );
+    const boxLeft = Math.min(
+      Math.max(position.x - boxWidth / 2, chartArea.left + 4),
+      chartArea.right - boxWidth - 4,
+    );
+    const preferredTop = position.y - boxHeight - 12;
+    const boxTop =
+      preferredTop >= chartArea.top + 6
+        ? preferredTop
+        : Math.min(position.y + 12, chartArea.bottom - boxHeight - 6);
+
+    ctx.fillStyle = "rgba(29, 8, 21, 0.94)";
+    ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
+    ctx.strokeStyle = "rgba(244, 114, 182, 0.72)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.strokeRect(boxLeft, boxTop, boxWidth, boxHeight);
+    ctx.fillStyle = "#fbcfe8";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      options.label,
+      boxLeft + horizontalPadding,
+      boxTop + boxHeight / 2,
+      boxWidth - horizontalPadding * 2,
+    );
+    ctx.restore();
+  },
+};
+
 const hourlyCloudCoverPlugin = {
   id: "seoulHourlyCloudCover",
   afterDraw(chart, _args, options) {
@@ -308,6 +396,7 @@ ChartJS.register(
   nowLinePlugin,
   sunsetLinePlugin,
   peakTimingPlugin,
+  providerPeakPlugin,
   hourlyCloudCoverPlugin,
 );
 
@@ -318,6 +407,23 @@ const RKSI_LONGITUDE = 126.4407;
 const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_PROVIDER_CAPTURE_AGE_MINUTES = 12 * 60;
+const HOURLY_PROVIDER_CONFIGS = Object.freeze([
+  {
+    provider: "open_meteo",
+    providerLabel: "Open-Meteo",
+    weight: 0.45,
+    statusField: "openMeteoStatus",
+    rowsField: "openMeteoHourlyRows",
+  },
+  {
+    provider: "google",
+    providerLabel: "Google Weather",
+    weight: 0.35,
+    statusField: "googleStatus",
+    rowsField: "googleHourlyRows",
+  },
+]);
 const METAR_SKY_DEFAULT_HOLD_MINUTES = 30;
 const METAR_SKY_MAX_HOLD_MINUTES = 45;
 const METAR_SKY_AMOUNT_RANK = Object.freeze({
@@ -1134,6 +1240,159 @@ function formatPeakWindow(start, end) {
   return `${formatLocalTime(start)}–${formatLocalTime(end)}`;
 }
 
+function providerPeakLabel(signal) {
+  const knownLabels = {
+    google: "Google Weather",
+    open_meteo: "Open-Meteo",
+  };
+  const provider = String(signal?.provider ?? "");
+  return (
+    knownLabels[provider] ??
+    String(
+      signal?.label ??
+        signal?.providerName ??
+        signal?.provider ??
+        "Hourly forecast",
+    ).replace(/\s+hourly$/i, "")
+  );
+}
+
+function selectStoredHourlyProviderPeak(providerDetails, unit, nowMs = null) {
+  const temperatureField = unit === "C" ? "dailyHighC" : "dailyHighF";
+  return (
+    (Array.isArray(providerDetails) ? providerDetails : [])
+      .map((signal) => {
+        const minute = parseMinute(signal?.dailyPeakTimeLocal);
+        const temperature = signal?.[temperatureField];
+        const weight = Number(signal?.weight);
+        const capturedAt = Number(signal?.capturedAt);
+        const captureAgeMinutes = Number(signal?.captureAgeMinutes);
+        if (
+          signal?.status !== "ok" ||
+          !Number.isFinite(signal?.pointCount) ||
+          signal.pointCount <= 0 ||
+          !Number.isFinite(minute) ||
+          !Number.isFinite(signal?.dailyPeakTimeUtc) ||
+          !Number.isFinite(temperature) ||
+          !Number.isFinite(weight) ||
+          weight <= 0 ||
+          !Number.isFinite(capturedAt) ||
+          (Number.isFinite(nowMs) &&
+            (capturedAt > nowMs + 60 * 1000 ||
+              nowMs - capturedAt >
+                MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000)) ||
+          (Number.isFinite(captureAgeMinutes) &&
+            captureAgeMinutes > MAX_PROVIDER_CAPTURE_AGE_MINUTES)
+        ) {
+          return null;
+        }
+        return {
+          provider: String(signal.provider ?? ""),
+          providerLabel: providerPeakLabel(signal),
+          minute,
+          temperature,
+          peakTimeUtc: signal.dailyPeakTimeUtc,
+          peakTimeLocal: signal.dailyPeakTimeLocal,
+          weight,
+          capturedAt,
+          capturedAtLocal: signal.capturedAtLocal,
+          source: "prediction_revision",
+        };
+      })
+      .filter(Boolean)
+      .sort(
+        (left, right) =>
+          right.weight - left.weight ||
+          right.capturedAt - left.capturedAt ||
+          left.provider.localeCompare(right.provider),
+      )[0] ?? null
+  );
+}
+
+function selectLatestCaptureHourlyProviderPeak(
+  forecastCapture,
+  date,
+  unit,
+  nowMs,
+) {
+  const capturedAt = Number(forecastCapture?.capturedAt);
+  if (
+    !Number.isFinite(capturedAt) ||
+    (Number.isFinite(nowMs) &&
+      (capturedAt > nowMs + 60 * 1000 ||
+        nowMs - capturedAt > MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000))
+  ) {
+    return null;
+  }
+
+  const temperatureField = unit === "C" ? "tempC" : "tempF";
+  return (
+    HOURLY_PROVIDER_CONFIGS.map((config) => {
+      if (forecastCapture?.[config.statusField] !== "ok") {
+        return null;
+      }
+      const rows = (
+        Array.isArray(forecastCapture?.[config.rowsField])
+          ? forecastCapture[config.rowsField]
+          : []
+      ).filter(
+        (row) =>
+          row?.date === date &&
+          Number.isFinite(row?.forecastTimeUtc) &&
+          Number.isFinite(row?.[temperatureField]),
+      );
+      const coveredHours = new Set(
+        rows
+          .map((row) => parseMinute(row.forecastTimeLocal))
+          .filter(Number.isFinite)
+          .map((minute) => Math.floor(minute / 60)),
+      );
+      if (
+        coveredHours.size !== 24 ||
+        !Array.from({ length: 24 }, (_, hour) => hour).every((hour) =>
+          coveredHours.has(hour),
+        )
+      ) {
+        return null;
+      }
+
+      let peak = null;
+      for (const row of rows) {
+        if (
+          !peak ||
+          row[temperatureField] > peak[temperatureField] ||
+          (row[temperatureField] === peak[temperatureField] &&
+            row.forecastTimeUtc < peak.forecastTimeUtc)
+        ) {
+          peak = row;
+        }
+      }
+      const minute = parseMinute(peak?.forecastTimeLocal);
+      if (!peak || !Number.isFinite(minute)) {
+        return null;
+      }
+      return {
+        provider: config.provider,
+        providerLabel: config.providerLabel,
+        minute,
+        temperature: peak[temperatureField],
+        peakTimeUtc: peak.forecastTimeUtc,
+        peakTimeLocal: peak.forecastTimeLocal,
+        weight: config.weight,
+        capturedAt,
+        capturedAtLocal: forecastCapture.capturedAtLocal,
+        source: "latest_capture",
+      };
+    })
+      .filter(Boolean)
+      .sort(
+        (left, right) =>
+          right.weight - left.weight ||
+          left.provider.localeCompare(right.provider),
+      )[0] ?? null
+  );
+}
+
 function normalizePrediction(prediction) {
   if (!prediction) {
     return null;
@@ -1297,7 +1556,13 @@ function toForecastPoints(rows, unit) {
     .filter(Boolean);
 }
 
-function buildChartData(metarRows, amosDisplayRows, forecastRows, unit) {
+function buildChartData(
+  metarRows,
+  amosDisplayRows,
+  forecastRows,
+  providerPeak,
+  unit,
+) {
   const amosPoints = toChartPoints(amosDisplayRows, unit, (row) => ({
     displayCadence: row.displayCadence,
   }));
@@ -1352,6 +1617,30 @@ function buildChartData(metarRows, amosDisplayRows, forecastRows, unit) {
       tension: 0.3,
       spanGaps: false,
       order: 3,
+    });
+  }
+
+  if (providerPeak) {
+    datasets.unshift({
+      label: `${providerPeak.providerLabel} daily forecast peak`,
+      data: [
+        {
+          x: providerPeak.minute,
+          y: providerPeak.temperature,
+          forecastTimeUtc: providerPeak.peakTimeUtc,
+          forecastTimeLocal: providerPeak.peakTimeLocal,
+        },
+      ],
+      showLine: false,
+      borderColor: "#f472b6",
+      backgroundColor: "#f472b6",
+      pointBorderColor: "#f472b6",
+      pointBackgroundColor: "#07111f",
+      pointBorderWidth: 3,
+      pointRadius: 6,
+      pointHitRadius: 12,
+      pointHoverRadius: 8,
+      order: 0,
     });
   }
 
@@ -1446,6 +1735,45 @@ export default function SeoulDayPage() {
   const latestPrediction = normalizePrediction(
     predictionDashboard?.latestPrediction,
   );
+  const providerFreshnessNow = Number.isFinite(clockNowMs)
+    ? Math.floor(clockNowMs / (60 * 1000)) * 60 * 1000
+    : null;
+  const storedProviderPeak = useMemo(
+    () =>
+      selectStoredHourlyProviderPeak(
+        latestPrediction?.providerDetails ??
+          latestPrediction?.providerPredictions,
+        unit,
+        date >= today ? providerFreshnessNow : null,
+      ),
+    [
+      date,
+      latestPrediction?.providerDetails,
+      latestPrediction?.providerPredictions,
+      providerFreshnessNow,
+      today,
+      unit,
+    ],
+  );
+  const latestCaptureProviderPeak = useMemo(
+    () =>
+      selectLatestCaptureHourlyProviderPeak(
+        predictionDashboard?.latestForecastCapture,
+        date,
+        unit,
+        providerFreshnessNow,
+      ),
+    [
+      date,
+      predictionDashboard?.latestForecastCapture,
+      providerFreshnessNow,
+      unit,
+    ],
+  );
+  const preferredProviderPeak =
+    date >= today
+      ? (latestCaptureProviderPeak ?? storedProviderPeak)
+      : storedProviderPeak;
   const forecastCloudRows = useMemo(
     () =>
       buildForecastCloudRows({
@@ -1498,7 +1826,8 @@ export default function SeoulDayPage() {
   const hasTemperatureChartData =
     metarRows.length +
       amosDisplayRows.length +
-      (latestPrediction?.hourlyCurve?.length ?? 0) >
+      (latestPrediction?.hourlyCurve?.length ?? 0) +
+      (preferredProviderPeak ? 1 : 0) >
     0;
   const hasCloudGuidance = hourlyCloudCover.some((hour) =>
     Number.isFinite(hour.coverPct),
@@ -1510,9 +1839,16 @@ export default function SeoulDayPage() {
         metarRows,
         amosDisplayRows,
         latestPrediction?.hourlyCurve,
+        preferredProviderPeak,
         unit,
       ),
-    [amosDisplayRows, latestPrediction?.hourlyCurve, metarRows, unit],
+    [
+      amosDisplayRows,
+      latestPrediction?.hourlyCurve,
+      metarRows,
+      preferredProviderPeak,
+      unit,
+    ],
   );
 
   const chartOptions = useMemo(
@@ -1607,6 +1943,16 @@ export default function SeoulDayPage() {
             windowEndMinute: forecastPeakEndMinute,
           },
         },
+        seoulProviderPeak: {
+          display: Boolean(preferredProviderPeak),
+          minute: preferredProviderPeak?.minute,
+          temperature: preferredProviderPeak?.temperature,
+          label: preferredProviderPeak
+            ? `${preferredProviderPeak.providerLabel.toUpperCase()} PEAK HOUR · ${preferredProviderPeak.temperature.toFixed(
+                1,
+              )}°${unit} · ${minuteLabel(preferredProviderPeak.minute)} KST`
+            : "",
+        },
         seoulHourlyCloudCover: {
           display: hourlyCloudSegments.length > 0,
           hours: hourlyCloudSegments,
@@ -1674,6 +2020,7 @@ export default function SeoulDayPage() {
       hasTemperatureChartData,
       hourlyCloudSegments,
       isToday,
+      preferredProviderPeak,
       sunsetMinute,
       unit,
     ],
@@ -2022,12 +2369,43 @@ export default function SeoulDayPage() {
               </div>
             </div>
             <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
+              {preferredProviderPeak && (
+                <p
+                  className="text-rose-300"
+                  title="Highest-weight usable provider with all 24 Seoul-local forecast hours."
+                >
+                  {preferredProviderPeak.providerLabel} forecast peak hour ·{" "}
+                  {preferredProviderPeak.temperature.toFixed(1)}°{unit} ·{" "}
+                  {minuteLabel(preferredProviderPeak.minute)} KST
+                </p>
+              )}
+              {preferredProviderPeak && (
+                <p className="mt-1 text-rose-300/60">
+                  Provider captured ·{" "}
+                  {formatLocalTime(
+                    preferredProviderPeak.capturedAtLocal ??
+                      preferredProviderPeak.capturedAt,
+                  )}{" "}
+                  KST
+                </p>
+              )}
               {latestPrediction && (
-                <p className="text-amber-300">
-                  Forecast peak ·{" "}
+                <p
+                  className={
+                    preferredProviderPeak
+                      ? "mt-1 text-amber-300/70"
+                      : "text-amber-300"
+                  }
+                >
+                  Tracker window ·{" "}
                   {formatPeakWindow(
                     latestPrediction.peakStartLocal,
                     latestPrediction.peakEndLocal,
+                  )}{" "}
+                  KST · rev {latestPrediction.revisionNumber ?? "—"} at{" "}
+                  {formatLocalTime(
+                    latestPrediction.generatedAtLocal ??
+                      latestPrediction.generatedAt,
                   )}{" "}
                   KST
                 </p>
@@ -2074,6 +2452,17 @@ export default function SeoulDayPage() {
               cloud cover is unavailable, not clear sky. The current hour ends
               at the NOW line; its remaining time stays hatched until observed.
             </p>
+            {preferredProviderPeak && (
+              <p>
+                The selected hourly provider is{" "}
+                {preferredProviderPeak.providerLabel}. Its latest stored
+                full-day forecast reaches{" "}
+                {preferredProviderPeak.temperature.toFixed(1)}
+                degrees {unit === "C" ? "Celsius" : "Fahrenheit"} in the first
+                tied peak forecast hour, beginning at{" "}
+                {minuteLabel(preferredProviderPeak.minute)} Korea Standard Time.
+              </p>
+            )}
           </div>
 
           <div
