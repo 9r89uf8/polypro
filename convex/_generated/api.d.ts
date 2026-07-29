@@ -26,6 +26,8 @@ import type * as preflight from "../preflight.js";
 import type * as pws from "../pws.js";
 import type * as seoul from "../seoul.js";
 import type * as seoulGk2a from "../seoulGk2a.js";
+import type * as seoulGk2aCollector from "../seoulGk2aCollector.js";
+import type * as seoulGk2aNode from "../seoulGk2aNode.js";
 import type * as seoulWeather from "../seoulWeather.js";
 import type * as synoptic from "../synoptic.js";
 import type * as time from "../time.js";
@@ -56,6 +58,8 @@ declare const fullApi: ApiFromModules<{
   pws: typeof pws;
   seoul: typeof seoul;
   seoulGk2a: typeof seoulGk2a;
+  seoulGk2aCollector: typeof seoulGk2aCollector;
+  seoulGk2aNode: typeof seoulGk2aNode;
   seoulWeather: typeof seoulWeather;
   synoptic: typeof synoptic;
   time: typeof time;

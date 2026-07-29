@@ -241,18 +241,28 @@ alongside the categorical sky-cover strip. It subscribes to
 - whether the upstream corridor is at least ten percentage points clearer than
   RKSI, plus an approximate arrival time when such a signal exists.
 
-The KMA point product is normally produced every ten minutes at approximately
-2 km resolution. `DSR` and absorbed shortwave radiation (`ASR`) remain separate
-stored values in W/m². The clear-sky denominator is a model, not another GK2A
-measurement, so the UI calls the ratio **estimated solar transmission**.
-Transmission is omitted when modeled clear-sky DSR is below 50 W/m², including
-night and very low sun, rather than rendering a misleading zero percent.
+The anonymously reachable NMSC viewer normally publishes the Korea-area GK2A
+SWRAD product
+every ten minutes at approximately 2 km resolution. The collector discovers
+the newest viewer frame, resolves its NetCDF download, and extracts both
+surface downward shortwave radiation (`DSR`) and absorbed shortwave radiation
+(`ASR`) from that one grid. DSR and ASR remain separate stored values in W/m².
+The clear-sky denominator is a model, not another GK2A measurement, so the UI
+calls the ratio **estimated solar transmission**. Transmission is omitted when
+modeled clear-sky DSR is below 50 W/m², including night and very low sun, rather
+than rendering a misleading zero percent.
+
+`Current` and next-hour/upstream guidance are shown only for a fresh sample
+inside the active collection window. At night, after `16:00 KST`, or when a
+sample is stale, the panel labels the value as the latest retained transmission,
+shows its age, and suppresses future guidance.
 
 The collector projects 20-, 40-, and 60-minute upstream sample points from the
 latest representative 15L AMOS wind direction and speed. These are spatial
-GK2A DSR samples, but the distance and arrival time use surface wind as a
-proxy. They are not satellite-derived cloud-motion vectors. Missing, stale, or
-calm wind leaves the upstream reading unavailable.
+GK2A DSR samples extracted from the same NetCDF grid as RKSI, but the distance
+and arrival time use surface wind as a proxy. They are not satellite-derived
+cloud-motion vectors. Missing, stale, or calm wind leaves the upstream reading
+unavailable.
 
 An expandable loop beneath the metrics requests the previous 90 minutes of
 KMA's public `RGB cloud-enhanced` Korea-area GK2A imagery. The source produces
@@ -261,15 +271,23 @@ visual cadence and loads them only when expanded. The server route
 `/api/seoul/gk2a-loop` validates frame timestamps, obtains the KMA-owned image,
 and proxies it without exposing arbitrary upstream URLs. The UI applies a
 fixed RKSI crop, airport marker, surface-wind arrow, and upwind corridor. The
-loop is contextual imagery; the numerical panel continues to use the GK2A DSR
-point product.
+loop remains lazy and contextual; the browser requests it only after expansion,
+and the numerical panel continues to use the NMSC SWRAD NetCDF.
 
-The point API requires the server-only Convex environment variable
-`KMA_API_HUB_AUTH_KEY`. When it is absent, the query and scheduled action return
-an explicit `unconfigured` status without throwing, the metric cells stay
-unavailable, and the public imagery loop can still operate. Historical routes
-show only DSR rows captured on that date; they do not trigger a point-product
-backfill.
+The viewer requests do not require `KMA_API_HUB_AUTH_KEY`, but keyless
+reachability is not treated as usage approval. The downloaded NetCDF declares
+that access is restricted to approved users, and KMA's copyright policy
+requires prior consultation for material without an applicable KOGL mark.
+Collection therefore remains disabled unless Convex has
+`NMSC_GK2A_ACCESS_APPROVED=true` after NMSC confirms this use. There is no API
+Hub, cloud-category, or image-derived numerical fallback. Once enabled, a
+failed viewer discovery, NetCDF download, or grid extraction is shown as source
+failure while any still-retained observation remains visible with its age. The
+downloaded NetCDF exists only in a temporary directory during extraction and
+is deleted in a `finally` path; the application stores extracted samples, not
+the raw file. Dashboard queries hide numerical observations at 48 hours, and a
+database-only cleanup runs every 30 minutes. Historical routes never trigger a
+satellite backfill.
 
 ## Weather.com hourly revision diagnostics
 
@@ -382,19 +400,26 @@ reactively after the collectors write to Convex.
 Route validation checks actual calendar dates, including month lengths and leap
 years, rather than accepting every string shaped like `YYYY-MM-DD`.
 
-For the current Seoul date, the first page load and `Sync now` first request:
+For the current Seoul date, the first page load and `Sync now` request:
 
 - `seoul:pollLatestNoaaStationMetar`
 - `seoul:pollLatestAmosTemperatureSites`
-- `seoulGk2a:pollLatestSolarHeating`
 
 The page no longer calls `seoulWeather:recomputeTodayHighPrediction` from this
 manual path. The status message reports partial observation-source failures.
 The manual AMOS request is a single immediate fetch, while the scheduled
-rollover watch remains the lowest-latency path. A missing GK2A key is reported
-as setup required rather than making the two observation refreshes look
-failed. Provider captures continue on their 15-minute schedule and update the
-Weather.com high/time marker reactively.
+rollover watch remains the lowest-latency path. The current-day solar panel
+provides a separate `Refresh GK2A` button that calls
+`seoulGk2aCollector:requestSolarHeatingRefresh` during the same daytime window
+and shows its own queued/in-flight/final state. The server enforces a ten-minute
+minimum interval, deduplicates already-resolved frames, and serializes work
+with a run-owned lock. The button is the only client-triggered GK2A collection
+path; the initial load and combined `Sync now` do not download the SWRAD
+NetCDF. It is disabled outside `11:00–16:00 KST` and until NMSC access is
+approved. A GK2A failure therefore does not make the METAR or AMOS refresh look
+failed, and there is no alternate numerical solar source. Provider captures
+continue on their 15-minute schedule and update the Weather.com high/time
+marker reactively.
 
 Historical routes only display already-captured rows. There is no historical
 backfill from these latest-value endpoints, and the historical page does not
@@ -402,11 +427,14 @@ trigger recomputation.
 
 ## Backend prediction collectors
 
-- `seoul_gk2a_solar_every_10_min` runs at minutes `:06`, `:16`, `:26`,
-  `:36`, `:46`, and `:56`. Its 80-minute lookback catches delayed KMA
-  publication through idempotent airport upserts. Each run keeps full airport
-  history and only the newest DSR-bearing row at each wind-projected upstream
-  point.
+- After NMSC access is approved, the GK2A solar collector runs at
+  `11:16`, `11:36`, ... `15:56 KST`, accounting for the observed product
+  publication delay while staying inside `11:00–16:00 KST`. Each run discovers
+  the newest NMSC viewer frame, downloads one SWRAD NetCDF, samples RKSI and
+  the available wind-projected upstream points from that grid, and
+  idempotently skips a frame already resolved. `Refresh GK2A` provides an
+  explicit on-demand run inside the same window. A separate database-only
+  cleanup runs every 30 minutes; it does not contact NMSC.
 - `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
   `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
   and errors together. Both requests use the explicit `icaoCode=RKSI`
@@ -550,18 +578,22 @@ times.
 ### `seoulGk2aSolarObservations`
 
 Airport rows are unique by station/date/airport sample key/observation time and
-retain the full ten-minute history. Wind-projected rows use a per-collection
-sample key and retain the latest DSR-bearing result for the 20-, 40-, and
-60-minute corridor positions. Rows preserve DSR, optional ASR, modeled
-clear-sky DSR, solar elevation, optional transmission, source grid
-coordinates, wind and corridor metadata, raw source lines, and ingest timing.
+participate in a rolling 48-hour history. Wind-projected rows use a
+per-collection sample key for the 20-, 40-, and 60-minute corridor positions
+and have the same 48-hour limit. Rows preserve extracted DSR, optional ASR,
+modeled clear-sky DSR, solar elevation, optional transmission, source grid
+coordinates and quality metadata, wind and corridor metadata, the NMSC source
+frame identity, and ingest timing. The raw NetCDF is not retained.
 
 ### `seoulGk2aCollectorStatus`
 
-One row per station records `ok`, `partial`, `no_data`, `error`, or
-`unconfigured`, together with last attempt/success times, latest source
-observation, requested/stored counts, upstream availability, and the wind used
-for the most recent collection.
+One row per station records `ok`, `partial`, `no_data`, `error`, or the
+approval-required configuration state, together
+with last attempt/success times, latest source observation, requested/stored
+counts, upstream availability, the last resolved frame, run-owned collection
+lock, and the wind used for the most recent collection. The approval gate is
+separate from API-key configuration because the viewer requests themselves are
+anonymous.
 
 ### `seoulForecastCaptures`
 
@@ -627,9 +659,16 @@ though the redesigned page no longer renders the diagnostic table.
   described as proof that the physical thermometer is at the 15L threshold.
 - The old `http://amoapi.kma.go.kr/amoApi/metar` service was retired on
   2026-07-20 and is not used by the live chart collector.
-- GK2A point access is server-side because KMA API Hub passes the auth key as a
-  request parameter. The key must never be placed in a `NEXT_PUBLIC_*`
-  variable or returned to the browser.
+- GK2A numerical collection remains server-side. The viewer is anonymously
+  reachable and requires no API key, but its NetCDF embeds a restricted-access
+  license. `NMSC_GK2A_ACCESS_APPROVED=true` must not be set until NMSC confirms
+  the intended automated use. Once enabled, Convex performs the bounded NetCDF
+  download, HDF5 validation, quality filtering, coordinate conversion, and
+  temporary-file cleanup; the browser receives only extracted dashboard
+  values.
+- The NMSC viewer NetCDF is the sole numerical solar source. Failures remain
+  explicit and do not fall back to API Hub, the optional imagery loop, or
+  cloud-cover categories.
 - KMA/NMSC documents the SWRAD DSR product as a daylight retrieval with
   limitations at high solar/viewing zenith angles. The UI preserves missing
   values and source health instead of substituting cloud-cover categories or

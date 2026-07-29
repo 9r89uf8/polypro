@@ -5,6 +5,7 @@ import {
   queryGeneric,
 } from "convex/server";
 import { v } from "convex/values";
+import { api } from "./_generated/api";
 
 const SEOUL_TIMEZONE = "Asia/Seoul";
 const RKSI_STATION_ICAO = "RKSI";
@@ -13,20 +14,15 @@ const RKSI_LONGITUDE = 126.4407;
 const RKSI_REPRESENTATIVE_RUNWAY_NO = "2";
 const RKSI_REPRESENTATIVE_RUNWAY_DIRECTION = "15L";
 
-const KMA_GK2A_POINT_URL =
-  "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph_sun_sat_txt";
-const KMA_SOURCE = "kma_api_hub_gk2a";
-const KMA_SOURCE_ENDPOINT = "nph_sun_sat_txt";
+const KMA_SOURCE_ENDPOINT = "selectImgDown.do";
 const PRODUCT_CADENCE_MINUTES = 10;
-const COLLECTION_LOOKBACK_MINUTES = 80;
-const FETCH_TIMEOUT_MS = 20_000;
 const MILLIS_PER_MINUTE = 60 * 1000;
-const MAX_RECENT_WIND_AGE_MINUTES = 45;
-const MIN_UPWIND_WIND_SPEED_KT = 2;
+const COLLECTION_WINDOW_START_MINUTES = 11 * 60;
+const COLLECTION_WINDOW_END_MINUTES = 16 * 60;
+const COLLECTION_LOCK_TIMEOUT_MS = 15 * 60 * 1000;
+const OBSERVATION_RETENTION_MS = 48 * 60 * 60 * 1000;
 const TRANSMISSION_MIN_CLEAR_SKY_WM2 = 50;
-const TRANSMISSION_MAX_PCT = 200;
 const FRESH_OBSERVATION_AGE_MINUTES = 35;
-const UPWIND_HORIZONS_MINUTES = [20, 40, 60];
 
 const COLLECTOR_STATUS = {
   OK: "ok",
@@ -42,12 +38,6 @@ const POINT_KIND = {
   UPWIND_40M: "upwind_40m",
   UPWIND_60M: "upwind_60m",
 };
-
-const pointKindByHorizon = new Map([
-  [20, POINT_KIND.UPWIND_20M],
-  [40, POINT_KIND.UPWIND_40M],
-  [60, POINT_KIND.UPWIND_60M],
-]);
 
 const seoulDateFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: SEOUL_TIMEZONE,
@@ -83,22 +73,6 @@ function formatSeoulDate(epochMs) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function formatSeoulDateTime(epochMs) {
-  const parts = getDateParts(seoulDateTimeFormatter, new Date(epochMs));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
-}
-
-function formatUtcRequestTimestamp(epochMs) {
-  const date = new Date(epochMs);
-  return [
-    date.getUTCFullYear(),
-    String(date.getUTCMonth() + 1).padStart(2, "0"),
-    String(date.getUTCDate()).padStart(2, "0"),
-    String(date.getUTCHours()).padStart(2, "0"),
-    String(date.getUTCMinutes()).padStart(2, "0"),
-  ].join("");
-}
-
 function isValidDateKey(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ""));
   if (!match) {
@@ -130,15 +104,6 @@ function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function toNonEmptyString(value) {
-  const trimmed = String(value ?? "").trim();
-  return trimmed ? trimmed : null;
-}
-
-function getKmaApiHubAuthKey() {
-  return toNonEmptyString(process.env.KMA_API_HUB_AUTH_KEY);
-}
-
 function normalizeStationIcao(value) {
   const stationIcao = String(value ?? RKSI_STATION_ICAO)
     .trim()
@@ -149,406 +114,21 @@ function normalizeStationIcao(value) {
   return stationIcao;
 }
 
-function formatErrorMessage(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message
-    .replace(/([?&]authKey=)[^&\s]+/gi, "$1[REDACTED]")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 500);
+function hasApprovedNmscAccess() {
+  return process.env.NMSC_GK2A_ACCESS_APPROVED === "true";
 }
 
-function parseFiniteNumber(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$/.test(
-      String(value).trim(),
-    )
-  ) {
-    return null;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+function seoulMinuteOfDay(epochMs) {
+  const parts = getDateParts(seoulDateTimeFormatter, new Date(epochMs));
+  return Number(parts.hour) * 60 + Number(parts.minute);
 }
 
-function parseUtcTimestampParts(year, month, day, hour, minute, second = 0) {
-  const epochMs = Date.UTC(year, month - 1, day, hour, minute, second);
-  const parsed = new Date(epochMs);
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day ||
-    parsed.getUTCHours() !== hour ||
-    parsed.getUTCMinutes() !== minute ||
-    parsed.getUTCSeconds() !== second
-  ) {
-    return null;
-  }
-  return epochMs;
-}
-
-function parseCompactUtcTimestamp(value) {
-  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?$/.exec(
-    String(value ?? "").trim(),
-  );
-  if (!match) {
-    return null;
-  }
-  return parseUtcTimestampParts(
-    Number(match[1]),
-    Number(match[2]),
-    Number(match[3]),
-    Number(match[4]),
-    Number(match[5]),
-    Number(match[6] ?? 0),
-  );
-}
-
-function findUtcTimestamp(line, tokens) {
-  for (let index = 0; index < tokens.length; index += 1) {
-    const epochMs = parseCompactUtcTimestamp(tokens[index]);
-    if (Number.isFinite(epochMs)) {
-      return { epochMs, tokenIndex: index };
-    }
-  }
-
-  const separated = String(line).match(
-    /\b(\d{4})[-/.](\d{2})[-/.](\d{2})[T\s]+(\d{2}):(\d{2})(?::(\d{2}))?\b/,
-  );
-  if (!separated) {
-    return null;
-  }
-  const epochMs = parseUtcTimestampParts(
-    Number(separated[1]),
-    Number(separated[2]),
-    Number(separated[3]),
-    Number(separated[4]),
-    Number(separated[5]),
-    Number(separated[6] ?? 0),
-  );
-  return Number.isFinite(epochMs) ? { epochMs, tokenIndex: -1 } : null;
-}
-
-function splitKmaLine(line) {
-  return String(line)
-    .trim()
-    .replace(/^\uFEFF/, "")
-    .split(/[,\s|]+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
-}
-
-function normalizeHeaderToken(token) {
-  return String(token ?? "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9_]/g, "");
-}
-
-function isRadiationHeaderColumn(column, product) {
+function isWithinCollectionWindow(epochMs) {
+  const minuteOfDay = seoulMinuteOfDay(epochMs);
   return (
-    column === product || new RegExp(`^${product}_?W(?:M2|M)?$`).test(column)
+    minuteOfDay >= COLLECTION_WINDOW_START_MINUTES &&
+    minuteOfDay < COLLECTION_WINDOW_END_MINUTES
   );
-}
-
-function findHeaderColumns(lines, product) {
-  let best = null;
-  for (const line of lines) {
-    if (/\b\d{12,14}\b/.test(line)) {
-      continue;
-    }
-    const columns = splitKmaLine(line.replace(/^\s*#+\s*/, "")).map(
-      normalizeHeaderToken,
-    );
-    const hasTime = columns.some((column) =>
-      /^(?:TM|TIME|DATETIME|DATE)(?:UTC|KST)?$/.test(column),
-    );
-    const hasValue = columns.some(
-      (column) =>
-        ["VALUE", "VAL", "DATA"].includes(column) ||
-        isRadiationHeaderColumn(column, product),
-    );
-    if (hasTime && hasValue) {
-      best = columns;
-    }
-  }
-  return best;
-}
-
-function valueAtHeaderColumn(tokens, headerColumns, acceptedColumns) {
-  if (!headerColumns || headerColumns.length !== tokens.length) {
-    return null;
-  }
-  const index = headerColumns.findIndex(
-    (column) =>
-      acceptedColumns.includes(column) ||
-      acceptedColumns.some(
-        (accepted) =>
-          (["DSR", "ASR"].includes(accepted) &&
-            isRadiationHeaderColumn(column, accepted)) ||
-          (["LAT", "LON"].includes(accepted) && column.startsWith(accepted)),
-      ),
-  );
-  return index >= 0 ? parseFiniteNumber(tokens[index]) : null;
-}
-
-function findCoordinateTokenIndex(tokens, expectedValue, excludedIndexes) {
-  let bestIndex = -1;
-  let bestDifference = Number.POSITIVE_INFINITY;
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (excludedIndexes.has(index)) {
-      continue;
-    }
-    const value = parseFiniteNumber(tokens[index]);
-    if (!Number.isFinite(value)) {
-      continue;
-    }
-    const difference = Math.abs(value - expectedValue);
-    if (difference <= 0.25 && difference < bestDifference) {
-      bestIndex = index;
-      bestDifference = difference;
-    }
-  }
-  return bestIndex;
-}
-
-function extractRadiationValue({
-  line,
-  tokens,
-  headerColumns,
-  product,
-  timestampTokenIndex,
-  expectedLatitude,
-  expectedLongitude,
-}) {
-  const headerValue = valueAtHeaderColumn(tokens, headerColumns, [
-    product,
-    "VALUE",
-    "VAL",
-    "DATA",
-  ]);
-  if (Number.isFinite(headerValue)) {
-    return headerValue;
-  }
-
-  const labelledMatch = new RegExp(
-    `\\b${product}\\b\\s*[:=]?\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[Ee][+-]?\\d+)?)`,
-    "i",
-  ).exec(line);
-  if (labelledMatch) {
-    return parseFiniteNumber(labelledMatch[1]);
-  }
-
-  const excludedIndexes = new Set(
-    timestampTokenIndex >= 0 ? [timestampTokenIndex] : [],
-  );
-  const latitudeIndex = findCoordinateTokenIndex(
-    tokens,
-    expectedLatitude,
-    excludedIndexes,
-  );
-  if (latitudeIndex >= 0) {
-    excludedIndexes.add(latitudeIndex);
-  }
-  const longitudeIndex = findCoordinateTokenIndex(
-    tokens,
-    expectedLongitude,
-    excludedIndexes,
-  );
-  if (longitudeIndex >= 0) {
-    excludedIndexes.add(longitudeIndex);
-  }
-
-  const candidates = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (excludedIndexes.has(index)) {
-      continue;
-    }
-    const value = parseFiniteNumber(tokens[index]);
-    if (Number.isFinite(value)) {
-      candidates.push(value);
-    }
-  }
-  // KMA's standard point rows leave a single numeric value after the UTC
-  // timestamp and nearest-grid coordinates are excluded. If a future format
-  // adds an unlabelled quality flag or grid index, reject the ambiguous row
-  // instead of silently storing the wrong numeric column as radiation.
-  return candidates.length === 1 ? candidates[0] : null;
-}
-
-function extractSourceCoordinate(tokens, headerColumns, name, fallback) {
-  const acceptedColumns =
-    name === "latitude" ? ["LAT", "LATITUDE"] : ["LON", "LONGITUDE"];
-  const headerValue = valueAtHeaderColumn(
-    tokens,
-    headerColumns,
-    acceptedColumns,
-  );
-  if (Number.isFinite(headerValue)) {
-    return headerValue;
-  }
-
-  const expected = fallback;
-  let best = null;
-  let bestDifference = Number.POSITIVE_INFINITY;
-  for (const token of tokens) {
-    const value = parseFiniteNumber(token);
-    if (!Number.isFinite(value)) {
-      continue;
-    }
-    const difference = Math.abs(value - expected);
-    if (difference <= 0.25 && difference < bestDifference) {
-      best = value;
-      bestDifference = difference;
-    }
-  }
-  return best;
-}
-
-function parseKmaErrorPayload(text) {
-  const trimmed = String(text ?? "").trim();
-  if (!trimmed.startsWith("{")) {
-    return null;
-  }
-  try {
-    const payload = JSON.parse(trimmed);
-    const status = Number(payload?.result?.status ?? payload?.status);
-    const message =
-      toNonEmptyString(payload?.result?.message) ??
-      toNonEmptyString(payload?.message);
-    return status >= 400 || message ? { status, message } : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseKmaPointProductText(text, product, point) {
-  const apiError = parseKmaErrorPayload(text);
-  if (apiError) {
-    throw new Error(
-      `KMA API Hub ${product} response error${
-        Number.isFinite(apiError.status) ? ` ${apiError.status}` : ""
-      }: ${apiError.message ?? "unknown error"}`,
-    );
-  }
-
-  const body = String(text ?? "").replace(/^\uFEFF/, "");
-  if (
-    /<html[\s>]/i.test(body) ||
-    /(유효한\s*인증키가\s*아닙니다|unauthorized|invalid\s+auth)/i.test(body)
-  ) {
-    throw new Error(`KMA API Hub ${product} returned an authentication error.`);
-  }
-
-  const lines = body.split(/\r?\n/);
-  const headerColumns = findHeaderColumns(lines, product);
-  const rowsByTime = new Map();
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const tokens = splitKmaLine(line);
-    const timestamp = findUtcTimestamp(line, tokens);
-    if (!timestamp) {
-      continue;
-    }
-    const value = extractRadiationValue({
-      line,
-      tokens,
-      headerColumns,
-      product,
-      timestampTokenIndex: timestamp.tokenIndex,
-      expectedLatitude: point.latitude,
-      expectedLongitude: point.longitude,
-    });
-    if (!Number.isFinite(value) || value < 0 || value > 2000) {
-      continue;
-    }
-    rowsByTime.set(timestamp.epochMs, {
-      obsTimeUtc: timestamp.epochMs,
-      value: round(value, 2),
-      sourceLatitude: extractSourceCoordinate(
-        tokens,
-        headerColumns,
-        "latitude",
-        point.latitude,
-      ),
-      sourceLongitude: extractSourceCoordinate(
-        tokens,
-        headerColumns,
-        "longitude",
-        point.longitude,
-      ),
-      rawLine: line.slice(0, 500),
-    });
-  }
-
-  return [...rowsByTime.values()].sort(
-    (left, right) => left.obsTimeUtc - right.obsTimeUtc,
-  );
-}
-
-function buildKmaPointProductUrl({
-  authKey,
-  product,
-  point,
-  requestStartUtc,
-  requestEndUtc,
-}) {
-  const url = new URL(KMA_GK2A_POINT_URL);
-  url.searchParams.set("tm1", formatUtcRequestTimestamp(requestStartUtc));
-  url.searchParams.set("tm2", formatUtcRequestTimestamp(requestEndUtc));
-  url.searchParams.set("int", String(PRODUCT_CADENCE_MINUTES));
-  url.searchParams.set("varn", product);
-  url.searchParams.set("lat", point.latitude.toFixed(6));
-  url.searchParams.set("lon", point.longitude.toFixed(6));
-  url.searchParams.set("authKey", authKey);
-  return url;
-}
-
-async function fetchKmaPointProductRows({
-  authKey,
-  product,
-  point,
-  requestStartUtc,
-  requestEndUtc,
-}) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(
-      buildKmaPointProductUrl({
-        authKey,
-        product,
-        point,
-        requestStartUtc,
-        requestEndUtc,
-      }),
-      {
-        cache: "no-store",
-        signal: controller.signal,
-        headers: {
-          Accept: "text/plain,*/*",
-          "Cache-Control": "no-cache",
-        },
-      },
-    );
-    const body = await response.text();
-    if (!response.ok) {
-      const apiError = parseKmaErrorPayload(body);
-      throw new Error(
-        `KMA API Hub ${product} fetch failed (${response.status}): ${
-          apiError?.message ?? body.slice(0, 180)
-        }`,
-      );
-    }
-    return parseKmaPointProductText(body, product, point);
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 function degreesToRadians(value) {
@@ -626,238 +206,6 @@ function haurwitzClearSkyDsr(epochMs, latitude, longitude) {
     solarElevationDeg: round(position.solarElevationDeg, 2),
     clearSkyDsrWm2: round(Math.max(0, clearSkyDsrWm2), 1),
   };
-}
-
-function destinationPoint(latitude, longitude, bearingDegrees, distanceKm) {
-  const earthRadiusKm = 6371.0088;
-  const angularDistance = distanceKm / earthRadiusKm;
-  const bearing = degreesToRadians(bearingDegrees);
-  const latitudeRadians = degreesToRadians(latitude);
-  const longitudeRadians = degreesToRadians(longitude);
-  const destinationLatitude = Math.asin(
-    Math.sin(latitudeRadians) * Math.cos(angularDistance) +
-      Math.cos(latitudeRadians) * Math.sin(angularDistance) * Math.cos(bearing),
-  );
-  const destinationLongitude =
-    longitudeRadians +
-    Math.atan2(
-      Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(latitudeRadians),
-      Math.cos(angularDistance) -
-        Math.sin(latitudeRadians) * Math.sin(destinationLatitude),
-    );
-  return {
-    latitude: round(radiansToDegrees(destinationLatitude), 6),
-    longitude: round(
-      ((radiansToDegrees(destinationLongitude) + 540) % 360) - 180,
-      6,
-    ),
-  };
-}
-
-function buildSamplingPoints(wind, collectionRunAt) {
-  const airport = {
-    pointKind: POINT_KIND.AIRPORT,
-    sampleKey: POINT_KIND.AIRPORT,
-    latitude: RKSI_LATITUDE,
-    longitude: RKSI_LONGITUDE,
-  };
-  if (!wind) {
-    return {
-      points: [airport],
-      upwindStatus: "unavailable",
-      upwindReason: "No recent representative AMOS wind is stored.",
-    };
-  }
-  if (wind.ageMinutes > MAX_RECENT_WIND_AGE_MINUTES) {
-    return {
-      points: [airport],
-      upwindStatus: "unavailable",
-      upwindReason: "The latest representative AMOS wind is stale.",
-      wind,
-    };
-  }
-  if (wind.windSpeedKt < MIN_UPWIND_WIND_SPEED_KT) {
-    return {
-      points: [airport],
-      upwindStatus: "calm",
-      upwindReason: `Wind below ${MIN_UPWIND_WIND_SPEED_KT} kt does not define a useful upwind corridor.`,
-      wind,
-    };
-  }
-
-  const upwindPoints = UPWIND_HORIZONS_MINUTES.map((upwindMinutes) => {
-    const distanceUpwindKm = Math.min(
-      120,
-      (wind.windSpeedKt * 1.852 * upwindMinutes) / 60,
-    );
-    const coordinate = destinationPoint(
-      RKSI_LATITUDE,
-      RKSI_LONGITUDE,
-      wind.windDirectionFromDeg,
-      distanceUpwindKm,
-    );
-    return {
-      pointKind: pointKindByHorizon.get(upwindMinutes),
-      sampleKey: `${pointKindByHorizon.get(upwindMinutes)}:${collectionRunAt}`,
-      ...coordinate,
-      upwindMinutes,
-      distanceUpwindKm: round(distanceUpwindKm, 2),
-    };
-  }).filter(
-    (point) =>
-      point.latitude >= 33 &&
-      point.latitude <= 43 &&
-      point.longitude >= 124 &&
-      point.longitude <= 132,
-  );
-
-  return {
-    points: [airport, ...upwindPoints],
-    upwindStatus: upwindPoints.length === 3 ? "available" : "partial",
-    upwindReason:
-      upwindPoints.length === 3
-        ? null
-        : "One or more wind-projected points fell outside the supported GK2A point-query domain.",
-    wind,
-  };
-}
-
-async function fetchPointProducts({
-  authKey,
-  point,
-  requestStartUtc,
-  requestEndUtc,
-}) {
-  const [dsrResult, asrResult] = await Promise.allSettled(
-    ["DSR", "ASR"].map((product) =>
-      fetchKmaPointProductRows({
-        authKey,
-        product,
-        point,
-        requestStartUtc,
-        requestEndUtc,
-      }),
-    ),
-  );
-  return {
-    point,
-    dsrRows: dsrResult.status === "fulfilled" ? dsrResult.value : [],
-    asrRows: asrResult.status === "fulfilled" ? asrResult.value : [],
-    errors: [
-      ...(dsrResult.status === "rejected"
-        ? [`DSR: ${formatErrorMessage(dsrResult.reason)}`]
-        : []),
-      ...(asrResult.status === "rejected"
-        ? [`ASR: ${formatErrorMessage(asrResult.reason)}`]
-        : []),
-    ],
-  };
-}
-
-function mergePointProductRows({
-  pointResult,
-  wind,
-  collectionRunAt,
-  keepHistory,
-}) {
-  const rowsByTime = new Map();
-  for (const row of pointResult.dsrRows) {
-    rowsByTime.set(row.obsTimeUtc, {
-      obsTimeUtc: row.obsTimeUtc,
-      dsrWm2: row.value,
-      dsrRawLine: row.rawLine,
-      sourceLatitude: row.sourceLatitude,
-      sourceLongitude: row.sourceLongitude,
-    });
-  }
-  for (const row of pointResult.asrRows) {
-    const existing = rowsByTime.get(row.obsTimeUtc) ?? {
-      obsTimeUtc: row.obsTimeUtc,
-    };
-    rowsByTime.set(row.obsTimeUtc, {
-      ...existing,
-      asrWm2: row.value,
-      asrRawLine: row.rawLine,
-      sourceLatitude: existing.sourceLatitude ?? row.sourceLatitude,
-      sourceLongitude: existing.sourceLongitude ?? row.sourceLongitude,
-    });
-  }
-
-  let mergedRows = [...rowsByTime.values()].sort(
-    (left, right) => left.obsTimeUtc - right.obsTimeUtc,
-  );
-  if (!keepHistory) {
-    const latestWithDsr = [...mergedRows]
-      .reverse()
-      .find((row) => Number.isFinite(row.dsrWm2));
-    mergedRows = latestWithDsr ? [latestWithDsr] : [];
-  }
-
-  return mergedRows.map((row) => {
-    const applicableWind =
-      wind &&
-      (pointResult.point.pointKind !== POINT_KIND.AIRPORT ||
-        Math.abs(wind.obsTimeUtc - row.obsTimeUtc) <= 30 * MILLIS_PER_MINUTE)
-        ? wind
-        : null;
-    const clearSky = haurwitzClearSkyDsr(
-      row.obsTimeUtc,
-      pointResult.point.latitude,
-      pointResult.point.longitude,
-    );
-    const rawTransmissionPct =
-      Number.isFinite(row.dsrWm2) &&
-      clearSky.clearSkyDsrWm2 >= TRANSMISSION_MIN_CLEAR_SKY_WM2
-        ? (row.dsrWm2 / clearSky.clearSkyDsrWm2) * 100
-        : null;
-    const transmissionPct =
-      Number.isFinite(rawTransmissionPct) &&
-      rawTransmissionPct >= 0 &&
-      rawTransmissionPct <= TRANSMISSION_MAX_PCT
-        ? round(rawTransmissionPct, 1)
-        : null;
-    return {
-      stationIcao: RKSI_STATION_ICAO,
-      date: formatSeoulDate(row.obsTimeUtc),
-      obsTimeUtc: row.obsTimeUtc,
-      obsTimeLocal: formatSeoulDateTime(row.obsTimeUtc),
-      pointKind: pointResult.point.pointKind,
-      sampleKey: pointResult.point.sampleKey,
-      latitude: pointResult.point.latitude,
-      longitude: pointResult.point.longitude,
-      ...(Number.isFinite(row.sourceLatitude)
-        ? { sourceLatitude: row.sourceLatitude }
-        : {}),
-      ...(Number.isFinite(row.sourceLongitude)
-        ? { sourceLongitude: row.sourceLongitude }
-        : {}),
-      ...(Number.isFinite(pointResult.point.upwindMinutes)
-        ? { upwindMinutes: pointResult.point.upwindMinutes }
-        : {}),
-      ...(Number.isFinite(pointResult.point.distanceUpwindKm)
-        ? { distanceUpwindKm: pointResult.point.distanceUpwindKm }
-        : {}),
-      ...(Number.isFinite(row.dsrWm2) ? { dsrWm2: row.dsrWm2 } : {}),
-      ...(Number.isFinite(row.asrWm2) ? { asrWm2: row.asrWm2 } : {}),
-      clearSkyDsrWm2: clearSky.clearSkyDsrWm2,
-      solarElevationDeg: clearSky.solarElevationDeg,
-      ...(Number.isFinite(transmissionPct) ? { transmissionPct } : {}),
-      ...(row.dsrRawLine ? { dsrRawLine: row.dsrRawLine } : {}),
-      ...(row.asrRawLine ? { asrRawLine: row.asrRawLine } : {}),
-      ...(applicableWind
-        ? {
-            windObservedAtUtc: applicableWind.obsTimeUtc,
-            windDirectionFromDeg: applicableWind.windDirectionFromDeg,
-            windSpeedKt: applicableWind.windSpeedKt,
-            windSpeedMps: applicableWind.windSpeedMps,
-          }
-        : {}),
-      source: KMA_SOURCE,
-      sourceEndpoint: KMA_SOURCE_ENDPOINT,
-      productCadenceMinutes: PRODUCT_CADENCE_MINUTES,
-      collectionRunAt,
-    };
-  });
 }
 
 const pointKindValidator = v.union(
@@ -975,6 +323,7 @@ export const getRecentWindForCollector = internalQueryGeneric({
       .filter(
         (row) =>
           Number.isFinite(row.obsTimeUtc) &&
+          row.obsTimeUtc <= args.now + MILLIS_PER_MINUTE &&
           Number.isFinite(row.windDirAvg) &&
           Number.isFinite(row.windSpeedAvg),
       )
@@ -1111,198 +460,17 @@ export const recordCollectorStatus = internalMutationGeneric({
   },
 });
 
-async function updateCollectorStatus(ctx, status) {
-  return await ctx.runMutation("seoulGk2a:recordCollectorStatus", status);
-}
-
 export const pollLatestSolarHeating = actionGeneric({
   args: {
     stationIcao: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
-    const stationIcao = normalizeStationIcao(args.stationIcao);
-    const lastAttemptAt = Date.now();
-    const lastAttemptAtLocal = formatSeoulDateTime(lastAttemptAt);
-    const authKey = getKmaApiHubAuthKey();
-
-    if (!authKey) {
-      const message =
-        "KMA_API_HUB_AUTH_KEY is not configured in the Convex deployment.";
-      await updateCollectorStatus(ctx, {
-        stationIcao,
-        status: COLLECTOR_STATUS.UNCONFIGURED,
-        configured: false,
-        lastAttemptAt,
-        lastAttemptAtLocal,
-        lastError: message,
-        requestedPointCount: 0,
-        storedRowCount: 0,
-        upwindStatus: "unavailable",
-      });
-      return {
-        ok: false,
-        status: COLLECTOR_STATUS.UNCONFIGURED,
-        configured: false,
-        stationIcao,
-        message,
-        lastAttemptAt,
-        rowCount: 0,
-      };
-    }
-
-    try {
-      const collectionRunAt =
-        Math.floor(
-          lastAttemptAt / (PRODUCT_CADENCE_MINUTES * MILLIS_PER_MINUTE),
-        ) *
-        PRODUCT_CADENCE_MINUTES *
-        MILLIS_PER_MINUTE;
-      const requestEndUtc = collectionRunAt;
-      const requestStartUtc =
-        requestEndUtc - COLLECTION_LOOKBACK_MINUTES * MILLIS_PER_MINUTE;
-      const wind = await ctx.runQuery("seoulGk2a:getRecentWindForCollector", {
-        stationIcao,
-        now: lastAttemptAt,
-      });
-      const sampling = buildSamplingPoints(wind, collectionRunAt);
-      const pointResults = await Promise.all(
-        sampling.points.map((point) =>
-          fetchPointProducts({
-            authKey,
-            point,
-            requestStartUtc,
-            requestEndUtc,
-          }),
-        ),
-      );
-      const rows = pointResults.flatMap((pointResult) =>
-        mergePointProductRows({
-          pointResult,
-          wind: sampling.wind ?? null,
-          collectionRunAt,
-          keepHistory: pointResult.point.pointKind === POINT_KIND.AIRPORT,
-        }),
-      );
-      const airportDsrRows = rows.filter(
-        (row) =>
-          row.pointKind === POINT_KIND.AIRPORT && Number.isFinite(row.dsrWm2),
-      );
-      const requestErrors = pointResults.flatMap((pointResult) =>
-        pointResult.errors.map(
-          (error) => `${pointResult.point.pointKind} ${error}`,
-        ),
-      );
-
-      let status;
-      if (!rows.length) {
-        status = requestErrors.length
-          ? COLLECTOR_STATUS.ERROR
-          : COLLECTOR_STATUS.NO_DATA;
-      } else if (!airportDsrRows.length || requestErrors.length) {
-        status = COLLECTOR_STATUS.PARTIAL;
-      } else {
-        status = COLLECTOR_STATUS.OK;
-      }
-
-      const writeResult = rows.length
-        ? await ctx.runMutation("seoulGk2a:upsertSolarObservations", {
-            stationIcao,
-            rows,
-          })
-        : {
-            insertedCount: 0,
-            patchedCount: 0,
-            unchangedCount: 0,
-            rowCount: 0,
-            latestObsTimeUtc: null,
-          };
-      const latestAirportRow = airportDsrRows.at(-1) ?? null;
-      const lastError = requestErrors.length
-        ? requestErrors.join("; ").slice(0, 500)
-        : status === COLLECTOR_STATUS.PARTIAL && !airportDsrRows.length
-          ? "KMA API Hub returned no parseable airport DSR rows in the requested window."
-          : status === COLLECTOR_STATUS.NO_DATA
-            ? "KMA API Hub returned no parseable GK2A point rows in the requested window."
-            : undefined;
-      const successful =
-        status === COLLECTOR_STATUS.OK || status === COLLECTOR_STATUS.PARTIAL;
-      await updateCollectorStatus(ctx, {
-        stationIcao,
-        status,
-        configured: true,
-        lastAttemptAt,
-        lastAttemptAtLocal,
-        ...(successful
-          ? {
-              lastSuccessAt: lastAttemptAt,
-              lastSuccessAtLocal: lastAttemptAtLocal,
-            }
-          : {}),
-        ...(latestAirportRow
-          ? {
-              latestObsTimeUtc: latestAirportRow.obsTimeUtc,
-              latestObsTimeLocal: latestAirportRow.obsTimeLocal,
-            }
-          : {}),
-        ...(lastError ? { lastError } : {}),
-        requestedPointCount: sampling.points.length,
-        storedRowCount: rows.length,
-        upwindStatus: sampling.upwindStatus,
-        ...(sampling.wind
-          ? {
-              windObservedAtUtc: sampling.wind.obsTimeUtc,
-              windDirectionFromDeg: sampling.wind.windDirectionFromDeg,
-              windSpeedKt: sampling.wind.windSpeedKt,
-            }
-          : {}),
-      });
-
-      return {
-        ok: successful,
-        status,
-        configured: true,
-        stationIcao,
-        lastAttemptAt,
-        requestStartUtc,
-        requestEndUtc,
-        requestedPointCount: sampling.points.length,
-        upwindStatus: sampling.upwindStatus,
-        ...(sampling.upwindReason
-          ? { upwindReason: sampling.upwindReason }
-          : {}),
-        ...(sampling.wind ? { wind: sampling.wind } : {}),
-        ...(latestAirportRow
-          ? {
-              latestObsTimeUtc: latestAirportRow.obsTimeUtc,
-              latestObsTimeLocal: latestAirportRow.obsTimeLocal,
-            }
-          : {}),
-        errors: requestErrors,
-        ...writeResult,
-      };
-    } catch (error) {
-      const message = formatErrorMessage(error);
-      await updateCollectorStatus(ctx, {
-        stationIcao,
-        status: COLLECTOR_STATUS.ERROR,
-        configured: true,
-        lastAttemptAt,
-        lastAttemptAtLocal,
-        lastError: message,
-        storedRowCount: 0,
-        upwindStatus: "unknown",
-      });
-      return {
-        ok: false,
-        status: COLLECTOR_STATUS.ERROR,
-        configured: true,
-        stationIcao,
-        message,
-        lastAttemptAt,
-        rowCount: 0,
-      };
-    }
-  },
+  handler: async (ctx, args) =>
+    await ctx.runMutation(
+      api.seoulGk2aCollector.requestSolarHeatingRefresh,
+      {
+        stationIcao: args.stationIcao,
+      },
+    ),
 });
 
 function median(values) {
@@ -1439,13 +607,16 @@ function publicObservation(row) {
 
 function dashboardStatusMessage(status, collector, latest, ageMinutes) {
   if (status === COLLECTOR_STATUS.UNCONFIGURED) {
-    return "GK2A solar input is unavailable until KMA_API_HUB_AUTH_KEY is configured.";
+    return "NMSC approval is required before automated GK2A NetCDF access can be enabled.";
+  }
+  if (status === "window_closed") {
+    return "Scheduled and manual GK2A sampling are paused outside 11:00–16:00 KST.";
   }
   if (status === "night") {
     return "Solar transmission is not calculated while modeled clear-sky irradiance is below 50 W/m².";
   }
   if (status === "stale") {
-    return `The latest GK2A point observation is ${Math.round(
+    return `The latest GK2A grid observation is ${Math.round(
       ageMinutes,
     )} minutes old.`;
   }
@@ -1456,7 +627,7 @@ function dashboardStatusMessage(status, collector, latest, ageMinutes) {
     return "No GK2A solar observation is stored for this date.";
   }
   if (status === COLLECTOR_STATUS.PARTIAL) {
-    return "GK2A solar data are available, but part of the latest point collection failed.";
+    return "GK2A solar data are available, but one or more grid samples failed quality checks.";
   }
   return "GK2A surface shortwave radiation is current.";
 }
@@ -1508,10 +679,11 @@ export const getSolarHeatingDashboard = queryGeneric({
           .take(24),
       ),
     ]);
-    const configured = Boolean(getKmaApiHubAuthKey());
+    const configured = hasApprovedNmscAccess();
     const orderedAirportRows = airportRows
       .filter(
         (row) =>
+          row.obsTimeUtc >= now - OBSERVATION_RETENTION_MS &&
           row.obsTimeUtc <= now + PRODUCT_CADENCE_MINUTES * MILLIS_PER_MINUTE,
       )
       .sort((left, right) => left.obsTimeUtc - right.obsTimeUtc);
@@ -1529,11 +701,15 @@ export const getSolarHeatingDashboard = queryGeneric({
       date === today &&
       haurwitzClearSkyDsr(now, RKSI_LATITUDE, RKSI_LONGITUDE).clearSkyDsrWm2 <
         TRANSMISSION_MIN_CLEAR_SKY_WM2;
+    const collectionWindowOpen =
+      date === today && isWithinCollectionWindow(now);
     let status;
     if (!configured) {
       status = COLLECTOR_STATUS.UNCONFIGURED;
     } else if (isNight) {
       status = "night";
+    } else if (date === today && !collectionWindowOpen) {
+      status = "window_closed";
     } else if (
       date === today &&
       latest &&
@@ -1544,7 +720,9 @@ export const getSolarHeatingDashboard = queryGeneric({
       status = COLLECTOR_STATUS.ERROR;
     } else if (!latest) {
       status =
-        date === today && collector?.status
+        date === today &&
+        collector?.status &&
+        collector.status !== COLLECTOR_STATUS.UNCONFIGURED
           ? collector.status
           : COLLECTOR_STATUS.NO_DATA;
     } else if (
@@ -1638,6 +816,7 @@ export const getSolarHeatingDashboard = queryGeneric({
       date,
       today,
       configured,
+      collectionWindowOpen,
       status,
       statusMessage: dashboardStatusMessage(
         status,
@@ -1646,7 +825,7 @@ export const getSolarHeatingDashboard = queryGeneric({
         ageMinutes,
       ),
       source: {
-        provider: "KMA API Hub",
+        provider: "KMA/NMSC public satellite viewer",
         satellite: "GK2A",
         endpoint: KMA_SOURCE_ENDPOINT,
         productCadenceMinutes: PRODUCT_CADENCE_MINUTES,
@@ -1655,7 +834,7 @@ export const getSolarHeatingDashboard = queryGeneric({
       collector: collector
         ? {
             status: collector.status,
-            configured: collector.configured,
+            configured,
             lastAttemptAt: collector.lastAttemptAt,
             lastAttemptAtLocal: collector.lastAttemptAtLocal,
             ...(Number.isFinite(collector.lastSuccessAt)
@@ -1664,11 +843,26 @@ export const getSolarHeatingDashboard = queryGeneric({
                   lastSuccessAtLocal: collector.lastSuccessAtLocal,
                 }
               : {}),
-            ...(collector.status !== COLLECTOR_STATUS.OK && collector.lastError
+            ...(configured &&
+            collector.status !== COLLECTOR_STATUS.OK &&
+            collector.lastError
               ? { lastError: collector.lastError }
               : {}),
             ...(collector.upwindStatus
               ? { upwindStatus: collector.upwindStatus }
+              : {}),
+            ...(Number.isFinite(collector.collectionInFlightSince)
+              ? {
+                  collectionInFlightSince:
+                    collector.collectionInFlightSince,
+                  collectionMode: collector.collectionMode ?? "unknown",
+                  collectionActive:
+                    now - collector.collectionInFlightSince <
+                    COLLECTION_LOCK_TIMEOUT_MS,
+                }
+              : {}),
+            ...(Number.isFinite(collector.collectionQueuedAt)
+              ? { collectionQueuedAt: collector.collectionQueuedAt }
               : {}),
           }
         : null,

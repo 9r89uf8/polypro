@@ -357,6 +357,7 @@ export default defineSchema({
     obsCount: v.number(),
     latestObsTimeUtc: v.optional(v.number()),
     latestObsTimeLocal: v.optional(v.string()),
+    lastResolvedFrameTimeUtc: v.optional(v.number()),
     latestRawMetar: v.optional(v.string()),
     latestMetarOrigin: v.optional(v.string()),
     maxTempC: v.optional(v.number()),
@@ -1066,6 +1067,12 @@ export default defineSchema({
     windSpeedMps: v.optional(v.number()),
     source: v.string(),
     sourceEndpoint: v.string(),
+    sourceFileName: v.optional(v.string()),
+    sourceGridRow: v.optional(v.number()),
+    sourceGridColumn: v.optional(v.number()),
+    dsrQualityFlag: v.optional(v.number()),
+    asrQualityFlag: v.optional(v.number()),
+    shortwaveQualityFlag: v.optional(v.number()),
     productCadenceMinutes: v.number(),
     collectionRunAt: v.number(),
     firstSeenAt: v.number(),
@@ -1082,7 +1089,13 @@ export default defineSchema({
       "date",
       "pointKind",
       "obsTimeUtc",
-    ]),
+    ])
+    .index("by_station_point_ts", [
+      "stationIcao",
+      "pointKind",
+      "obsTimeUtc",
+    ])
+    .index("by_station_obs_ts", ["stationIcao", "obsTimeUtc"]),
 
   seoulGk2aCollectorStatus: defineTable({
     stationIcao: v.string(),
@@ -1101,6 +1114,10 @@ export default defineSchema({
     windObservedAtUtc: v.optional(v.number()),
     windDirectionFromDeg: v.optional(v.number()),
     windSpeedKt: v.optional(v.number()),
+    collectionQueuedAt: v.optional(v.number()),
+    collectionInFlightSince: v.optional(v.number()),
+    collectionMode: v.optional(v.string()),
+    collectionRunId: v.optional(v.string()),
     updatedAt: v.number(),
   }).index("by_station", ["stationIcao"]),
 

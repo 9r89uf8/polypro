@@ -247,13 +247,22 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
-// GK2A radiation point products are produced on a ten-minute cadence. Poll
-// six minutes after each nominal boundary and retain an 80-minute lookback so
-// a delayed KMA publication is captured by a later idempotent upsert.
+// GK2A SWRAD frames are produced on a ten-minute cadence and commonly appear
+// about twelve minutes later. Queue one download every twenty minutes from
+// 11:16 through 15:56 KST so the 11:00 through 15:40 frames are available.
 crons.cron(
-  "seoul_gk2a_solar_every_10_min",
-  "6,16,26,36,46,56 * * * *",
-  api.seoulGk2a.pollLatestSolarHeating,
+  "seoul_gk2a_solar_peak_window",
+  "16,36,56 2-6 * * *",
+  internal.seoulGk2aCollector.queueScheduledSolarHeatingRefresh,
+  { stationIcao: "RKSI" },
+);
+
+// Raw files are always temporary. This lightweight database-only cleanup
+// enforces the numerical row retention independently of satellite downloads.
+crons.cron(
+  "seoul_gk2a_solar_retention",
+  "8,38 * * * *",
+  internal.seoulGk2aCollector.pruneExpiredSolarObservations,
   { stationIcao: "RKSI" },
 );
 

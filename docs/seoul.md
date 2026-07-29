@@ -85,43 +85,74 @@ chart path:
 
 ## GK2A surface shortwave radiation
 
-The supported source for direct solar-heating input is KMA API Hub's
-authenticated **GK2A meteorological-products point query**:
+The numerical source for direct solar-heating input is the anonymously
+reachable NMSC GK2A satellite viewer. Its requests do not require a KMA API Hub
+account, API key, or browser-supplied credential. That technical reachability
+does not establish reuse permission: the downloaded NetCDF's embedded license
+says access is restricted to approved users, while KMA's copyright policy asks
+users to consult KMA before using unmarked material. The production collector
+therefore requires `NMSC_GK2A_ACCESS_APPROVED=true`, which must be set only
+after NMSC confirms this automated use. The collector uses the viewer's own
+discovery, file-resolution, and download requests:
 
 ```text
-GET https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph_sun_sat_txt
-  ?tm1=YYYYMMDDHHmm
-  &tm2=YYYYMMDDHHmm
-  &int=10
-  &varn=DSR
-  &lat=37.4602
-  &lon=126.4407
-  &authKey=KEY
+GET https://nmsc.kma.go.kr/enhome/json/satellite/viewer/selectSatViewer.do
+  ?timezone=UTC
+  &searchDate=YYYY-MM-DD
+  &fileKey=GK2A:AMI:LE2:DSR:PNG:KO:020:LC
+
+GET https://nmsc.kma.go.kr/enhome/json/satellite/viewer/selectNewSatFileList.do
+  ?timeZone=UTC
+  &fileKey=GK2A:AMI:LE2:DSR:PNG:KO:020:LC
+  &startDate=YYYYMMDDHHmm
+  &endDate=YYYYMMDDHHmm
+  &etc=NC
+
+GET https://nmsc.kma.go.kr/enhome/html/satellite/viewer/selectImgDown.do
+  ?fileKey=GK2A:AMI:LE2:DSR:NC:KO:020:LC
+  &observationTime=YYYYMMDDHHmm
+  &type=NC
 ```
 
-The request times are UTC. The service selects the nearest product grid point
-and returns text rather than JSON. Relevant variables are:
+Times in these requests are UTC. The first response discovers available
+observation times, the second confirms the matching NetCDF file, and the third
+downloads that file. A single SWRAD NetCDF contains the Korea-area grids needed
+by the dashboard:
 
 - `DSR`: surface downward shortwave radiation in W/m²;
-- `ASR`: surface absorbed shortwave radiation in W/m²;
-- `CA`, `CT`, `CLL`, and `FOG`: cloud amount, cloud type, cloud-layer, and fog
-  products available from the same point-query family.
+- `ASR`: surface absorbed shortwave radiation in W/m².
 
 KMA/NMSC documents the GK2A SWRAD product at approximately 2 km resolution and
 a ten-minute production cadence. The official algorithm document gives DSR a
 nominal 0–1500 W/m² range and describes daytime/high-zenith-angle limitations.
-The collector therefore preserves unavailable values and does not interpret a
-missing or nighttime retrieval as zero transmission.
+The collector converts RKSI and any wind-projected coordinates to the
+900-by-900 Korea Lambert conformal grid, applies each dataset's scale and fill
+metadata, and accepts DSR or ASR only when its product quality flag and the
+shared solar-angle quality flag mark the cell usable. Missing, fill, nighttime,
+or rejected cells remain unavailable rather than becoming zero radiation.
 
-The endpoint returns HTTP 401 without a valid API Hub key. The production key
-belongs only in Convex as `KMA_API_HUB_AUTH_KEY`; it is never sent to the page
-or to the Next.js imagery route. KMA lists general API Hub membership as free,
-with one application key and a daily request allowance comfortably above this
-collector's eight requests per ten-minute run (DSR and ASR at RKSI plus three
-upwind points).
+The downloaded NetCDF is a transient extraction artifact. The Node collector
+writes it beneath an operating-system temporary directory, extracts the small
+set of required grid cells, closes the HDF5 file, and removes the whole
+temporary directory in a `finally` block on both success and failure. Convex
+stores the extracted numerical samples and source metadata, not the raw
+NetCDF.
 
-GK2A does not expose a clear-sky surface-DSR field through this point endpoint.
-The dashboard therefore computes:
+After access approval, the automatic collector runs every 20 minutes from
+`11:16` through `15:56 KST`. This phase accounts for the observed publication
+delay while keeping every request inside the `11:00–16:00 KST` window. The
+current-day panel also exposes `Refresh GK2A` for an explicit fetch inside that
+same window. The server enforces a ten-minute minimum interval, skips a frame
+already resolved even when its cells were unusable, and permits only one
+run-owned collection lock at a time. That dedicated button is the only
+client-triggered collection path; the page's initial load and combined
+observation sync do not download the SWRAD NetCDF. Dashboard queries hide
+numerical rows once they reach 48 hours, and a database-only cleanup runs every
+30 minutes. This input is intentionally operational rather than a permanent
+satellite archive.
+
+The NetCDF does not provide the local clear-sky surface-DSR denominator used by
+the panel. The dashboard therefore computes:
 
 ```text
 estimated solar transmission = measured GK2A DSR / Haurwitz clear-sky GHI
@@ -141,26 +172,33 @@ of coverage. A magnitude under five percentage points per hour is `steady`.
 For upstream context, the collector reads the freshest representative 15L AMOS
 average wind. At two knots or stronger and no more than 45 minutes old, it
 projects points the surface wind would traverse in 20, 40, and 60 minutes and
-queries DSR/ASR at those coordinates. A median upstream transmission at least
-ten percentage points above RKSI is `clearing`; ten points below is
-`cloudier`. The nearest qualifying projected horizon supplies the displayed
-arrival estimate. Surface wind is only an orientation/advection proxy and can
-differ substantially from motion at cloud level.
+extracts DSR/ASR for all of those locations from the same downloaded grid. A
+median upstream transmission at least ten percentage points above RKSI is
+`clearing`; ten points below is `cloudier`. The nearest qualifying projected
+horizon supplies the displayed arrival estimate. Surface wind is only an
+orientation/advection proxy and can differ substantially from motion at cloud
+level.
 
-The optional image loop is independent of the keyed point feed. KMA's public
-weather image service supplies recent two-minute Korea-area
+After NMSC approves access, the viewer NetCDF is the only numerical GK2A
+source. A discovery, download, validation, or extraction failure is recorded as
+source failure; the collector does not fall back to the retired API Hub point
+query, cloud-cover categories, or image-pixel estimates.
+
+The optional image loop is independent of the numerical NetCDF collector.
+KMA's public weather image service supplies recent two-minute Korea-area
 `RGB cloud-enhanced` frames. `/api/seoul/gk2a-loop` assembles a 90-minute
 window, exposes every other frame for a four-minute display cadence, validates
-requested timestamps, and proxies only KMA-listed image paths. This produces a
-lighter visual loop while the DSR point observations remain the numerical
-source of truth.
+requested timestamps, and proxies only KMA-listed image paths. The browser
+does not request the loop until the user expands it. This produces a lighter
+visual loop while the NMSC SWRAD samples remain the numerical source of truth.
 
 Official references:
 
-- [KMA API Hub GK2A point-query form](https://apihub.kma.go.kr/specialApiList.do)
-- [KMA API Hub usage and key limits](https://apihub.kma.go.kr/apiInfo.do)
+- [NMSC public satellite viewer](https://nmsc.kma.go.kr/enhome/html/satellite/viewer/selectSatViewer.do)
 - [NMSC GK2A product definitions](https://nmsc.kma.go.kr/homepage/html/base/cmm/selectPage.do?page=static.utilization.productDefinition)
 - [NMSC SWRAD algorithm document](https://nmsc.kma.go.kr/resources/common/pdf/%EC%99%B8GK2A_L2_ATBD_%EA%B5%AD%EB%AC%B8_%EB%8B%A8%ED%8C%8C%EB%B3%B5%EC%82%AC_SWRAD.pdf)
+- [NMSC access/application contact](https://nmsc.kma.go.kr/enhome/html/base/cmm/selectPage.do?page=static.utilization.reqStation)
+- [KMA copyright and prior-consultation policy](https://www.kma.go.kr/kmadev/guide/copyright.jsp)
 - [KMA public GK2A image viewer](https://www.weather.go.kr/w/image/sat.do)
 
 ## RKSI 15L forecast capture and backend evaluation

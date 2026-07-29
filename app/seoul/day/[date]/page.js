@@ -8,7 +8,7 @@ import {
   PointElement,
   Tooltip,
 } from "chart.js";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
@@ -2708,7 +2708,16 @@ function Gk2aLoop({ windDirectionDeg, windSpeedKt, upstreamEtaMinutes }) {
   );
 }
 
-function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
+function SolarHeatingPanel({
+  solar,
+  queryLoading,
+  latestAmos,
+  isToday,
+  collectionWindowOpen,
+  clockNowMs,
+  onRefresh,
+  refreshState,
+}) {
   const latest = solar?.latest ?? null;
   const configured = solar?.configured !== false;
   const status = queryLoading
@@ -2716,19 +2725,42 @@ function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
     : !configured
       ? "setup required"
       : (solar?.status ?? (latest ? "current" : "awaiting data"));
+  const guidanceCurrent =
+    isToday &&
+    (status === "ok" || status === "partial" || status === "current") &&
+    (!Number.isFinite(solar?.observationAgeMinutes) ||
+      solar.observationAgeMinutes <= 35);
   const currentTransmission = formatPercent(latest?.transmissionPct);
   const currentDetail = Number.isFinite(latest?.dsrWm2)
-    ? `${Math.round(latest.dsrWm2)} W/m² DSR at ${formatClock(latest.obsTimeUtc)}`
+    ? `${Math.round(latest.dsrWm2)} W/m² DSR at ${formatClock(
+        latest.obsTimeUtc,
+      )}${
+        Number.isFinite(solar?.observationAgeMinutes)
+          ? ` · ${Math.round(solar.observationAgeMinutes)} min old`
+          : ""
+      }`
     : configured
       ? "No valid daylight DSR sample"
-      : "Set KMA_API_HUB_AUTH_KEY in Convex";
+      : "NMSC access approval required";
+  const changeWindowLabel = Number.isFinite(solar?.change30mActualMinutes)
+    ? `${guidanceCurrent ? "Change" : "Latest retained change"} over ${Math.round(
+        solar.change30mActualMinutes,
+      )} minutes`
+    : guidanceCurrent
+      ? "Change around 30 minutes"
+      : "Latest retained change";
   const changeDetail = Number.isFinite(solar?.change30mActualMinutes)
-    ? `Nearest valid sample ${Math.round(solar.change30mActualMinutes)} min earlier`
+    ? guidanceCurrent
+      ? `Nearest valid sample ${Math.round(solar.change30mActualMinutes)} min earlier`
+      : `Retained diagnostic ending at ${formatClock(latest?.obsTimeUtc)}`
     : "Requires two valid daylight samples";
+  const expectedNextHour = guidanceCurrent
+    ? solar?.expectedNextHour
+    : "unavailable";
   const clearingValue =
-    solar?.upstreamClearing === true
+    guidanceCurrent && solar?.upstreamClearing === true
       ? "Yes"
-      : solar?.upstreamClearing === false
+      : guidanceCurrent && solar?.upstreamClearing === false
         ? "No"
         : "Unknown";
   const windDirectionDeg = Number.isFinite(solar?.windDirectionDeg)
@@ -2740,9 +2772,16 @@ function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
   const statusTone =
     status === "ok" || status === "current"
       ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-300"
-      : status === "loading" || status === "night"
+      : status === "loading" ||
+          status === "night" ||
+          status === "window_closed"
         ? "border-slate-400/20 bg-slate-400/10 text-slate-400"
         : "border-amber-300/25 bg-amber-300/10 text-amber-300";
+  const collectorRunning =
+    Number.isFinite(solar?.collector?.collectionInFlightSince) &&
+    Number.isFinite(clockNowMs) &&
+    clockNowMs - solar.collector.collectionInFlightSince < 15 * 60_000;
+  const refreshActive = refreshState?.active || collectorRunning;
 
   return (
     <section className="mt-5 border border-white/10 bg-[#081321]/85">
@@ -2755,23 +2794,64 @@ function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
             Actual GK2A surface downward shortwave radiation relative to a
             modeled clear sky.
           </p>
+          {solar?.statusMessage && !queryLoading ? (
+            <p className="mt-2 max-w-2xl font-mono text-[9px] leading-4 text-slate-500">
+              {solar.statusMessage}
+            </p>
+          ) : null}
+          {refreshState?.message ? (
+            <p className="mt-2 font-mono text-[9px] leading-4 text-cyan-300/80">
+              {refreshState.message}
+            </p>
+          ) : null}
         </div>
-        <span
-          className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${statusTone}`}
-        >
-          {status}
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {isToday ? (
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={
+                refreshActive || !collectionWindowOpen || !configured
+              }
+              title={
+                !configured
+                  ? "NMSC access approval is required before collection"
+                  : collectionWindowOpen
+                  ? "Queue the newest GK2A SWRAD frame"
+                  : "GK2A downloads are limited to 11:00–16:00 KST"
+              }
+              className="border border-cyan-300/30 bg-cyan-300/10 px-3 py-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-cyan-200 transition hover:border-cyan-200/60 hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {refreshActive
+                ? "GK2A queued"
+                : !configured
+                  ? "Approval required"
+                : collectionWindowOpen
+                  ? "Refresh GK2A"
+                  : "11–16 KST only"}
+            </button>
+          ) : null}
+          <span
+            className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${statusTone}`}
+          >
+            {String(status).replaceAll("_", " ")}
+          </span>
+        </div>
       </div>
 
       <div className="grid gap-px border-y border-white/10 bg-white/10 sm:grid-cols-2 xl:grid-cols-4">
         <OutlookMetric
-          label="Current solar transmission"
+          label={
+            guidanceCurrent
+              ? "Current solar transmission"
+              : "Latest retained transmission"
+          }
           value={queryLoading ? "Loading…" : currentTransmission}
           detail={currentDetail}
           tone="text-amber-200"
         />
         <OutlookMetric
-          label="Change over 30 minutes"
+          label={changeWindowLabel}
           value={formatPercentagePointChange(solar?.change30mPctPoints)}
           detail={changeDetail}
           tone={
@@ -2784,12 +2864,16 @@ function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
         />
         <OutlookMetric
           label="Expected next hour"
-          value={solarTrendLabel(solar?.expectedNextHour)}
-          detail="Recent transmission trend plus upwind GK2A points"
+          value={solarTrendLabel(expectedNextHour)}
+          detail={
+            guidanceCurrent
+              ? "Recent transmission trend plus upwind GK2A points"
+              : "Available only for a fresh in-window sample"
+          }
           tone={
-            solar?.expectedNextHour === "increasing"
+            expectedNextHour === "increasing"
               ? "text-amber-200"
-              : solar?.expectedNextHour === "decreasing"
+              : expectedNextHour === "decreasing"
                 ? "text-sky-200"
                 : "text-slate-200"
           }
@@ -2798,14 +2882,14 @@ function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
           label="Cloud clearing upstream"
           value={clearingValue}
           detail={
-            Number.isFinite(solar?.upstreamEtaMinutes)
+            guidanceCurrent && Number.isFinite(solar?.upstreamEtaMinutes)
               ? `Surface-wind proxy ~${Math.round(
                   solar.upstreamEtaMinutes,
                 )} min`
               : "Requires upwind DSR and representative wind"
           }
           tone={
-            solar?.upstreamClearing === true
+            guidanceCurrent && solar?.upstreamClearing === true
               ? "text-emerald-200"
               : "text-slate-200"
           }
@@ -2816,10 +2900,10 @@ function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
         <span>
           {Number.isFinite(latest?.clearSkyDsrWm2)
             ? `Modeled clear sky ${Math.round(latest.clearSkyDsrWm2)} W/m²`
-            : "Transmission is hidden at night and at very low sun angles"}
+            : "Night and very-low-sun frames do not produce transmission"}
         </span>
         <span>
-          Source: KMA/NMSC GK2A · 10-minute point product · approx. 2 km
+          Source: KMA/NMSC GK2A SWRAD NetCDF · 10-minute · approx. 2 km
         </span>
       </div>
 
@@ -3492,6 +3576,11 @@ export default function SeoulDayPage() {
     active: false,
     message: "",
   });
+  const [solarRefreshState, setSolarRefreshState] = useState({
+    active: false,
+    message: "",
+    requestedAt: null,
+  });
   const refreshInFlight = useRef(false);
   const chartScrollRef = useRef(null);
   const hasAutoScrolledChart = useRef(false);
@@ -3520,7 +3609,9 @@ export default function SeoulDayPage() {
   );
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
   const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
-  const pollSolarHeating = useAction("seoulGk2a:pollLatestSolarHeating");
+  const requestSolarHeatingRefresh = useMutation(
+    "seoulGk2aCollector:requestSolarHeatingRefresh",
+  );
 
   const metarRows = dayData?.rows ?? [];
   const amosRows = dayData?.amosRows ?? [];
@@ -4014,37 +4105,130 @@ export default function SeoulDayPage() {
       const sourceResults = await Promise.allSettled([
         pollMetar({ stationIcao: STATION_ICAO }),
         pollOneMinuteAmos({ stationIcao: STATION_ICAO }),
-        pollSolarHeating({ stationIcao: STATION_ICAO }),
       ]);
       const sourceFailures = sourceResults.filter(
         (result) => result.status === "rejected",
       );
-      const solarResult = sourceResults[2];
-      const solarUnconfigured =
-        solarResult?.status === "fulfilled" &&
-        (solarResult.value?.configured === false ||
-          solarResult.value?.status === "unconfigured");
 
       for (const failure of sourceFailures) {
         console.error(failure.reason);
       }
 
-      const message = solarUnconfigured
-        ? "Observations refreshed · GK2A key required"
-        : sourceFailures.length
-          ? `${3 - sourceFailures.length}/3 live sources refreshed`
-          : "Live sources refreshed";
+      const message = sourceFailures.length
+        ? `${2 - sourceFailures.length}/2 live sources refreshed`
+        : "Live sources refreshed";
       setRefreshState({ active: false, message });
     } finally {
       refreshInFlight.current = false;
     }
   }
 
+  async function refreshSolarHeating() {
+    if (!isToday || solarRefreshState.active) {
+      return;
+    }
+    if (
+      !Number.isFinite(currentSeoulMinute) ||
+      currentSeoulMinute < 11 * 60 ||
+      currentSeoulMinute >= 16 * 60
+    ) {
+      setSolarRefreshState({
+        active: false,
+        message: "GK2A downloads are limited to 11:00–16:00 KST.",
+        requestedAt: null,
+      });
+      return;
+    }
+    setSolarRefreshState({
+      active: true,
+      message: "Queueing the latest GK2A SWRAD frame…",
+      requestedAt: null,
+    });
+    try {
+      const result = await requestSolarHeatingRefresh({
+        stationIcao: STATION_ICAO,
+      });
+      const message =
+        result?.status === "access_not_approved"
+          ? "NMSC access approval is required before GK2A collection can be enabled."
+          : result?.status === "already_running"
+          ? "A GK2A download is already running."
+          : result?.status === "cooldown"
+            ? `GK2A refresh is cooling down; retry in about ${Math.max(
+                1,
+                Math.ceil((result.retryAfterSeconds ?? 60) / 60),
+              )} minute(s).`
+            : result?.status === "outside_collection_window"
+              ? "GK2A downloads are limited to 11:00–16:00 KST."
+              : "GK2A download queued; the panel will update when extraction finishes.";
+      setSolarRefreshState({
+        active: false,
+        message,
+        requestedAt:
+          result?.status === "queued" &&
+          Number.isFinite(result?.requestedAt)
+            ? result.requestedAt
+            : null,
+      });
+    } catch (error) {
+      console.error(error);
+      setSolarRefreshState({
+        active: false,
+        message: "Could not queue the GK2A download. Try again shortly.",
+        requestedAt: null,
+      });
+    }
+  }
+
+  useEffect(() => {
+    const requestedAt = solarRefreshState.requestedAt;
+    const collector = solarDashboard?.collector;
+    if (
+      !Number.isFinite(requestedAt) ||
+      !Number.isFinite(collector?.collectionQueuedAt) ||
+      collector.collectionQueuedAt < requestedAt
+    ) {
+      return;
+    }
+    const lockAgeMs = Number.isFinite(collector.collectionInFlightSince)
+      ? clockNowMs - collector.collectionInFlightSince
+      : null;
+    if (Number.isFinite(lockAgeMs) && lockAgeMs < 15 * 60_000) {
+      return;
+    }
+    const message = Number.isFinite(lockAgeMs)
+      ? "The GK2A download timed out; Refresh GK2A is available again."
+      : collector.status === "error"
+        ? `GK2A collection failed. ${solarDashboard?.statusMessage ?? ""}`.trim()
+        : collector.status === "partial"
+          ? "GK2A collection finished with partial grid data."
+          : collector.status === "no_data"
+            ? "GK2A collection finished without a usable daylight sample."
+            : "GK2A collection finished; the panel is up to date.";
+    setSolarRefreshState((current) =>
+      current.requestedAt === requestedAt
+        ? { active: false, message, requestedAt: null }
+        : current,
+    );
+  }, [
+    clockNowMs,
+    solarDashboard?.collector?.collectionInFlightSince,
+    solarDashboard?.collector?.collectionQueuedAt,
+    solarDashboard?.collector?.status,
+    solarDashboard?.statusMessage,
+    solarRefreshState.requestedAt,
+  ]);
+
   useEffect(() => {
     if (!isToday) {
       setRefreshState({
         active: false,
         message: isDateValid ? "Historical capture" : "",
+      });
+      setSolarRefreshState({
+        active: false,
+        message: "",
+        requestedAt: null,
       });
       return;
     }
@@ -4268,6 +4452,16 @@ export default function SeoulDayPage() {
           solar={solarDashboard}
           queryLoading={solarDashboard === undefined}
           latestAmos={latestAmos}
+          isToday={isToday}
+          collectionWindowOpen={
+            isToday &&
+            Number.isFinite(currentSeoulMinute) &&
+            currentSeoulMinute >= 11 * 60 &&
+            currentSeoulMinute < 16 * 60
+          }
+          clockNowMs={clockNowMs}
+          onRefresh={refreshSolarHeating}
+          refreshState={solarRefreshState}
         />
 
         <section className="flex min-h-0 flex-1 flex-col pt-5">
