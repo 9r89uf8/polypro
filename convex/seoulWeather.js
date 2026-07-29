@@ -943,8 +943,10 @@ function mergeWeatherComHourlyRows(captures, targetDate) {
         // remains available from the last capture in which Weather.com sent it.
         rowsByTime.set(row.forecastTimeUtc, {
           ...row,
-          peakSourceCapturedAt: capture.capturedAt,
-          peakSourceCapturedAtLocal: capture.capturedAtLocal,
+          peakSourceCapturedAt:
+            capture.weathercomHourlyCapturedAt ?? capture.capturedAt,
+          peakSourceCapturedAtLocal:
+            capture.weathercomHourlyCapturedAtLocal ?? capture.capturedAtLocal,
         });
       }
     }
@@ -1173,7 +1175,7 @@ function predictionState({
   return {
     status: "on_track",
     reason:
-      "The live RKSI 15L temperature remains within 0.5°C of the bias-corrected hourly ensemble.",
+      "The live RKSI 15L temperature remains within 0.5°C of the current Weather.com hourly curve.",
   };
 }
 

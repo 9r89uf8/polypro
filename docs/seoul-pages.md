@@ -14,36 +14,65 @@ current `Asia/Seoul` date.
 
 Example: `/seoul/day/2026-07-27`.
 
-The route is a single-purpose 15L weather timeline. It starts with live-source
-status cards and one horizontally scrollable full-day chart. The former
-maximum-temperature prediction summary, provider cards, and revision-history
-panel are not rendered.
+The route is a focused RKSI representative-temperature timeline. It starts with
+live-source status cards, a compact maximum outlook, and one horizontally
+scrollable full-day chart. Large provider-card and high-prediction revision
+panels are not rendered.
 
 Forecast-capture machinery remains connected because it supplies the
-Weather.com daily-high marker, its hourly peak-time estimate, and coming-hour
-cloud cover. The backend still stores internal prediction revisions for
-historical retention and evaluation, but the route does not plot a tracker
-temperature curve, predicted maximum, or tracker window.
+Weather.com raw daily-high marker, its hourly peak-time estimate, coming-hour
+cloud cover, and the compact outlook. The backend still stores internal
+prediction revisions for historical retention and evaluation, but the route
+does not plot a separate tracker temperature curve.
+
+The maximum outlook has six concise readings:
+
+- the freshest displayed representative AMOS temperature;
+- the observed AMOS maximum and its first occurrence;
+- an expected maximum using the stored prediction, never lower than the
+  observed maximum;
+- the stored heuristic guidance range, with both its lower bound and high end
+  protected from contradicting the observed/predicted maximum;
+- the stored likely peak window, with the observed-maximum time as an explicit
+  fallback;
+- a robust 60-minute AMOS trend in degrees per hour.
+
+Only current Weather.com-only model version `rksi15l-weathercom-v4` is usable by
+this panel; an older multi-provider revision cannot be relabeled as Weather.com
+guidance. For the current or a future date, that stored prediction must also be
+no more than 45 minutes old, and its underlying Weather.com capture must be no
+more than 90 minutes old. A fresh recomputation therefore cannot make stale
+provider input look fresh. Otherwise the panel says it is using an observed-only
+fallback. Historical dates can use their retained final current-model
+prediction; when none exists, the final observed maximum and occurrence time
+remain available. The guidance interval is labeled a heuristic range rather
+than a statistically calibrated confidence interval. The trend uses the median
+of pairwise slopes separated by at least ten minutes and requires at least 45
+minutes of coverage in the trailing hour, which reduces sensitivity to one
+quantized or anomalous minute. On today's page the trend is suppressed whenever
+the newest AMOS row is delayed or stale; an old trailing hour is never presented
+as current warming or cooling.
 
 The primary visualization has two observed series:
 
-- `Actual METAR`
+- `Official coded METAR · audit`
   - parsed RKSI temperature from the NOAA `tgftp` latest-METAR file
   - normally one report every 30 minutes
   - white line with prominent report markers
-- `AMOS · 1 minute`
+- `Representative AMOS · 15L designation`
   - representative row `rwyNo=2`, `rwyDir=15L`
   - captured by the AMOS minute-rollover watcher
   - cyan high-resolution line
   - silently uses a five-minute audit snapshot only when the matching
     one-minute timestamp is missing
 
-The chart does not add a five-minute AMOS series or restore the removed
-live-tracker temperature curve. Its Weather.com daily-high marker remains as
-described below. Hourly revision diagnostics add a blue dashed latest-stored
-temperature curve and a faint, capture-time-labeled morning-baseline curve;
-these raw-provider curves do not restore a separate tracker or blended
-prediction series.
+The chart does not add a five-minute AMOS series or a separate live-tracker
+temperature curve. A green diamond and horizontal dashed line mark the first
+occurrence of the displayed representative AMOS maximum. Its Weather.com raw
+daily-high marker remains as described below. Hourly revision diagnostics add a
+blue dashed latest-stored temperature curve and a faint,
+capture-time-labeled morning-baseline curve; these raw-provider curves do not
+restore a separate tracker or blended prediction series.
 
 The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
 is marked when the selected date is today. A date-specific orange sunset line
@@ -53,12 +82,12 @@ on a forecast-provider response.
 
 Peak timing has two deliberately separate visual references:
 
-- a rose point, vertical line, and in-plot label mark Weather.com's RKSI
+- a rose point, vertical line, and in-plot label mark Weather.com's raw RKSI
   airport calendar-day high and the first tied maximum in its returned hourly
   values;
 - a violet historical reference shows the median first occurrence of the daily
   15L maximum at `13:44 KST`, with a low-opacity middle-50% band from
-  `12:20–14:39 KST`.
+  `12:20–14:39 KST`, only for March-through-July dates.
 
 The marker is Weather.com-only. Its vertical value is
 `calendarDayTemperatureMax` from Weather.com's RKSI airport daily forecast.
@@ -92,15 +121,16 @@ time are repeated above the 2,400-pixel scroller.
 
 The historical reference is a fixed, versioned snapshot of 130 complete 15L
 days from `2026-03-20` through `2026-07-27`. Its circular clock-time average was
-`13:39 KST`. It is labeled as a spring–summer empirical reference rather than a
+`13:39 KST`. It is labeled `Mar–Jul archive` rather than a
 condition-matched forecast because the archive does not yet cover every season
 and does not contain comparable historical forecast inputs for cloud, wind,
-and precipitation. The chart header repeats the historical median and sunset
-time even when those parts of the 2,400-pixel timeline are outside the current
-horizontal scroll position. The x-axis has a label every hour so the full-day
-series remain legible. Y-axis labels retain one decimal place, matching the
-AMOS sensor resolution instead of rounding several fractional ticks to the
-same whole degree.
+and precipitation. It is hidden for August-through-February dates rather than
+being presented as a year-round typical window. For applicable dates the chart
+header repeats the historical median and sunset time even when those parts of
+the 2,400-pixel timeline are outside the current horizontal scroll position.
+The x-axis has a label every hour so the full-day series remain legible. Y-axis
+labels retain one decimal place, matching the AMOS sensor resolution instead of
+rounding several fractional ticks to the same whole degree.
 
 The chart reserves a 24-cell `HOURLY SKY COVER` strip immediately above the
 temperature plot. Meter height is the primary visual encoding, so a user can
@@ -138,11 +168,18 @@ cover, while `VV` means the sky is obscured rather than a known percentage.
 Those states therefore remain textual. AMOS `cld1`, `cld2`, and `cld3` are
 detected layer bases without coverage amount and are not used.
 
-Upcoming full-hour cells use `cloudCoverPct` from the latest stored Weather.com
-hourly response. No provider blending or stored legacy prediction curve is
-used. Weather.com is identified directly in the cloud detail text. The current
-hour's hourly guidance is not relabeled as a forecast for only the remaining
-minutes.
+Upcoming full-hour cells use the exact stored `cloudCoverPct` from the latest
+successful Weather.com hourly response rather than rounding it to a five-point
+increment. No provider blending or stored legacy prediction curve is used.
+Weather.com is identified directly in the cloud detail text, and the header and
+detail rows show source response-completion time. Each merged hour retains its
+own source-capture time, so an elapsed value carried from an older response is
+not mislabeled with the newest response's timestamp. The header reports the
+next displayed forecast hour's vintage. On today/future pages, a capture older
+than 90 minutes is retained as last-successful guidance but is marked stale in
+amber; values older than the existing 12-hour hard limit are not shown. The
+current hour's hourly guidance is not relabeled as a forecast for only the
+remaining minutes.
 
 The header repeats the latest observed-hour summary and next available
 full forecast-hour percentage. `Jump to now` and a one-time initial scroll
@@ -164,6 +201,11 @@ The rest of the interface is deliberately compact:
 - Celsius/Fahrenheit toggle
 - manual live-observation synchronization
 - one status card per plotted series
+- fresh/delayed/stale observation-age badges for the newest AMOS and coded
+  METAR rows
+- observation age and AMOS receive latency shown as separate concepts; METAR
+  uses `last stored` wording because its `updatedAt` is not immutable receipt
+  truth
 - capture-second or audit-fallback status for the newest displayed AMOS row
 
 The previous correlation, publish-race, raw-METAR, and raw-observation panels
@@ -252,6 +294,8 @@ route consumes:
 
 - `latestPrediction.providerDetails`, filtered to `provider="weathercom"`, for
   a retained daily high, hourly time estimate, and capture age
+- `latestPrediction.predictedHigh*`, `confidenceLow/High*`, and `peakWindow*`
+  for the compact maximum outlook
 - `latestForecastCapture.weathercomForecastDays` for the newest Weather.com
   calendar-day high
 - `latestForecastCapture.weathercomHourlyRows` for the newest hourly time
@@ -262,17 +306,20 @@ route consumes:
 
 All of those inputs are optional. Observed temperatures and observed cloud
 cover still render when forecast data are unavailable, and missing future
-guidance remains explicit. Other prediction-dashboard fields may continue to
-be stored and scored by the backend, but this route does not render a predicted
-maximum, tracker temperature curve, tracker peak window, confidence/status
-reason, provider cards, evaluation, or revision history. The dashboard query
-filters prediction provider details to Weather.com, omits old blended hourly
-curves, and returns only Weather.com fields from a forecast capture.
+guidance remains explicit. The route renders the prediction only as compact
+expected-maximum, heuristic-range, and peak-window readings; it still does not
+render a tracker curve, provider-card grid, evaluation panel, or revision
+history. The dashboard query filters prediction provider details to
+Weather.com, omits old blended hourly curves, and returns only Weather.com
+fields from a forecast capture.
 
 ## Client behavior
 
 The page subscribes to `seoul:getDayStationRows`, so chart data updates
 reactively after the collectors write to Convex.
+
+Route validation checks actual calendar dates, including month lengths and leap
+years, rather than accepting every string shaped like `YYYY-MM-DD`.
 
 For the current Seoul date, the first page load and `Sync now` first request:
 
@@ -307,10 +354,12 @@ trigger recomputation.
   scores.
 
 These scheduled jobs remain for immutable historical Weather.com high/hour
-retention and backend evaluation. Their predicted high, stored Weather.com
-temperature curve, and tracker window are not rendered on the Seoul page. The
-observed maximum remains valid even when the newest AMOS observation is stale,
-and the backend evaluation value is never allowed below that known maximum.
+retention and backend evaluation. Their predicted high and tracker window feed
+the compact outlook, while the stored Weather.com temperature curve remains a
+raw provider diagnostic rather than a separate tracker curve. The observed
+maximum remains valid even when the newest AMOS observation is stale, and both
+the backend evaluation value and the displayed expected maximum are never
+allowed below that known maximum.
 
 ## Truthful cadence separation
 
@@ -334,6 +383,12 @@ then replaces every matching timestamp with its one-minute capture:
 - normal live coverage therefore shows only the one-minute observations
 - a five-minute or legacy row appears only where no one-minute row exists
 - fallback points are identified as audit fallbacks in the tooltip
+
+New AMOS rows also retain immutable optional `firstSeenAt`. The source card
+calculates receive latency only as `firstSeenAt - obsTimeUtc`; it never treats
+mutable `updatedAt` as first receipt. Legacy rows without `firstSeenAt` say
+`receive latency unavailable`, while their separate capture-second/audit label
+can still use the existing stored metadata.
 
 ## Fast one-minute AMOS collector
 
@@ -416,7 +471,7 @@ One row per station/date with latest, minimum, and maximum METAR fields.
 
 One row per station/date/observation time/runway/direction/cadence. It preserves
 temperature, dew point, QNH, wind, visibility, precipitation, runway metadata,
-raw JSON, and the collection cadence.
+raw JSON, the collection cadence, and optional immutable first-seen time.
 
 ### `seoulAmosDailySummaries`
 

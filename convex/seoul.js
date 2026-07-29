@@ -17,11 +17,13 @@ const DEFAULT_AMO_API_BASE_URL = "http://amoapi.kma.go.kr";
 const GLOBAL_AMO_API_BASE_URL = "https://global.amo.go.kr/mobileApi/global_api/v1";
 const NOAA_LATEST_METAR_BASE_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations";
+const RKSI_REPRESENTATIVE_AMOS_RUNWAY_NO = "2";
+const RKSI_SECONDARY_AMOS_RUNWAY_NO = "3";
 const RKSI_REPRESENTATIVE_AMOS_DIRECTION = "15L";
 const RKSI_SECONDARY_AMOS_DIRECTION = "16L";
 const RKSI_TEMPERATURE_SITE_RUNWAYS = new Map([
-  [RKSI_REPRESENTATIVE_AMOS_DIRECTION, "2"],
-  [RKSI_SECONDARY_AMOS_DIRECTION, "3"],
+  [RKSI_REPRESENTATIVE_AMOS_DIRECTION, RKSI_REPRESENTATIVE_AMOS_RUNWAY_NO],
+  [RKSI_SECONDARY_AMOS_DIRECTION, RKSI_SECONDARY_AMOS_RUNWAY_NO],
 ]);
 const AMOS_COLLECTION_CADENCE = {
   ONE_MINUTE: "one_minute",
@@ -945,6 +947,7 @@ export const upsertAmosRowsBatch = internalMutationGeneric({
       if (!existing) {
         await ctx.db.insert("seoulAmosObservations", {
           ...row,
+          firstSeenAt: now,
           updatedAt: now,
         });
         insertedCount += 1;
@@ -1413,15 +1416,15 @@ export const getDayStationRows = queryGeneric({
 
     const amosRows = await ctx.db
       .query("seoulAmosObservations")
-      .withIndex("by_station_date_ts_rwy", (query) =>
-        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+      .withIndex("by_station_date_rwy_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("date", args.date)
+          .eq("rwyNo", RKSI_REPRESENTATIVE_AMOS_RUNWAY_NO)
+          .eq("rwyDir", RKSI_REPRESENTATIVE_AMOS_DIRECTION),
       )
       .collect();
-    amosRows.sort((a, b) =>
-      a.obsTimeUtc === b.obsTimeUtc
-        ? a.rwyNo.localeCompare(b.rwyNo) || a.rwyDir.localeCompare(b.rwyDir)
-        : a.obsTimeUtc - b.obsTimeUtc,
-    );
+    amosRows.sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
 
     return { rows, summary, amosRows };
   },

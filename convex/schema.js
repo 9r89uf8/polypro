@@ -999,6 +999,7 @@ export default defineSchema({
     precipMm: v.optional(v.number()),
     source: v.string(),
     rawJson: v.optional(v.string()),
+    firstSeenAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
     .index("by_station_date_ts_rwy", [

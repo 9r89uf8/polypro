@@ -54,6 +54,10 @@ instead of one conservative fixed request:
   attempts.
 - The normal one-minute and full five-minute captures carry distinct
   `collectionCadence` values and remain separate database rows.
+- Every newly inserted AMOS row records an immutable `firstSeenAt` at its first
+  successful database write. Later upstream revisions may advance `updatedAt`
+  but never replace `firstSeenAt`; legacy rows remain without a fabricated
+  first-seen time.
 - `seoul:pollLatestNoaaStationMetar` now stores the actual NOAA RKSI METAR in
   the chart table; the retired AMO METAR API is no longer used by the chart
   cron.
@@ -117,17 +121,21 @@ Weather.com's today response begins at the current hour rather than replaying
 elapsed hours. The backend therefore merges recent immutable Weather.com
 captures by forecast timestamp: the newest value replaces each still-returned
 hour, while an elapsed hour remains available from the last response that
-contained it. The merge reads 112 captures, covering 28 hours at the current
-cadence. A fresh direct capture is the UI fallback before a new backend revision
-exists. When the selected hourly maximum came from an earlier capture, the UI
-shows that peak-hour source time separately from the latest provider capture.
+contained it. Each merged hour keeps that source response's hourly-completion
+time rather than inheriting the newest capture's time. The merge reads 112
+captures, covering 28 hours at the current cadence. A fresh direct capture is
+the UI fallback before a new backend revision exists. When the selected hourly
+maximum came from an earlier capture, the UI shows that peak-hour source time
+separately from the latest provider capture.
 
-The backend still stores numbered evaluation revisions, but the page does not
-render its predicted maximum, temperature curve, or tracker window. Model
-version `rksi15l-weathercom-v4` records only a Weather.com provider detail and a
-Weather.com hourly curve. Old stored provider fields and revisions remain in
-the database solely for schema compatibility; page selectors explicitly ignore
-them and do not backfill a marker when no Weather.com peak-time estimate exists.
+The backend still stores numbered evaluation revisions. The page exposes the
+current model only as compact expected-maximum, heuristic-range, and peak-window
+readings; it does not render a separate tracker temperature curve or revision
+panel. Model version `rksi15l-weathercom-v4` records only a Weather.com provider
+detail and a Weather.com hourly curve. Old stored provider fields and revisions
+remain in the database solely for schema compatibility; page selectors
+explicitly ignore them and do not backfill a marker when no Weather.com
+peak-time estimate exists.
 
 At 00:10 KST the completed day is finalized against the canonical 15L series.
 One-minute rows win when duplicate timestamps also have five-minute or legacy
@@ -141,9 +149,9 @@ The AMOS 15L display record also exposes dew point, QNH, average/minimum/maximum
 wind direction and speed, crosswind/headwind-tailwind fields, visibility, RVR,
 precipitation, and cloud fields in the raw payload. These remain possible
 backend evaluation inputs, but model version `rksi15l-weathercom-v4` keeps the
-forecast side Weather.com-only. Its output is not a separate page forecast.
-Fixed-cutoff scores should accumulate before adding more features or claiming
-that a more complex model is better.
+forecast side Weather.com-only. Its output is limited to the compact outlook
+rather than a separate tracker curve. Fixed-cutoff scores should accumulate
+before adding more features or claiming that a more complex model is better.
 
 ## Ranked findings
 
@@ -467,6 +475,9 @@ This matters to the current repository:
   practical.
 - `pollLatestAmosRunways` retains cadence-tagged display rows every five
   minutes for auditing.
+- The day-page query returns only the representative `rwyNo=2`,
+  `rwyDir=15L` rows through `by_station_date_rwy_ts`; the other runway-shaped
+  five-minute records remain stored for backend auditing.
 - NOAA supplies the actual coded METAR comparison but cannot compete with AMOS
   for current-temperature freshness.
 

@@ -237,6 +237,90 @@ const providerPeakPlugin = {
   },
 };
 
+function observedMaxPosition(chart, options) {
+  if (
+    !options?.display ||
+    !Number.isFinite(options.minute) ||
+    !Number.isFinite(options.temperature)
+  ) {
+    return null;
+  }
+
+  const { chartArea, scales } = chart;
+  const x = scales.x.getPixelForValue(options.minute);
+  const y = scales.y.getPixelForValue(options.temperature);
+  if (
+    x < chartArea.left ||
+    x > chartArea.right ||
+    y < chartArea.top ||
+    y > chartArea.bottom
+  ) {
+    return null;
+  }
+  return { x, y };
+}
+
+const observedMaxPlugin = {
+  id: "seoulObservedMax",
+  beforeDatasetsDraw(chart, _args, options) {
+    const position = observedMaxPosition(chart, options);
+    if (!position) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    ctx.save();
+    ctx.strokeStyle = "rgba(52, 211, 153, 0.5)";
+    ctx.lineWidth = 1.25;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath();
+    ctx.moveTo(chartArea.left, position.y);
+    ctx.lineTo(chartArea.right, position.y);
+    ctx.stroke();
+    ctx.restore();
+  },
+  afterDatasetsDraw(chart, _args, options) {
+    const position = observedMaxPosition(chart, options);
+    if (!position || !options?.label) {
+      return;
+    }
+
+    const { ctx, chartArea } = chart;
+    const boxHeight = 21;
+    const horizontalPadding = 8;
+
+    ctx.save();
+    ctx.font = "600 9px IBM Plex Mono, monospace";
+    const boxWidth = Math.min(
+      ctx.measureText(options.label).width + horizontalPadding * 2,
+      chartArea.right - chartArea.left - 8,
+    );
+    const boxLeft = chartArea.left + 5;
+    const preferredTop = position.y - boxHeight - 5;
+    const boxTop =
+      preferredTop >= chartArea.top + 4
+        ? preferredTop
+        : Math.min(position.y + 5, chartArea.bottom - boxHeight - 4);
+
+    ctx.fillStyle = "rgba(3, 33, 29, 0.95)";
+    ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
+    ctx.strokeStyle = "rgba(52, 211, 153, 0.72)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.strokeRect(boxLeft, boxTop, boxWidth, boxHeight);
+    ctx.fillStyle = "#a7f3d0";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      options.label,
+      boxLeft + horizontalPadding,
+      boxTop + boxHeight / 2,
+      boxWidth - horizontalPadding * 2,
+    );
+    ctx.restore();
+  },
+};
+
 const hourlyCloudCoverPlugin = {
   id: "seoulHourlyCloudCover",
   afterDraw(chart, _args, options) {
@@ -276,11 +360,14 @@ const hourlyCloudCoverPlugin = {
       const cellWidth = right - left;
       const isForecast = hour.phase === "forecast";
       const isLive = hour.phase === "live";
-      const accent = isForecast
-        ? "rgba(56, 189, 248, 0.72)"
-        : isLive
-          ? "rgba(251, 191, 36, 0.78)"
-          : "rgba(203, 213, 225, 0.72)";
+      const accent =
+        isForecast && hour.isStale
+          ? "rgba(251, 191, 36, 0.72)"
+          : isForecast
+            ? "rgba(56, 189, 248, 0.72)"
+            : isLive
+              ? "rgba(251, 191, 36, 0.78)"
+              : "rgba(203, 213, 225, 0.72)";
 
       if (Number.isFinite(hour.coverPct)) {
         const fillHeight = Math.max(
@@ -346,7 +433,9 @@ const hourlyCloudCoverPlugin = {
       if (isForecast) {
         ctx.save();
         ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = "rgba(125, 211, 252, 0.62)";
+        ctx.strokeStyle = hour.isStale
+          ? "rgba(251, 191, 36, 0.72)"
+          : "rgba(125, 211, 252, 0.62)";
         ctx.beginPath();
         ctx.moveTo(left + 1, railTop + 1);
         ctx.lineTo(right - 1, railTop + 1);
@@ -535,6 +624,7 @@ ChartJS.register(
   sunsetLinePlugin,
   peakTimingPlugin,
   providerPeakPlugin,
+  observedMaxPlugin,
   hourlyCloudCoverPlugin,
   weathercomRevisionBadgePlugin,
 );
@@ -546,7 +636,15 @@ const RKSI_LONGITUDE = 126.4407;
 const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
 const MAX_PROVIDER_CAPTURE_AGE_MINUTES = 12 * 60;
+const WEATHERCOM_STALE_AGE_MINUTES = 90;
+const MAX_LIVE_PREDICTION_AGE_MINUTES = 45;
+const CURRENT_PREDICTION_MODEL_VERSION = "rksi15l-weathercom-v4";
+const AMOS_DELAYED_AGE_MINUTES = 2;
+const AMOS_STALE_AGE_MINUTES = 10;
+const METAR_DELAYED_AGE_MINUTES = 45;
+const METAR_STALE_AGE_MINUTES = 75;
 const METAR_SKY_DEFAULT_HOLD_MINUTES = 30;
 const METAR_SKY_MAX_HOLD_MINUTES = 45;
 const METAR_SKY_AMOUNT_RANK = Object.freeze({
@@ -573,7 +671,34 @@ const HISTORICAL_PEAK_REFERENCE = Object.freeze({
 });
 
 function isValidDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "");
+  if (!match) {
+    return false;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12 || day < 1) {
+    return false;
+  }
+
+  const isLeapYear = year % 400 === 0 || (year % 4 === 0 && year % 100 !== 0);
+  const daysInMonth = [
+    31,
+    isLeapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  return day <= daysInMonth[month - 1];
 }
 
 function getDateParts(formatter, date) {
@@ -625,6 +750,9 @@ function parseDateKey(dateKey) {
 }
 
 function shiftDateKey(dateKey, deltaDays) {
+  if (!isValidDate(dateKey)) {
+    return null;
+  }
   const parts = parseDateKey(dateKey);
   if (!parts) {
     return null;
@@ -635,6 +763,11 @@ function shiftDateKey(dateKey, deltaDays) {
   return `${shifted.getUTCFullYear()}-${String(
     shifted.getUTCMonth() + 1,
   ).padStart(2, "0")}-${String(shifted.getUTCDate()).padStart(2, "0")}`;
+}
+
+function usesSpringSummerPeakReference(dateKey) {
+  const parts = parseDateKey(dateKey);
+  return Boolean(parts && parts.month >= 3 && parts.month <= 7);
 }
 
 function normalizeCycle(value, cycle) {
@@ -720,6 +853,192 @@ function minuteLabel(totalMinutes) {
   return `${hour12}:${String(minute).padStart(2, "0")} ${
     hour24 >= 12 ? "PM" : "AM"
   }`;
+}
+
+function toUnitTemperature(celsius, unit) {
+  if (!Number.isFinite(celsius)) {
+    return null;
+  }
+  return unit === "C" ? celsius : (celsius * 9) / 5 + 32;
+}
+
+function toUnitTemperatureDelta(celsiusDelta, unit) {
+  if (!Number.isFinite(celsiusDelta)) {
+    return null;
+  }
+  return unit === "C" ? celsiusDelta : (celsiusDelta * 9) / 5;
+}
+
+function formatElapsedDuration(durationMs) {
+  if (!Number.isFinite(durationMs)) {
+    return null;
+  }
+
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (totalMinutes < 60) {
+    return totalMinutes < 10 && seconds
+      ? `${totalMinutes}m ${seconds}s`
+      : `${totalMinutes}m`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+function telemetryFreshness(row, nowMs, isToday, source) {
+  if (!row) {
+    return {
+      status: "waiting",
+      label: "Awaiting",
+      timing: "No observation received",
+    };
+  }
+
+  const receiveTimestamp = source === "amos" ? row.firstSeenAt : row.updatedAt;
+  const receiveLagMs =
+    Number.isFinite(receiveTimestamp) && Number.isFinite(row.obsTimeUtc)
+      ? Math.max(0, receiveTimestamp - row.obsTimeUtc)
+      : null;
+  const receiveLag = formatElapsedDuration(receiveLagMs);
+  const receiveDetail = receiveLag
+    ? source === "amos"
+      ? `received +${receiveLag}`
+      : `last stored +${receiveLag}`
+    : source === "amos"
+      ? "receive latency unavailable"
+      : null;
+  if (!isToday || !Number.isFinite(nowMs) || !Number.isFinite(row.obsTimeUtc)) {
+    return {
+      status: "archive",
+      label: "Archived",
+      timing: receiveDetail ?? "stored observation",
+    };
+  }
+
+  const ageMs = Math.max(0, nowMs - row.obsTimeUtc);
+  const delayedMinutes =
+    source === "amos" ? AMOS_DELAYED_AGE_MINUTES : METAR_DELAYED_AGE_MINUTES;
+  const staleMinutes =
+    source === "amos" ? AMOS_STALE_AGE_MINUTES : METAR_STALE_AGE_MINUTES;
+  const status =
+    ageMs > staleMinutes * MINUTE_MS
+      ? "stale"
+      : ageMs > delayedMinutes * MINUTE_MS
+        ? "delayed"
+        : "fresh";
+  const labels = {
+    fresh: "Fresh",
+    delayed: "Delayed",
+    stale: "Stale",
+  };
+  const observationAge = formatElapsedDuration(ageMs);
+  return {
+    status,
+    label: labels[status],
+    ageMs,
+    receiveLagMs,
+    timing: [
+      observationAge ? `observed ${observationAge} ago` : null,
+      receiveDetail,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  };
+}
+
+function selectObservedMaximum(rows) {
+  let maximum = null;
+  for (const row of rows ?? []) {
+    if (!Number.isFinite(row?.tempC) || !Number.isFinite(row?.obsTimeUtc)) {
+      continue;
+    }
+    if (
+      !maximum ||
+      row.tempC > maximum.tempC ||
+      (row.tempC === maximum.tempC && row.obsTimeUtc < maximum.obsTimeUtc)
+    ) {
+      maximum = row;
+    }
+  }
+  return maximum;
+}
+
+function medianFinite(values) {
+  const ordered = values
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  if (!ordered.length) {
+    return null;
+  }
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2
+    ? ordered[middle]
+    : (ordered[middle - 1] + ordered[middle]) / 2;
+}
+
+function robustTemperatureTrendCPerHour(rows, windowMinutes = 60) {
+  const ordered = (rows ?? [])
+    .filter(
+      (row) => Number.isFinite(row?.tempC) && Number.isFinite(row?.obsTimeUtc),
+    )
+    .sort((left, right) => left.obsTimeUtc - right.obsTimeUtc);
+  if (ordered.length < 4) {
+    return null;
+  }
+
+  const latest = ordered.at(-1);
+  const windowStart = latest.obsTimeUtc - windowMinutes * MINUTE_MS;
+  const windowRows = ordered.filter((row) => row.obsTimeUtc >= windowStart);
+  if (
+    windowRows.length < 4 ||
+    latest.obsTimeUtc - windowRows[0].obsTimeUtc <
+      windowMinutes * MINUTE_MS * 0.75
+  ) {
+    return null;
+  }
+
+  const minimumPairGapMs = Math.min(10, windowMinutes / 4) * MINUTE_MS;
+  const slopes = [];
+  for (let leftIndex = 0; leftIndex < windowRows.length - 1; leftIndex += 1) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < windowRows.length;
+      rightIndex += 1
+    ) {
+      const elapsedMs =
+        windowRows[rightIndex].obsTimeUtc - windowRows[leftIndex].obsTimeUtc;
+      if (elapsedMs < minimumPairGapMs) {
+        continue;
+      }
+      slopes.push(
+        ((windowRows[rightIndex].tempC - windowRows[leftIndex].tempC) *
+          60 *
+          MINUTE_MS) /
+          elapsedMs,
+      );
+    }
+  }
+
+  const trend = medianFinite(slopes);
+  return Number.isFinite(trend) ? Math.round(trend * 10) / 10 : null;
+}
+
+function trendDescription(trendCPerHour) {
+  if (!Number.isFinite(trendCPerHour)) {
+    return "Insufficient 60-minute coverage";
+  }
+  if (trendCPerHour >= 0.2) {
+    return "Warming";
+  }
+  if (trendCPerHour <= -0.2) {
+    return "Cooling";
+  }
+  return "Nearly steady";
 }
 
 function metarObservedTokens(rawMetar) {
@@ -999,6 +1318,14 @@ function formatCloudCoverRange(lowerPct, upperPct) {
   return lower === upper ? `${lower}%` : `${lower}–${upper}%`;
 }
 
+function formatCloudCoverPercentage(value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const bounded = Math.min(100, Math.max(0, value));
+  return Number.isInteger(bounded) ? String(bounded) : bounded.toFixed(1);
+}
+
 function cloudHourWindowLabel(hour) {
   const start = String(hour).padStart(2, "0");
   const end = String((hour + 1) % 24).padStart(2, "0");
@@ -1145,7 +1472,15 @@ function forecastCloudHour(hour, forecast) {
   const endMinute = (hour + 1) * 60;
   const rawCoverPct = forecast?.cloudCoverPct;
   if (Number.isFinite(rawCoverPct)) {
-    const coverPct = Math.round(rawCoverPct / 5) * 5;
+    const coverPct = Math.min(100, Math.max(0, rawCoverPct));
+    const coverLabel = formatCloudCoverPercentage(coverPct);
+    const captureTime = formatLocalTime(
+      forecast.capturedAtLocal ?? forecast.capturedAt,
+    );
+    const vintageDetail =
+      captureTime !== "—"
+        ? ` Captured ${captureTime} KST${forecast.isStale ? " (stale)" : ""}.`
+        : "";
     return {
       hour,
       startMinute,
@@ -1154,12 +1489,16 @@ function forecastCloudHour(hour, forecast) {
       coverPct,
       lowerPct: null,
       upperPct: null,
-      displayLabel: `${coverPct}%`,
-      valueLabel: `${coverPct}%`,
-      summaryLabel: `${cloudCoverDescription(coverPct)} · ${coverPct}%`,
+      displayLabel: `${coverLabel}%`,
+      valueLabel: `${coverLabel}%`,
+      summaryLabel: `${cloudCoverDescription(coverPct)} · ${coverLabel}%`,
       detail: `${cloudCoverDescription(
         coverPct,
-      )}; ${coverPct}% Weather.com hourly forecast total cloud cover.`,
+      )}; ${coverLabel}% Weather.com hourly forecast total cloud cover.${vintageDetail}`,
+      capturedAt: forecast.capturedAt,
+      capturedAtLocal: forecast.capturedAtLocal,
+      captureAgeMinutes: forecast.captureAgeMinutes,
+      isStale: Boolean(forecast.isStale),
     };
   }
 
@@ -1260,7 +1599,16 @@ function buildHourlyCloudSegments(hourlyCloudCover, currentMinute) {
 }
 
 function buildForecastCloudRows({ forecastCapture, date, nowMs }) {
-  const capturedAt = Number(forecastCapture?.capturedAt);
+  const capturedAt = Number(
+    forecastCapture?.weathercomHourlyCapturedAt ?? forecastCapture?.capturedAt,
+  );
+  const capturedAtLocal =
+    forecastCapture?.weathercomHourlyCapturedAtLocal ??
+    forecastCapture?.capturedAtLocal;
+  const captureAgeMinutes =
+    Number.isFinite(nowMs) && Number.isFinite(capturedAt)
+      ? Math.max(0, nowMs - capturedAt) / MINUTE_MS
+      : null;
   if (
     forecastCapture?.weathercomHourlyStatus !== "ok" ||
     !Number.isFinite(capturedAt) ||
@@ -1274,12 +1622,36 @@ function buildForecastCloudRows({ forecastCapture, date, nowMs }) {
   return (forecastCapture.weathercomHourlyRows ?? [])
     .filter((row) => row.date === date && Number.isFinite(row.cloudCoverPct))
     .sort((left, right) => left.forecastTimeUtc - right.forecastTimeUtc)
-    .map((row) => ({
-      forecastTimeUtc: row.forecastTimeUtc,
-      forecastTimeLocal: row.forecastTimeLocal,
-      cloudCoverPct: row.cloudCoverPct,
-      cloudProviderCount: 1,
-    }));
+    .map((row) => {
+      const sourceCapturedAt = Number(row.peakSourceCapturedAt ?? capturedAt);
+      const sourceCapturedAtLocal =
+        row.peakSourceCapturedAtLocal ?? capturedAtLocal;
+      const sourceCaptureAgeMinutes =
+        Number.isFinite(nowMs) && Number.isFinite(sourceCapturedAt)
+          ? Math.max(0, nowMs - sourceCapturedAt) / MINUTE_MS
+          : captureAgeMinutes;
+      if (
+        !Number.isFinite(sourceCapturedAt) ||
+        (Number.isFinite(nowMs) &&
+          (sourceCapturedAt > nowMs + MINUTE_MS ||
+            sourceCaptureAgeMinutes > MAX_PROVIDER_CAPTURE_AGE_MINUTES))
+      ) {
+        return null;
+      }
+      return {
+        forecastTimeUtc: row.forecastTimeUtc,
+        forecastTimeLocal: row.forecastTimeLocal,
+        cloudCoverPct: row.cloudCoverPct,
+        cloudProviderCount: 1,
+        capturedAt: sourceCapturedAt,
+        capturedAtLocal: sourceCapturedAtLocal,
+        captureAgeMinutes: sourceCaptureAgeMinutes,
+        isStale:
+          Number.isFinite(sourceCaptureAgeMinutes) &&
+          sourceCaptureAgeMinutes > WEATHERCOM_STALE_AGE_MINUTES,
+      };
+    })
+    .filter(Boolean);
 }
 
 function formatClock(epochMs, includeSeconds = false) {
@@ -1794,6 +2166,7 @@ function toWeathercomHourlyPoints(diagnostics, unit, role) {
 function buildChartData(
   metarRows,
   amosDisplayRows,
+  observedMax,
   providerPeak,
   weathercomHourlyDiagnostics,
   unit,
@@ -1818,7 +2191,7 @@ function buildChartData(
   );
   const datasets = [
     {
-      label: "AMOS · 1 minute",
+      label: "Representative AMOS · 15L designation",
       data: amosPoints,
       borderColor: "#22d3ee",
       backgroundColor: "#22d3ee",
@@ -1831,7 +2204,7 @@ function buildChartData(
       order: 2,
     },
     {
-      label: "Actual METAR",
+      label: "Official coded METAR · audit",
       data: metarPoints,
       borderColor: "#f8fafc",
       backgroundColor: "#07111f",
@@ -1845,6 +2218,31 @@ function buildChartData(
       order: 1,
     },
   ];
+
+  if (observedMax) {
+    datasets.unshift({
+      label: "Observed AMOS max",
+      data: [
+        {
+          x: observedMax.minute,
+          y: observedMax.temperature,
+          obsTimeUtc: observedMax.obsTimeUtc,
+          obsTimeLocal: observedMax.obsTimeLocal,
+        },
+      ],
+      showLine: false,
+      borderColor: "#34d399",
+      backgroundColor: "#052e2b",
+      pointBorderColor: "#6ee7b7",
+      pointBackgroundColor: "#052e2b",
+      pointBorderWidth: 2.5,
+      pointRadius: 6,
+      pointHitRadius: 12,
+      pointHoverRadius: 8,
+      pointStyle: "rectRot",
+      order: -1,
+    });
+  }
 
   if (weathercomBaselinePoints.length) {
     const baselineDescriptor = weathercomBaselineDescriptor(
@@ -1890,7 +2288,7 @@ function buildChartData(
 
   if (providerPeak) {
     datasets.unshift({
-      label: `${providerPeak.providerLabel} daily high · hourly time estimate`,
+      label: `${providerPeak.providerLabel} raw daily high · hourly time estimate`,
       data: [
         {
           x: providerPeak.minute,
@@ -1915,17 +2313,48 @@ function buildChartData(
   return { datasets };
 }
 
-function SourceCard({ accent, label, value, unit, detail, count }) {
+function statusBadgeClasses(status) {
+  const classes = {
+    fresh: "border-emerald-300/25 bg-emerald-300/10 text-emerald-300",
+    delayed: "border-amber-300/25 bg-amber-300/10 text-amber-300",
+    stale: "border-rose-300/25 bg-rose-300/10 text-rose-300",
+    archive: "border-slate-400/20 bg-slate-400/10 text-slate-400",
+    waiting: "border-slate-500/20 bg-slate-500/10 text-slate-500",
+  };
+  return classes[status] ?? classes.waiting;
+}
+
+function SourceCard({
+  accent,
+  label,
+  value,
+  unit,
+  detail,
+  timing,
+  freshness,
+  count,
+}) {
   return (
     <div className="min-w-0 border-l border-white/10 px-4 first:border-l-0 first:pl-0 md:px-6">
-      <div className="flex items-center gap-2">
-        <span
-          className="h-2 w-2 rounded-full shadow-[0_0_14px_currentColor]"
-          style={{ color: accent, backgroundColor: accent }}
-        />
-        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">
-          {label}
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full shadow-[0_0_14px_currentColor]"
+            style={{ color: accent, backgroundColor: accent }}
+          />
+          <span className="truncate font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">
+            {label}
+          </span>
+        </div>
+        {freshness && (
+          <span
+            className={`shrink-0 border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.14em] ${statusBadgeClasses(
+              freshness.status,
+            )}`}
+          >
+            {freshness.label}
+          </span>
+        )}
       </div>
       <div className="mt-2 flex items-end gap-1">
         <span className="text-2xl font-medium tracking-tight text-white md:text-3xl">
@@ -1933,10 +2362,276 @@ function SourceCard({ accent, label, value, unit, detail, count }) {
         </span>
         <span className="pb-1 text-xs text-slate-500">{unit}</span>
       </div>
-      <p className="mt-1 truncate font-mono text-[10px] text-slate-500">
+      <p className="mt-1 font-mono text-[10px] leading-4 text-slate-500">
         {detail} · {count} pts
       </p>
+      {timing && (
+        <p className="font-mono text-[9px] leading-4 text-slate-600">
+          {timing}
+        </p>
+      )}
     </div>
+  );
+}
+
+function formatPredictionPeakWindow(prediction) {
+  const start = formatLocalTime(
+    prediction?.peakWindowStartLocal ?? prediction?.peakWindowStartUtc,
+  );
+  const end = formatLocalTime(
+    prediction?.peakWindowEndLocal ?? prediction?.peakWindowEndUtc,
+  );
+  if (start !== "—" && end !== "—") {
+    return `${start}–${end} KST`;
+  }
+  if (start !== "—" || end !== "—") {
+    return `${start !== "—" ? start : end} KST`;
+  }
+  return null;
+}
+
+function OutlookMetric({ label, value, detail, tone = "text-slate-100" }) {
+  return (
+    <div className="min-w-0 bg-[#081321] px-4 py-3">
+      <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-slate-500">
+        {label}
+      </p>
+      <p className={`mt-1 truncate text-lg font-medium ${tone}`}>{value}</p>
+      <p className="mt-1 min-h-4 font-mono text-[9px] leading-4 text-slate-500">
+        {detail}
+      </p>
+    </div>
+  );
+}
+
+function MaxOutlookPanel({
+  date,
+  today,
+  unit,
+  latestAmos,
+  amosFreshness,
+  observedMax,
+  prediction,
+  predictionUsable,
+  predictionAgeMinutes,
+  predictionForecastAgeMinutes,
+  expectedHighC,
+  guidanceLowC,
+  guidanceHighC,
+  trendCPerHour,
+}) {
+  const isToday = date === today;
+  const isArchive = date < today;
+  const currentC = latestAmos?.tempC;
+  const peakWindow = predictionUsable
+    ? formatPredictionPeakWindow(prediction)
+    : null;
+  const predictionGeneratedAt = formatLocalTime(prediction?.generatedAt);
+  const predictionStatus = predictionUsable
+    ? isToday
+      ? "Current stored outlook"
+      : "Stored outlook"
+    : observedMax
+      ? "Observed-only fallback"
+      : "Awaiting data";
+  const expectedLabel = isArchive
+    ? predictionUsable
+      ? "Stored tracker max"
+      : "Final observed max"
+    : "Expected max";
+  const expectedDetail = predictionUsable
+    ? "Weather.com guidance with the AMOS observed floor"
+    : observedMax
+      ? "No usable stored forecast; using the observed maximum"
+      : "No usable observation or stored forecast";
+  const guidanceRange =
+    Number.isFinite(guidanceLowC) && Number.isFinite(guidanceHighC)
+      ? `${formatPredictionTemperature(
+          toUnitTemperature(guidanceLowC, unit),
+          unit,
+        )}–${formatPredictionTemperature(
+          toUnitTemperature(guidanceHighC, unit),
+          unit,
+        )}`
+      : "Unavailable";
+  const trendInUnit = toUnitTemperatureDelta(trendCPerHour, unit);
+  const trendIsCurrent = !isToday || amosFreshness.status === "fresh";
+  const displayedTrend = trendIsCurrent ? trendInUnit : null;
+  const trendValue = Number.isFinite(displayedTrend)
+    ? `${displayedTrend > 0 ? "+" : ""}${displayedTrend.toFixed(1)}°${unit}/h`
+    : "Unavailable";
+  let predictionFallbackReason = null;
+  if (prediction && !predictionUsable) {
+    if (prediction.modelVersion !== CURRENT_PREDICTION_MODEL_VERSION) {
+      predictionFallbackReason = "stored outlook uses a retired model";
+    } else if (!Number.isFinite(prediction.predictedHighC)) {
+      predictionFallbackReason = "stored outlook has no maximum";
+    } else if (!isArchive && !Number.isFinite(predictionAgeMinutes)) {
+      predictionFallbackReason = "outlook generation time is unavailable";
+    } else if (
+      !isArchive &&
+      predictionAgeMinutes > MAX_LIVE_PREDICTION_AGE_MINUTES
+    ) {
+      predictionFallbackReason = `stored outlook is ${Math.round(
+        predictionAgeMinutes,
+      )}m old`;
+    } else if (
+      !isArchive &&
+      !Number.isFinite(predictionForecastAgeMinutes)
+    ) {
+      predictionFallbackReason = "Weather.com input time is unavailable";
+    } else if (
+      !isArchive &&
+      predictionForecastAgeMinutes > WEATHERCOM_STALE_AGE_MINUTES
+    ) {
+      predictionFallbackReason = `Weather.com input is ${Math.round(
+        predictionForecastAgeMinutes,
+      )}m old`;
+    }
+  }
+  const predictionVintage = predictionUsable
+    ? [
+        predictionGeneratedAt !== "—"
+          ? `outlook generated ${predictionGeneratedAt} KST`
+          : null,
+        Number.isFinite(predictionForecastAgeMinutes)
+          ? `Weather.com input ${Math.round(
+              predictionForecastAgeMinutes,
+            )}m old`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : predictionFallbackReason;
+
+  return (
+    <section
+      aria-labelledby="seoul-max-outlook-title"
+      className="border-b border-white/10 py-4"
+    >
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p
+            id="seoul-max-outlook-title"
+            className="font-mono text-[10px] uppercase tracking-[0.2em] text-emerald-300"
+          >
+            {isToday
+              ? "Live maximum outlook"
+              : isArchive
+                ? "Archived maximum summary"
+                : "Maximum outlook"}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Representative RKSI AMOS temperature, using the feed&apos;s 15L
+            designation.
+          </p>
+        </div>
+        <span
+          className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${
+            predictionUsable
+              ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-300"
+              : observedMax
+                ? "border-amber-300/25 bg-amber-300/10 text-amber-300"
+                : "border-slate-500/20 bg-slate-500/10 text-slate-500"
+          }`}
+        >
+          {predictionStatus}
+        </span>
+      </div>
+
+      <div className="grid gap-px border border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <OutlookMetric
+          label={isToday ? "Current AMOS" : "Last AMOS"}
+          value={formatPredictionTemperature(
+            toUnitTemperature(currentC, unit),
+            unit,
+          )}
+          detail={
+            latestAmos
+              ? `${formatClock(latestAmos.obsTimeUtc)} · ${amosFreshness.label.toLowerCase()}`
+              : "No representative observation"
+          }
+          tone="text-cyan-200"
+        />
+        <OutlookMetric
+          label="Observed max"
+          value={formatPredictionTemperature(
+            toUnitTemperature(observedMax?.tempC, unit),
+            unit,
+          )}
+          detail={
+            observedMax
+              ? `${formatClock(observedMax.obsTimeUtc)} · first occurrence`
+              : "No representative observation"
+          }
+          tone="text-emerald-200"
+        />
+        <OutlookMetric
+          label={expectedLabel}
+          value={formatPredictionTemperature(
+            toUnitTemperature(expectedHighC, unit),
+            unit,
+          )}
+          detail={expectedDetail}
+          tone="text-white"
+        />
+        <OutlookMetric
+          label="Guidance range"
+          value={guidanceRange}
+          detail={
+            Number.isFinite(guidanceLowC)
+              ? "Heuristic range, floored at the observed max"
+              : "Requires a usable stored outlook"
+          }
+          tone="text-violet-200"
+        />
+        <OutlookMetric
+          label="Likely peak window"
+          value={
+            peakWindow ??
+            (observedMax
+              ? `${formatClock(observedMax.obsTimeUtc)} observed`
+              : "Unavailable")
+          }
+          detail={
+            peakWindow
+              ? "Stored hourly peak window"
+              : observedMax
+                ? "Falling back to the observed max time"
+                : "No observed max or usable forecast window"
+          }
+          tone="text-rose-200"
+        />
+        <OutlookMetric
+          label={isArchive ? "Last 60-minute trend" : "60-minute trend"}
+          value={trendValue}
+          detail={
+            trendIsCurrent
+              ? trendDescription(trendCPerHour)
+              : `Unavailable while AMOS is ${amosFreshness.label.toLowerCase()}`
+          }
+          tone={
+            Number.isFinite(displayedTrend) && displayedTrend >= 0.2
+              ? "text-amber-200"
+              : Number.isFinite(displayedTrend) && displayedTrend <= -0.2
+                ? "text-sky-200"
+                : "text-slate-200"
+          }
+        />
+      </div>
+
+      <p className="mt-2 font-mono text-[9px] leading-4 text-slate-600">
+        {[
+          amosFreshness.timing,
+          predictionVintage,
+          predictionUsable
+            ? "expected max and range can never fall below the selected day’s observed AMOS maximum"
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      </p>
+    </section>
   );
 }
 
@@ -2416,6 +3111,22 @@ export default function SeoulDayPage() {
 
   const latestMetar = metarRows.at(-1) ?? null;
   const latestAmos = amosDisplayRows.at(-1) ?? null;
+  const metarFreshness = useMemo(
+    () => telemetryFreshness(latestMetar, clockNowMs, isToday, "metar"),
+    [clockNowMs, isToday, latestMetar],
+  );
+  const amosFreshness = useMemo(
+    () => telemetryFreshness(latestAmos, clockNowMs, isToday, "amos"),
+    [clockNowMs, isToday, latestAmos],
+  );
+  const observedMax = useMemo(
+    () => selectObservedMaximum(amosDisplayRows),
+    [amosDisplayRows],
+  );
+  const trend60mCPerHour = useMemo(
+    () => robustTemperatureTrendCPerHour(amosDisplayRows, 60),
+    [amosDisplayRows],
+  );
   const metarSkyRuns = useMemo(
     () => buildMetarSkyRuns(metarRows, currentSeoulMinute),
     [currentSeoulMinute, metarRows],
@@ -2423,6 +3134,64 @@ export default function SeoulDayPage() {
   const latestPrediction = normalizePrediction(
     predictionDashboard?.latestPrediction,
   );
+  const predictionAgeMinutes =
+    Number.isFinite(clockNowMs) &&
+    Number.isFinite(latestPrediction?.generatedAt)
+      ? Math.max(0, clockNowMs - latestPrediction.generatedAt) / MINUTE_MS
+      : null;
+  const predictionForecastCapturedAt =
+    latestPrediction?.forecastCapturedAt ??
+    latestPrediction?.providerDetails?.find(
+      (provider) => provider?.provider === "weathercom",
+    )?.capturedAt;
+  const predictionForecastAgeMinutes =
+    Number.isFinite(clockNowMs) && Number.isFinite(predictionForecastCapturedAt)
+      ? Math.max(0, clockNowMs - predictionForecastCapturedAt) / MINUTE_MS
+      : null;
+  const predictionUsable =
+    latestPrediction?.modelVersion === CURRENT_PREDICTION_MODEL_VERSION &&
+    Number.isFinite(latestPrediction?.predictedHighC) &&
+    (date < today ||
+      (Number.isFinite(predictionAgeMinutes) &&
+        latestPrediction.generatedAt <= clockNowMs + MINUTE_MS &&
+        predictionAgeMinutes <= MAX_LIVE_PREDICTION_AGE_MINUTES &&
+        Number.isFinite(predictionForecastAgeMinutes) &&
+        predictionForecastCapturedAt <= clockNowMs + MINUTE_MS &&
+        predictionForecastAgeMinutes <= WEATHERCOM_STALE_AGE_MINUTES));
+  const expectedHighC = predictionUsable
+    ? Math.max(
+        latestPrediction.predictedHighC,
+        observedMax?.tempC ?? Number.NEGATIVE_INFINITY,
+      )
+    : (observedMax?.tempC ?? null);
+  const guidanceLowC =
+    predictionUsable && Number.isFinite(latestPrediction?.confidenceLowC)
+      ? Math.max(
+          latestPrediction.confidenceLowC,
+          observedMax?.tempC ?? Number.NEGATIVE_INFINITY,
+        )
+      : null;
+  const guidanceHighC =
+    predictionUsable && Number.isFinite(latestPrediction?.confidenceHighC)
+      ? Math.max(
+          latestPrediction.confidenceHighC,
+          guidanceLowC ?? Number.NEGATIVE_INFINITY,
+          expectedHighC ?? Number.NEGATIVE_INFINITY,
+        )
+      : null;
+  const observedMaxMarker = useMemo(() => {
+    const minute = parseMinute(observedMax?.obsTimeLocal);
+    const temperature = toUnitTemperature(observedMax?.tempC, unit);
+    if (!Number.isFinite(minute) || !Number.isFinite(temperature)) {
+      return null;
+    }
+    return {
+      minute,
+      temperature,
+      obsTimeUtc: observedMax.obsTimeUtc,
+      obsTimeLocal: observedMax.obsTimeLocal,
+    };
+  }, [observedMax, unit]);
   const weathercomHourlyDiagnostics =
     predictionDashboard?.weathercomHourlyDiagnostics ?? null;
   const weathercomHourlyPointCount = Array.isArray(
@@ -2521,7 +3290,9 @@ export default function SeoulDayPage() {
       ) ?? null
     );
   }, [hourlyCloudCover]);
+  const forecastCloudVintage = nextForecastCloudHour;
   const sunsetMinute = useMemo(() => sunsetMinuteForDate(date), [date]);
+  const showHistoricalPeakReference = usesSpringSummerPeakReference(date);
   const hasTemperatureChartData =
     metarRows.length +
       amosDisplayRows.length +
@@ -2537,6 +3308,7 @@ export default function SeoulDayPage() {
       buildChartData(
         metarRows,
         amosDisplayRows,
+        observedMaxMarker,
         preferredProviderPeak,
         weathercomHourlyDiagnostics,
         unit,
@@ -2544,6 +3316,7 @@ export default function SeoulDayPage() {
     [
       amosDisplayRows,
       metarRows,
+      observedMaxMarker,
       preferredProviderPeak,
       unit,
       weathercomHourlyDiagnostics,
@@ -2608,7 +3381,9 @@ export default function SeoulDayPage() {
               const forecastCloudCover = Number.isFinite(
                 item.raw?.cloudCoverPct,
               )
-                ? ` · ${Math.round(item.raw.cloudCoverPct)}% cloud cover`
+                ? ` · ${formatCloudCoverPercentage(
+                    item.raw.cloudCoverPct,
+                  )}% cloud cover`
                 : "";
               return `${item.dataset.label}: ${item.parsed.y.toFixed(
                 1,
@@ -2630,11 +3405,11 @@ export default function SeoulDayPage() {
         },
         seoulPeakTiming: {
           typical: {
-            display: true,
+            display: showHistoricalPeakReference,
             medianMinute: HISTORICAL_PEAK_REFERENCE.medianMinute,
             windowStartMinute: HISTORICAL_PEAK_REFERENCE.windowStartMinute,
             windowEndMinute: HISTORICAL_PEAK_REFERENCE.windowEndMinute,
-            title: "MAR–JUL TYPICAL",
+            title: "MAR–JUL ARCHIVE",
             label: minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute),
           },
         },
@@ -2643,11 +3418,21 @@ export default function SeoulDayPage() {
           minute: preferredProviderPeak?.minute,
           temperature: preferredProviderPeak?.temperature,
           label: preferredProviderPeak
-            ? `${preferredProviderPeak.providerLabel.toUpperCase()} HIGH · ${preferredProviderPeak.temperature.toFixed(
+            ? `${preferredProviderPeak.providerLabel.toUpperCase()} RAW DAILY HIGH · ${preferredProviderPeak.temperature.toFixed(
                 1,
               )}°${unit} · FIRST HOURLY PEAK ${minuteLabel(
                 preferredProviderPeak.minute,
               )} KST`
+            : "",
+        },
+        seoulObservedMax: {
+          display: Boolean(observedMaxMarker),
+          minute: observedMaxMarker?.minute,
+          temperature: observedMaxMarker?.temperature,
+          label: observedMaxMarker
+            ? `OBSERVED AMOS MAX · ${observedMaxMarker.temperature.toFixed(
+                1,
+              )}°${unit} · ${minuteLabel(observedMaxMarker.minute)} KST`
             : "",
         },
         seoulHourlyCloudCover: {
@@ -2721,7 +3506,9 @@ export default function SeoulDayPage() {
       hasTemperatureChartData,
       hourlyCloudSegments,
       isToday,
+      observedMaxMarker,
       preferredProviderPeak,
+      showHistoricalPeakReference,
       sunsetMinute,
       unit,
       weathercomHourlyPointCount,
@@ -2883,11 +3670,12 @@ export default function SeoulDayPage() {
               </span>
             </div>
             <h1 className="mt-3 text-4xl font-medium tracking-[-0.045em] text-white md:text-6xl">
-              Seoul 15L weather timeline
+              RKSI representative weather timeline
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-              One-minute 15L AMOS temperature, actual RKSI METAR, and hourly
-              cloud guidance across the full Seoul day.
+              One-minute representative AMOS temperature using the feed&apos;s
+              15L designation, official coded RKSI METAR, and hourly cloud
+              guidance across the full Seoul day.
             </p>
           </div>
 
@@ -2961,10 +3749,10 @@ export default function SeoulDayPage() {
           </div>
         </header>
 
-        <section className="grid grid-cols-1 gap-y-5 border-b border-white/10 py-5 md:grid-cols-3">
+        <section className="grid grid-cols-1 gap-y-5 py-5 md:grid-cols-3">
           <SourceCard
             accent="#f8fafc"
-            label="Actual METAR"
+            label="Official coded METAR · audit"
             value={formatTemperature(latestMetar, unit)}
             unit={unit}
             detail={
@@ -2974,22 +3762,26 @@ export default function SeoulDayPage() {
                   )}`
                 : "awaiting report"
             }
+            timing={metarFreshness.timing}
+            freshness={metarFreshness}
             count={metarRows.length}
           />
           <SourceCard
             accent="#22d3ee"
-            label="AMOS · 1 minute"
+            label="Representative AMOS · 1 min"
             value={formatTemperature(latestAmos, unit)}
             unit={unit}
             detail={
               latestAmos
-                ? `15L · ${formatClock(latestAmos.obsTimeUtc)}${
+                ? `15L designation · ${formatClock(latestAmos.obsTimeUtc)}${
                     latestAmos.displayCadence === "audit_fallback"
                       ? " · audit fallback"
                       : ""
                   }`
                 : "awaiting capture"
             }
+            timing={amosFreshness.timing}
+            freshness={amosFreshness}
             count={amosDisplayRows.length}
           />
           <div className="border-l border-white/10 px-4 md:px-6">
@@ -3008,6 +3800,23 @@ export default function SeoulDayPage() {
             </p>
           </div>
         </section>
+
+        <MaxOutlookPanel
+          date={date}
+          today={today}
+          unit={unit}
+          latestAmos={latestAmos}
+          amosFreshness={amosFreshness}
+          observedMax={observedMax}
+          prediction={latestPrediction}
+          predictionUsable={predictionUsable}
+          predictionAgeMinutes={predictionAgeMinutes}
+          predictionForecastAgeMinutes={predictionForecastAgeMinutes}
+          expectedHighC={expectedHighC}
+          guidanceLowC={guidanceLowC}
+          guidanceHighC={guidanceHighC}
+          trendCPerHour={trend60mCPerHour}
+        />
 
         <section className="flex min-h-0 flex-1 flex-col pt-5">
           <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -3055,6 +3864,30 @@ export default function SeoulDayPage() {
                           : "no stored forecast hour remains on this date"
                       }`}
                 </p>
+                {forecastCloudVintage && date >= today && (
+                  <p
+                    className={
+                      forecastCloudVintage.isStale
+                        ? "text-amber-300/80"
+                        : "text-slate-500"
+                    }
+                  >
+                    Weather.com cloud forecast captured ·{" "}
+                    {formatLocalTime(
+                      forecastCloudVintage.capturedAtLocal ??
+                        forecastCloudVintage.capturedAt,
+                    )}{" "}
+                    KST
+                    {Number.isFinite(forecastCloudVintage.captureAgeMinutes)
+                      ? ` · ${Math.round(
+                          forecastCloudVintage.captureAgeMinutes,
+                        )}m old`
+                      : ""}
+                    {forecastCloudVintage.isStale
+                      ? " · stale, retained as last successful guidance"
+                      : ""}
+                  </p>
+                )}
               </div>
             </div>
             <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
@@ -3063,9 +3896,10 @@ export default function SeoulDayPage() {
                   className="text-rose-300"
                   title="The temperature is Weather.com's RKSI airport calendar-day high. The time is the first tied maximum in its returned hourly values."
                 >
-                  {preferredProviderPeak.providerLabel} forecast high ·{" "}
-                  {preferredProviderPeak.temperature.toFixed(1)}°{unit} · first
-                  hourly peak {minuteLabel(preferredProviderPeak.minute)} KST
+                  {preferredProviderPeak.providerLabel} raw provider daily high
+                  · {preferredProviderPeak.temperature.toFixed(1)}°{unit} ·
+                  first hourly peak {minuteLabel(preferredProviderPeak.minute)}{" "}
+                  KST
                 </p>
               )}
               {preferredProviderPeak && (
@@ -3091,13 +3925,15 @@ export default function SeoulDayPage() {
                     KST
                   </p>
                 )}
-              <p
-                className="mt-1 text-violet-300"
-                title={`Median first occurrence of the daily 15L maximum across ${HISTORICAL_PEAK_REFERENCE.sampleSize} complete days (${HISTORICAL_PEAK_REFERENCE.firstDate}–${HISTORICAL_PEAK_REFERENCE.lastDate}).`}
-              >
-                Spring–summer typical ·{" "}
-                {minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute)} KST
-              </p>
+              {showHistoricalPeakReference && (
+                <p
+                  className="mt-1 text-violet-300"
+                  title={`Median first occurrence of the daily representative AMOS maximum across ${HISTORICAL_PEAK_REFERENCE.sampleSize} complete March–July days (${HISTORICAL_PEAK_REFERENCE.firstDate}–${HISTORICAL_PEAK_REFERENCE.lastDate}).`}
+                >
+                  Mar–Jul archive median ·{" "}
+                  {minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute)} KST
+                </p>
+              )}
               <p className="mt-1 text-orange-300">
                 Sunset · {minuteLabel(sunsetMinute)} KST
               </p>
@@ -3131,20 +3967,32 @@ export default function SeoulDayPage() {
               the sky is covered. Solid cells are past METAR observations. Their
               percentages are approximate ranges derived only from explicit
               cloud-amount reports. Diagonally patterned cells are upcoming
-              Weather.com hourly forecasts. Hatched cells without a percentage
-              mean total cloud cover is unavailable, not clear sky. The current
-              hour ends at the NOW line; its remaining time stays hatched until
-              observed.
+              Weather.com hourly forecasts at their stored source percentage.
+              Amber forecast cells are stale values retained from the last
+              successful capture. Hatched cells without a percentage mean total
+              cloud cover is unavailable, not clear sky. The current hour ends
+              at the NOW line; its remaining time stays hatched until observed.
             </p>
             {preferredProviderPeak && (
               <p>
-                The displayed high comes from the latest stored Weather.com
-                Seoul calendar-day forecast:{" "}
-                {preferredProviderPeak.temperature.toFixed(1)}
+                The rose raw provider daily high comes from the latest stored
+                Weather.com Seoul calendar-day forecast:{" "}
+                {preferredProviderPeak.temperature.toFixed(1)}{" "}
                 degrees {unit === "C" ? "Celsius" : "Fahrenheit"}. Its
                 horizontal position is the first tied maximum among the
                 Weather.com hourly values returned for that date, beginning at{" "}
                 {minuteLabel(preferredProviderPeak.minute)} Korea Standard Time.
+                It is separate from the expected maximum in the outlook, which
+                is floored at the observed AMOS maximum.
+              </p>
+            )}
+            {observedMaxMarker && (
+              <p>
+                A green diamond and horizontal dashed line mark the first
+                occurrence of the observed representative AMOS maximum:{" "}
+                {observedMaxMarker.temperature.toFixed(1)}{" "}
+                degrees {unit === "C" ? "Celsius" : "Fahrenheit"} at{" "}
+                {minuteLabel(observedMaxMarker.minute)} Korea Standard Time.
               </p>
             )}
           </div>
@@ -3221,7 +4069,9 @@ export default function SeoulDayPage() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2 font-mono text-[10px] uppercase tracking-[0.12em]">
                         {hour.phase === "forecast"
-                          ? "Forecast"
+                          ? hour.isStale
+                            ? "Forecast · stale"
+                            : "Forecast"
                           : hour.phase === "live"
                             ? "Live observation"
                             : "Observed"}
@@ -3242,10 +4092,12 @@ export default function SeoulDayPage() {
 
         <footer className="flex flex-col gap-2 py-4 font-mono text-[10px] leading-5 text-slate-600 md:flex-row md:items-center md:justify-between">
           <p>
-            AMOS uses the feed row designated 15L. Five-minute snapshots remain
-            available only as an audit fallback for missed minute captures. Past
-            sky cover comes from METAR ranges; coming hours use Weather.com
-            cloud-cover percentages.
+            AMOS uses RKSI&apos;s representative feed row designated 15L; that
+            designation does not claim a thermometer at the runway threshold.
+            Five-minute snapshots remain available only as an audit fallback for
+            missed minute captures. Past sky cover comes from coded METAR
+            ranges; coming hours use timestamped Weather.com cloud-cover
+            percentages.
           </p>
           <p>
             NOAA TGFTP METAR · KMA AMOS MOBILE FEED · WEATHER.COM RKSI AIRPORT
