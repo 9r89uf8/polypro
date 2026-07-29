@@ -2423,7 +2423,7 @@ export default function SeoulDayPage() {
   );
   const predictionDashboard = useQuery(
     "seoulWeather:getHighPredictionDashboard",
-    isDateValid ? { date } : "skip",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
   const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
@@ -2920,7 +2920,10 @@ export default function SeoulDayPage() {
 
       let predictionFailure = null;
       try {
-        await recomputeHighPrediction({ date });
+        await recomputeHighPrediction({
+          stationIcao: STATION_ICAO,
+          date,
+        });
       } catch (error) {
         predictionFailure = error;
         console.error(error);

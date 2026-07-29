@@ -405,7 +405,7 @@ function getWeatherComApiKey() {
 }
 
 async function fetchWeatherComDailyForecast({
-  geocode,
+  icaoCode,
   durationDays,
   unit,
   language,
@@ -413,7 +413,7 @@ async function fetchWeatherComDailyForecast({
   timeZone,
 }) {
   const url = new URL(WEATHERCOM_DAILY_FORECAST_URL);
-  url.searchParams.set("geocode", geocode);
+  url.searchParams.set("icaoCode", icaoCode);
   url.searchParams.set("units", toWeatherComUnits(unit));
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
@@ -450,14 +450,14 @@ async function fetchWeatherComDailyForecast({
 }
 
 async function fetchWeatherComHourlyForecast({
-  geocode,
+  icaoCode,
   unit,
   language,
   apiKey,
   timeZone,
 }) {
   const url = new URL(WEATHERCOM_HOURLY_FORECAST_URL);
-  url.searchParams.set("geocode", geocode);
+  url.searchParams.set("icaoCode", icaoCode);
   url.searchParams.set("units", toWeatherComUnits(unit));
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
@@ -681,7 +681,6 @@ export const getDayPageWeather = actionGeneric({
     }
 
     const apiKey = getWeatherComApiKey();
-    const geocode = `${SEOUL_STATION.lat},${SEOUL_STATION.lon}`;
     const unit = "metric";
     const language = DEFAULT_WEATHERCOM_LANGUAGE;
     const todayDate = formatDateInTimezone(Date.now(), SEOUL_STATION.timeZone);
@@ -696,7 +695,7 @@ export const getDayPageWeather = actionGeneric({
       }
       try {
         const days = await fetchWeatherComDailyForecast({
-          geocode,
+          icaoCode: SEOUL_STATION.stationIcao,
           durationDays: 5,
           unit,
           language,
@@ -842,7 +841,6 @@ export const collectForecastSnapshot = internalActionGeneric({
       SEOUL_TIMEZONE,
     );
     const captureDate = formatDateInTimezone(capturedAt, SEOUL_TIMEZONE);
-    const geocode = `${SEOUL_STATION.lat},${SEOUL_STATION.lon}`;
     const googleApiKey = toNonEmptyString(process.env.GOOGLE_WEATHER_API_KEY);
 
     const [weathercom, weathercomHourly, google, openMeteo] = await Promise.all(
@@ -850,7 +848,7 @@ export const collectForecastSnapshot = internalActionGeneric({
         (async () => {
           try {
             const rows = await fetchWeatherComDailyForecast({
-              geocode,
+              icaoCode: stationIcao,
               durationDays: 5,
               unit: "metric",
               language: DEFAULT_WEATHERCOM_LANGUAGE,
@@ -869,7 +867,7 @@ export const collectForecastSnapshot = internalActionGeneric({
         (async () => {
           try {
             const rows = await fetchWeatherComHourlyForecast({
-              geocode,
+              icaoCode: stationIcao,
               unit: "metric",
               language: DEFAULT_WEATHERCOM_LANGUAGE,
               apiKey: getWeatherComApiKey(),
