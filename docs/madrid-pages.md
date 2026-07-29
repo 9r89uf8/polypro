@@ -57,10 +57,14 @@ than compressing all 24 hours into an unreadable width.
 For the current Madrid date, opening the page and pressing `Refresh live`
 request:
 
-- `madrid:pollLatestStationMetar`
 - `madrid:pollLatestNoaaPublishRace`
-- `madrid:pollAemetStationObservations`
-- `madrid:pollAemetHourlyForecast`
+
+The authenticated AMA action is not triggered by page visits. AMA remains part
+of the background publish-race collector when that deployment has the approved
+and configured credentials; the on-demand page path stays on NOAA plus AEMET
+OpenData. AEMET OpenData is collected only by the scheduled backend jobs, not
+once per page visitor; this avoids spending the provider's per-minute request
+budget on frontend traffic.
 
 The Convex queries remain subscribed after that refresh, so collector writes
 appear without a page reload. Historical pages only show stored data and do not

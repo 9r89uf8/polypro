@@ -597,12 +597,7 @@ export default function MadridDayPage() {
   const today = madridTodayKey();
   const isToday = isDateValid && date === today;
 
-  const pollLatestMetar = useAction("madrid:pollLatestStationMetar");
   const pollLatestNoaaMetar = useAction("madrid:pollLatestNoaaPublishRace");
-  const pollStationObservations = useAction(
-    "madrid:pollAemetStationObservations",
-  );
-  const pollHourlyForecast = useAction("madrid:pollAemetHourlyForecast");
 
   const dayData = useQuery(
     "madrid:getDayStationRows",
@@ -683,69 +678,43 @@ export default function MadridDayPage() {
     let cancelled = false;
 
     async function refreshOnOpen() {
-      setSyncMessage("Checking the latest airport readings and forecast…");
-      const results = await Promise.allSettled([
-        pollLatestMetar({ stationIcao: STATION_ICAO }),
-        pollLatestNoaaMetar({ stationIcao: STATION_ICAO }),
-        pollStationObservations({ stationIcao: STATION_ICAO }),
-        pollHourlyForecast({ stationIcao: STATION_ICAO }),
-      ]);
-      if (cancelled) {
-        return;
+      setSyncMessage("Checking the latest airport METAR…");
+      try {
+        await pollLatestNoaaMetar({ stationIcao: STATION_ICAO });
+        if (!cancelled) {
+          setSyncMessage(
+            `Live METAR checked at ${formatMadridTime(Date.now())} Madrid time.`,
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setSyncMessage(
+            "Live METAR check failed; showing the latest stored readings.",
+          );
+        }
       }
-      const failedCount = results.filter(
-        (result) =>
-          result.status === "rejected" ||
-          result.value?.status === "error" ||
-          result.value?.ok === false,
-      ).length;
-      setSyncMessage(
-        failedCount === results.length
-          ? "Live checks failed; showing the latest stored readings."
-          : failedCount
-            ? "Latest stored data is shown; one source could not be refreshed."
-            : `Sources checked at ${formatMadridTime(Date.now())} Madrid time.`,
-      );
     }
 
     refreshOnOpen();
     return () => {
       cancelled = true;
     };
-  }, [
-    date,
-    isToday,
-    pollHourlyForecast,
-    pollLatestMetar,
-    pollLatestNoaaMetar,
-    pollStationObservations,
-  ]);
+  }, [date, isToday, pollLatestNoaaMetar]);
 
   async function handleRefresh() {
     if (!isToday || isRefreshing) {
       return;
     }
     setIsRefreshing(true);
-    setSyncMessage("Refreshing airport readings and forecast…");
+    setSyncMessage("Refreshing the latest airport METAR…");
     try {
-      const results = await Promise.allSettled([
-        pollLatestMetar({ stationIcao: STATION_ICAO }),
-        pollLatestNoaaMetar({ stationIcao: STATION_ICAO }),
-        pollStationObservations({ stationIcao: STATION_ICAO }),
-        pollHourlyForecast({ stationIcao: STATION_ICAO }),
-      ]);
-      const failedCount = results.filter(
-        (result) =>
-          result.status === "rejected" ||
-          result.value?.status === "error" ||
-          result.value?.ok === false,
-      ).length;
+      await pollLatestNoaaMetar({ stationIcao: STATION_ICAO });
       setSyncMessage(
-        failedCount === results.length
-          ? "Refresh failed; the latest stored readings remain on screen."
-          : failedCount
-            ? "Refresh completed, but one source was unavailable."
-            : `Updated at ${formatMadridTime(Date.now())} Madrid time.`,
+        `Live METAR updated at ${formatMadridTime(Date.now())} Madrid time.`,
+      );
+    } catch {
+      setSyncMessage(
+        "Live METAR refresh failed; the latest stored reading remains on screen.",
       );
     } finally {
       setIsRefreshing(false);
