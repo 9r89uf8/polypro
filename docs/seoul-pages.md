@@ -51,9 +51,7 @@ layer: `Weather.com · latest stored` is a blue dashed curve and the
 capture-time-labeled morning baseline is a faint blue dotted curve. Material
 per-hour revisions receive signed badges such as `↑ +1.0 °C`. The Weather.com
 curves do not add a five-minute AMOS series and do not currently contribute to
-the predictor's hourly ensemble. Both the daily and hourly Weather.com
-collectors select the airport explicitly with `icaoCode=RKSI`; they do not use
-a Seoul or Incheon city lookup.
+the predictor's hourly ensemble.
 
 The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
 is marked when the selected date is today. A date-specific orange sunset line
@@ -238,8 +236,7 @@ daily-high model.
 ## Prediction dashboard behavior
 
 The page subscribes to
-`seoulWeather:getHighPredictionDashboard({ stationIcao: "RKSI", date })`. Its
-main UI contract is:
+`seoulWeather:getHighPredictionDashboard({ date })`. Its main UI contract is:
 
 - `latestPrediction`: the current prediction and hourly forecast curve
 - `revisions`: immutable earlier predictions for the selected date
@@ -298,8 +295,6 @@ trigger recomputation.
   Weather.com daily, Weather.com hourly, Google Weather hourly, and Open-Meteo
   hourly results and errors. Weather.com's daily and hourly health remain
   separate even though both products are requested in the same collector run.
-  Both Weather.com requests use the explicit `RKSI` ICAO airport selector
-  rather than a city name or coordinate-to-locality lookup.
   A usable provider-product capture can remain an explicit fallback for at
   most twelve hours.
 - `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
