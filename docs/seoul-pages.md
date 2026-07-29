@@ -82,9 +82,11 @@ on a forecast-provider response.
 
 Peak timing has two deliberately separate visual references:
 
-- a rose point, vertical line, and in-plot label mark Weather.com's raw RKSI
-  airport calendar-day high and the first tied maximum in its returned hourly
-  values;
+- a rose circle marks Weather.com's raw RKSI airport calendar-day high at the
+  first tied maximum in its returned hourly values; it deliberately has no
+  vertical guide, in-plot label, or legend entry, while its exact provider,
+  temperature, and forecast hour remain available in the tooltip and
+  screen-reader description;
 - a violet historical reference shows the median first occurrence of the daily
   15L maximum at `13:44 KST`, with a low-opacity middle-50% band from
   `12:20–14:39 KST`, only for March-through-July dates.
@@ -115,9 +117,10 @@ The hourly revision/departure diagnostics use the immutable child-row history
 rather than being limited to that recent merge window.
 For a past date, the chart uses the Weather.com high/time pair retained in that
 date's immutable prediction revision. Older revisions without a Weather.com
-peak-time estimate are not backfilled and render no marker. The high, first
-hourly peak, latest provider capture, and any older retained peak-hour source
-time are repeated above the 2,400-pixel scroller.
+peak-time estimate are not backfilled and render no marker. The scroller has no
+dedicated Weather.com peak label or capture sublabel; only the rose circle is
+drawn, with its exact high and hourly time estimate available on hover and in
+the screen-reader description.
 
 The historical reference is a fixed, versioned snapshot of 130 complete 15L
 days from `2026-03-20` through `2026-07-27`. Its circular clock-time average was
@@ -168,6 +171,16 @@ cover, while `VV` means the sky is obscured rather than a known percentage.
 Those states therefore remain textual. AMOS `cld1`, `cld2`, and `cld3` are
 detected layer bases without coverage amount and are not used.
 
+For each completed hour with a numeric METAR-sample estimate, the route also
+compares the latest Weather.com `cloudCoverPct` capture completed strictly
+before that hour. The signed value is **forecast minus observed**: `+10%` means
+the forecast was 10 percentage points cloudier than the METAR sample, while
+`-20%` means it was 20 percentage points clearer. This delta appears in the
+hourly strip, latest completed comparison, and semantic detail table. A
+forecast captured at or after the valid hour is never scored against that hour.
+The live partial hour, non-quantifiable observations, and hours without a
+strictly pre-hour forecast show no delta.
+
 Upcoming full-hour cells use the exact stored `cloudCoverPct` from the latest
 successful Weather.com hourly response rather than rounding it to a five-point
 increment. No provider blending or stored legacy prediction curve is used.
@@ -181,18 +194,20 @@ amber; values older than the existing 12-hour hard limit are not shown. The
 current hour's hourly guidance is not relabeled as a forecast for only the
 remaining minutes.
 
-The header repeats the latest observed-hour summary and next available
-full forecast-hour percentage. `Jump to now` and a one-time initial scroll
-position keep the observed/forecast boundary visible on the 2,400-pixel chart.
-A collapsible semantic table lists all 24 hours, sources, values, ranges, and
-data coverage; the same information is attached to the chart for screen
-readers. METAR temperature tooltips retain the original sky/ceiling detail,
-while the provider-peak tooltip identifies its provider, temperature, and
-forecast hour. Weather.com hourly-point tooltips show the selected morning
-baseline, latest and previous-distinct forecasts, capture/detection times,
-latest strictly pre-hour forecast, matched AMOS reading, and available
-departures. A separate collapsible semantic table exposes the same hourly
-revision and departure details without requiring pointer access to the canvas.
+The header repeats the latest observed-hour summary, latest completed
+forecast-versus-observed cloud comparison, and next available full forecast-hour
+percentage. `Jump to now` and a one-time initial scroll position keep the
+observed/forecast boundary visible on the 2,400-pixel chart. A collapsible
+semantic table lists all 24 hours, sources, values, ranges, data coverage,
+strictly pre-hour forecast values, capture times, and signed cloud differences;
+the same information is attached to the chart for screen readers. METAR
+temperature tooltips retain the original sky/ceiling detail, while the
+provider-peak tooltip identifies its provider, temperature, and forecast hour.
+Weather.com hourly-point tooltips show the selected morning baseline, latest and
+previous-distinct forecasts, capture/detection times, latest strictly pre-hour
+forecast, matched AMOS reading, and available departures. A separate
+collapsible semantic table exposes the same hourly revision and departure
+details without requiring pointer access to the canvas.
 
 The rest of the interface is deliberately compact:
 
@@ -301,8 +316,9 @@ route consumes:
 - `latestForecastCapture.weathercomHourlyRows` for the newest hourly time
   estimate and coming-hour cloud guidance
 - `weathercomHourlyDiagnostics` for immutable latest/baseline curves,
-  per-hour revisions, matched AMOS departures, running states, stale health,
-  and the live pre-observation comparison
+  per-hour revisions, matched AMOS departures, the latest strictly pre-hour
+  cloud-cover forecast for completed-hour comparison, running states, stale
+  health, and the live pre-observation comparison
 
 All of those inputs are optional. Observed temperatures and observed cloud
 cover still render when forecast data are unavailable, and missing future

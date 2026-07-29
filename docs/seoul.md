@@ -94,9 +94,11 @@ Airport with `icaoCode=RKSI`, not a Seoul city place ID or a
 coordinate-to-locality lookup. During live verification on 2026-07-29 KST,
 Weather.com's location service returned `airportName=Incheon Intl Airport` and
 `icaoCode=RKSI`; the former coordinate lookup resolved to the `Unseo-dong`
-neighborhood without an airport identifier. The chart therefore labels the
-marker `Weather.com · RKSI`, matching its RKSI/Incheon AMOS and METAR
-observation lines.
+neighborhood without an airport identifier. The rose marker therefore represents
+`Weather.com · RKSI`, matching its RKSI/Incheon AMOS and METAR observation
+lines. The chart draws only the circle for this marker; its provider details
+remain in the tooltip and screen-reader description rather than a chart-header,
+in-plot, or legend label.
 
 The two Weather.com products have separate jobs:
 
@@ -108,6 +110,13 @@ The two Weather.com products have separate jobs:
   hourly value is tied. Captures retain the five calendar dates covered by the
   daily product.
 - Hourly `cloudCover` supplies coming-hour cloud guidance.
+
+For completed hours, the page can also compare that cloud guidance with its
+quantifiable METAR-sample estimate. It selects the latest immutable
+`cloudCover` value captured strictly before the forecast-valid hour and displays
+**forecast minus observed** in percentage points. Positive values mean the
+forecast was cloudier and negative values mean it was clearer. The live partial
+hour and non-quantifiable METAR states are not scored.
 
 The rose chart point consequently uses the Weather.com daily high as its
 vertical value and the first hottest Weather.com hourly value as its horizontal

@@ -2214,6 +2214,9 @@ function buildWeatherComHourlyDiagnostics({
           ? {
               preHourTempC: preHour.tempC,
               preHourTempF: preHour.tempF,
+              ...(Number.isFinite(preHour.cloudCoverPct)
+                ? { preHourCloudCoverPct: preHour.cloudCoverPct }
+                : {}),
               preHourCapturedAt: preHour.capturedAt,
               preHourCapturedAtLocal: preHour.capturedAtLocal,
               preHourForecastCaptureId: preHour.forecastCaptureId,

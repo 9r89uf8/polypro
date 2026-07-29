@@ -149,94 +149,6 @@ const peakTimingPlugin = {
   },
 };
 
-function providerPeakPosition(chart, options) {
-  if (
-    !options?.display ||
-    !Number.isFinite(options.minute) ||
-    !Number.isFinite(options.temperature)
-  ) {
-    return null;
-  }
-
-  const { chartArea, scales } = chart;
-  const x = scales.x.getPixelForValue(options.minute);
-  const y = scales.y.getPixelForValue(options.temperature);
-  if (
-    x < chartArea.left ||
-    x > chartArea.right ||
-    y < chartArea.top ||
-    y > chartArea.bottom
-  ) {
-    return null;
-  }
-
-  return { x, y };
-}
-
-const providerPeakPlugin = {
-  id: "seoulProviderPeak",
-  beforeDatasetsDraw(chart, _args, options) {
-    const position = providerPeakPosition(chart, options);
-    if (!position) {
-      return;
-    }
-
-    const { ctx, chartArea } = chart;
-    ctx.save();
-    ctx.strokeStyle = "rgba(244, 114, 182, 0.56)";
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 5]);
-    ctx.beginPath();
-    ctx.moveTo(position.x, chartArea.top);
-    ctx.lineTo(position.x, chartArea.bottom);
-    ctx.stroke();
-    ctx.restore();
-  },
-  afterDatasetsDraw(chart, _args, options) {
-    const position = providerPeakPosition(chart, options);
-    if (!position || !options?.label) {
-      return;
-    }
-
-    const { ctx, chartArea } = chart;
-    const boxHeight = 24;
-    const horizontalPadding = 9;
-
-    ctx.save();
-    ctx.font = "600 10px IBM Plex Mono, monospace";
-    const boxWidth = Math.min(
-      ctx.measureText(options.label).width + horizontalPadding * 2,
-      chartArea.right - chartArea.left - 8,
-    );
-    const boxLeft = Math.min(
-      Math.max(position.x - boxWidth / 2, chartArea.left + 4),
-      chartArea.right - boxWidth - 4,
-    );
-    const preferredTop = position.y - boxHeight - 12;
-    const boxTop =
-      preferredTop >= chartArea.top + 6
-        ? preferredTop
-        : Math.min(position.y + 12, chartArea.bottom - boxHeight - 6);
-
-    ctx.fillStyle = "rgba(29, 8, 21, 0.94)";
-    ctx.fillRect(boxLeft, boxTop, boxWidth, boxHeight);
-    ctx.strokeStyle = "rgba(244, 114, 182, 0.72)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([]);
-    ctx.strokeRect(boxLeft, boxTop, boxWidth, boxHeight);
-    ctx.fillStyle = "#fbcfe8";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-    ctx.fillText(
-      options.label,
-      boxLeft + horizontalPadding,
-      boxTop + boxHeight / 2,
-      boxWidth - horizontalPadding * 2,
-    );
-    ctx.restore();
-  },
-};
-
 function observedMaxPosition(chart, options) {
   if (
     !options?.display ||
@@ -623,7 +535,6 @@ ChartJS.register(
   nowLinePlugin,
   sunsetLinePlugin,
   peakTimingPlugin,
-  providerPeakPlugin,
   observedMaxPlugin,
   hourlyCloudCoverPlugin,
   weathercomRevisionBadgePlugin,
@@ -1326,6 +1237,27 @@ function formatCloudCoverPercentage(value) {
   return Number.isInteger(bounded) ? String(bounded) : bounded.toFixed(1);
 }
 
+function formatSignedCloudDeltaPct(value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const rounded = Math.round(value);
+  return `${rounded > 0 ? "+" : ""}${rounded}%`;
+}
+
+function cloudForecastDeltaMeaning(value) {
+  if (!Number.isFinite(value)) {
+    return "No comparison";
+  }
+  if (value > 0) {
+    return "Forecast cloudier";
+  }
+  if (value < 0) {
+    return "Forecast clearer";
+  }
+  return "Forecast matched observed estimate";
+}
+
 function cloudHourWindowLabel(hour) {
   const start = String(hour).padStart(2, "0");
   const end = String((hour + 1) % 24).padStart(2, "0");
@@ -1467,6 +1399,43 @@ function observedCloudHour(hour, metarSkyRuns, windowEnd, phase) {
   };
 }
 
+function addCloudForecastComparison(observedHour, forecastPoint) {
+  const forecastCoverPct = forecastPoint?.preHourCloudCoverPct;
+  if (
+    !Number.isFinite(observedHour?.coverPct) ||
+    !Number.isFinite(forecastCoverPct)
+  ) {
+    return observedHour;
+  }
+
+  const forecastDeltaPct = Math.round(
+    forecastCoverPct - observedHour.coverPct,
+  );
+  const forecastDeltaLabel = formatSignedCloudDeltaPct(forecastDeltaPct);
+  const forecastCoverLabel = formatCloudCoverPercentage(forecastCoverPct);
+  const forecastCapturedAt =
+    forecastPoint.preHourCapturedAtLocal ?? forecastPoint.preHourCapturedAt;
+  const forecastCapturedLabel = formatLocalTime(forecastCapturedAt);
+  const forecastMeaning = cloudForecastDeltaMeaning(forecastDeltaPct);
+  return {
+    ...observedHour,
+    forecastCoverPct,
+    forecastDeltaPct,
+    forecastDeltaLabel,
+    forecastCapturedAt: forecastPoint.preHourCapturedAt,
+    forecastCapturedAtLocal: forecastPoint.preHourCapturedAtLocal,
+    displayLabel: `${observedHour.displayLabel} · ${forecastDeltaLabel}`,
+    summaryLabel: `${observedHour.summaryLabel} · forecast − observed ${forecastDeltaLabel}`,
+    detail: `${observedHour.detail} Weather.com pre-hour forecast: ${forecastCoverLabel}%${
+      forecastCapturedLabel !== "—"
+        ? `, captured ${forecastCapturedLabel} KST`
+        : ""
+    }; forecast minus observed METAR sample: ${forecastDeltaLabel} (${Math.abs(
+      forecastDeltaPct,
+    )} percentage points; ${forecastMeaning.toLowerCase()}).`,
+  };
+}
+
 function forecastCloudHour(hour, forecast) {
   const startMinute = hour * 60;
   const endMinute = (hour + 1) * 60;
@@ -1523,6 +1492,7 @@ function buildHourlyCloudCover({
   currentMinute,
   metarSkyRuns,
   forecastRows,
+  comparisonRows,
 }) {
   const forecastByHour = new Map();
   for (const row of forecastRows ?? []) {
@@ -1531,6 +1501,21 @@ function buildHourlyCloudCover({
     );
     if (Number.isFinite(minute) && Number.isFinite(row.cloudCoverPct)) {
       forecastByHour.set(Math.floor(minute / 60), row);
+    }
+  }
+  const comparisonByHour = new Map();
+  for (const point of comparisonRows ?? []) {
+    const minute = firstFinite(
+      parseMinute(point.forecastTimeLocal),
+      Number.isFinite(point.forecastTimeUtc)
+        ? seoulMinuteForEpoch(point.forecastTimeUtc)
+        : null,
+    );
+    if (
+      Number.isFinite(minute) &&
+      Number.isFinite(point.preHourCloudCoverPct)
+    ) {
+      comparisonByHour.set(Math.floor(minute / 60), point);
     }
   }
 
@@ -1552,7 +1537,10 @@ function buildHourlyCloudCover({
       currentMinute < endMinute;
 
     if (isCompletedHour) {
-      return observedCloudHour(hour, metarSkyRuns, endMinute, "observed");
+      return addCloudForecastComparison(
+        observedCloudHour(hour, metarSkyRuns, endMinute, "observed"),
+        comparisonByHour.get(hour),
+      );
     }
 
     if (isLiveHour) {
@@ -2289,6 +2277,7 @@ function buildChartData(
   if (providerPeak) {
     datasets.unshift({
       label: `${providerPeak.providerLabel} raw daily high · hourly time estimate`,
+      hideFromLegend: true,
       data: [
         {
           x: providerPeak.minute,
@@ -3265,8 +3254,16 @@ export default function SeoulDayPage() {
         currentMinute: currentSeoulMinute,
         metarSkyRuns,
         forecastRows: forecastCloudRows,
+        comparisonRows: weathercomHourlyDiagnostics?.points,
       }),
-    [currentSeoulMinute, date, forecastCloudRows, metarSkyRuns, today],
+    [
+      currentSeoulMinute,
+      date,
+      forecastCloudRows,
+      metarSkyRuns,
+      today,
+      weathercomHourlyDiagnostics?.points,
+    ],
   );
   const hourlyCloudSegments = useMemo(
     () => buildHourlyCloudSegments(hourlyCloudCover, currentSeoulMinute),
@@ -3279,6 +3276,17 @@ export default function SeoulDayPage() {
           (hour) =>
             (hour.phase === "observed" || hour.phase === "live") &&
             hour.valueLabel !== "No observation",
+        )
+        .at(-1) ?? null,
+    [hourlyCloudCover],
+  );
+  const latestComparedCloudHour = useMemo(
+    () =>
+      hourlyCloudCover
+        .filter(
+          (hour) =>
+            hour.phase === "observed" &&
+            Number.isFinite(hour.forecastDeltaPct),
         )
         .at(-1) ?? null,
     [hourlyCloudCover],
@@ -3347,6 +3355,9 @@ export default function SeoulDayPage() {
             boxWidth: 24,
             boxHeight: 2,
             padding: 22,
+            filter(legendItem, chartData) {
+              return !chartData.datasets[legendItem.datasetIndex]?.hideFromLegend;
+            },
             font: {
               family: "IBM Plex Mono, monospace",
               size: 11,
@@ -3412,18 +3423,6 @@ export default function SeoulDayPage() {
             title: "MAR–JUL ARCHIVE",
             label: minuteLabel(HISTORICAL_PEAK_REFERENCE.medianMinute),
           },
-        },
-        seoulProviderPeak: {
-          display: Boolean(preferredProviderPeak),
-          minute: preferredProviderPeak?.minute,
-          temperature: preferredProviderPeak?.temperature,
-          label: preferredProviderPeak
-            ? `${preferredProviderPeak.providerLabel.toUpperCase()} RAW DAILY HIGH · ${preferredProviderPeak.temperature.toFixed(
-                1,
-              )}°${unit} · FIRST HOURLY PEAK ${minuteLabel(
-                preferredProviderPeak.minute,
-              )} KST`
-            : "",
         },
         seoulObservedMax: {
           display: Boolean(observedMaxMarker),
@@ -3853,6 +3852,23 @@ export default function SeoulDayPage() {
                     {latestObservedCloudHour.summaryLabel}
                   </p>
                 )}
+                {latestComparedCloudHour && (
+                  <p className="text-violet-300/80">
+                    Latest completed cloud check ·{" "}
+                    {cloudHourWindowLabel(latestComparedCloudHour.hour)} ·
+                    forecast − observed{" "}
+                    {latestComparedCloudHour.forecastDeltaLabel} ·{" "}
+                    {cloudForecastDeltaMeaning(
+                      latestComparedCloudHour.forecastDeltaPct,
+                    ).toLowerCase()}
+                  </p>
+                )}
+                {latestComparedCloudHour && (
+                  <p className="text-slate-500">
+                    Completed Δ = pre-hour forecast − observed METAR sample · +
+                    forecast cloudier · − forecast clearer
+                  </p>
+                )}
                 <p className="text-sky-400/80">
                   {date < today
                     ? "Completed day · observed METAR hourly summary"
@@ -3891,40 +3907,6 @@ export default function SeoulDayPage() {
               </div>
             </div>
             <div className="text-right font-mono text-[10px] uppercase tracking-[0.16em]">
-              {preferredProviderPeak && (
-                <p
-                  className="text-rose-300"
-                  title="The temperature is Weather.com's RKSI airport calendar-day high. The time is the first tied maximum in its returned hourly values."
-                >
-                  {preferredProviderPeak.providerLabel} raw provider daily high
-                  · {preferredProviderPeak.temperature.toFixed(1)}°{unit} ·
-                  first hourly peak {minuteLabel(preferredProviderPeak.minute)}{" "}
-                  KST
-                </p>
-              )}
-              {preferredProviderPeak && (
-                <p className="mt-1 text-rose-300/60">
-                  Provider captured ·{" "}
-                  {formatLocalTime(
-                    preferredProviderPeak.capturedAtLocal ??
-                      preferredProviderPeak.capturedAt,
-                  )}{" "}
-                  KST
-                </p>
-              )}
-              {preferredProviderPeak &&
-                Number.isFinite(preferredProviderPeak.peakSourceCapturedAt) &&
-                preferredProviderPeak.peakSourceCapturedAt + 60 * 1000 <
-                  preferredProviderPeak.capturedAt && (
-                  <p className="mt-1 text-rose-300/50">
-                    Peak-hour value retained from ·{" "}
-                    {formatLocalTime(
-                      preferredProviderPeak.peakSourceCapturedAtLocal ??
-                        preferredProviderPeak.peakSourceCapturedAt,
-                    )}{" "}
-                    KST
-                  </p>
-                )}
               {showHistoricalPeakReference && (
                 <p
                   className="mt-1 text-violet-300"
@@ -3972,11 +3954,17 @@ export default function SeoulDayPage() {
               successful capture. Hatched cells without a percentage mean total
               cloud cover is unavailable, not clear sky. The current hour ends
               at the NOW line; its remaining time stays hatched until observed.
+              For completed hours with both values, the signed delta is the
+              latest Weather.com cloud forecast captured strictly before the
+              hour minus the observed METAR-sample estimate. Positive means the
+              forecast was cloudier, negative means it was clearer, and the
+              difference is measured in percentage points. The live partial
+              hour is not scored.
             </p>
             {preferredProviderPeak && (
               <p>
-                The rose raw provider daily high comes from the latest stored
-                Weather.com Seoul calendar-day forecast:{" "}
+                A rose circle marks the raw provider daily high from the latest
+                stored Weather.com Seoul calendar-day forecast:{" "}
                 {preferredProviderPeak.temperature.toFixed(1)}{" "}
                 degrees {unit === "C" ? "Celsius" : "Fahrenheit"}. Its
                 horizontal position is the first tied maximum among the
@@ -4046,15 +4034,19 @@ export default function SeoulDayPage() {
               View all 24 hourly cloud details
             </summary>
             <div className="overflow-x-auto border-t border-white/10">
-              <table className="w-full min-w-[760px] border-collapse text-left">
+              <table className="w-full min-w-[980px] border-collapse text-left">
                 <caption className="sr-only">
-                  Hour-by-hour observed and forecast Seoul sky cover
+                  Hour-by-hour observed and forecast Seoul sky cover with
+                  pre-hour forecast versus observed differences
                 </caption>
                 <thead>
                   <tr className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
                     <th className="px-4 py-2 font-normal">Hour</th>
                     <th className="px-4 py-2 font-normal">Source</th>
                     <th className="px-4 py-2 font-normal">Sky cover</th>
+                    <th className="px-4 py-2 font-normal">
+                      Forecast − observed
+                    </th>
                     <th className="px-4 py-2 font-normal">What it means</th>
                   </tr>
                 </thead>
@@ -4078,6 +4070,41 @@ export default function SeoulDayPage() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-2 font-medium text-slate-100">
                         {hour.valueLabel}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2">
+                        {Number.isFinite(hour.forecastDeltaPct) ? (
+                          <div>
+                            <span
+                              className={`font-mono text-xs font-semibold ${
+                                hour.forecastDeltaPct > 0
+                                  ? "text-violet-300"
+                                  : hour.forecastDeltaPct < 0
+                                    ? "text-cyan-300"
+                                    : "text-slate-300"
+                              }`}
+                            >
+                              {hour.forecastDeltaLabel}
+                            </span>
+                            <div className="mt-0.5 font-mono text-[9px] text-slate-500">
+                              {formatCloudCoverPercentage(
+                                hour.forecastCoverPct,
+                              )}
+                              % forecast ·{" "}
+                              {formatLocalTime(
+                                hour.forecastCapturedAtLocal ??
+                                  hour.forecastCapturedAt,
+                              )}{" "}
+                              KST
+                            </div>
+                            <div className="mt-0.5 text-[10px] text-slate-500">
+                              {cloudForecastDeltaMeaning(
+                                hour.forecastDeltaPct,
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-2 text-slate-500">
                         {hour.detail}
