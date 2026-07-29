@@ -74,21 +74,13 @@ crons.cron(
   { stationIcao: "NZWN", durationMs: 15 * 60 * 1000, includeAeroweb: false },
 );
 
-// Polls MetService Wellington Aero (93439) current conditions every 10 minutes
-// and stores each reading so the NZWN day page can plot a continuous AWS line.
+// Checks every two minutes for a timestamped Wellington Aero (93439) reading.
+// The action itself fails closed unless MetService use is approved and skips
+// all upstream requests outside 09:00-19:00 Pacific/Auckland.
 crons.cron(
-  "nzwn_metservice_aws_every_10_min",
-  "*/10 * * * *",
-  api.nzwnWeather.pollMetServiceCurrentConditions,
-  { stationIcao: "NZWN" },
-);
-
-// Captures the MetService 10-day daily forecast every 6 hours so we can
-// track how predictions change with lead time and measure accuracy.
-crons.cron(
-  "nzwn_metservice_forecast_snapshot_6h",
-  "0 0,6,12,18 * * *",
-  api.nzwnWeather.collectForecastSnapshot,
+  "nzwn_metservice_publicdata_every_2_min",
+  "*/2 * * * *",
+  internal.nzwnWeather.pollScheduledMetServiceCurrentConditions,
   { stationIcao: "NZWN" },
 );
 

@@ -6,39 +6,53 @@ import {
   LinearScale,
   LineElement,
   PointElement,
-  Title,
   Tooltip,
 } from "chart.js";
+import { useAction, useQuery } from "convex/react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
-import { useAction, useMutation, useQuery } from "convex/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
+ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend);
 
 const STATION_ICAO = "NZWN";
-const STATION_NAME = "Wellington International";
+const STATION_ID = "93439";
 const AUCKLAND_TIMEZONE = "Pacific/Auckland";
-const CHICAGO_TIMEZONE = "America/Chicago";
+const APPROVAL_FLAG = "METSERVICE_PUBLICDATA_ACCESS_APPROVED";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const CLEAR_SKY_TOKENS = new Set(["SKC", "CLR", "NSC", "NCD", "CAVOK"]);
-const CLOUD_COVER_PRIORITY = {
-  FEW: 1,
-  SCT: 2,
-  BKN: 3,
-  OVC: 4,
-  VV: 5,
-};
+const MINUTE_MS = 60 * 1000;
 
-function isValidDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
+const aucklandClockFormatter = new Intl.DateTimeFormat("en-NZ", {
+  timeZone: AUCKLAND_TIMEZONE,
+  weekday: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+  timeZoneName: "short",
+});
+
+const aucklandTimeFormatter = new Intl.DateTimeFormat("en-NZ", {
+  timeZone: AUCKLAND_TIMEZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+const aucklandDateTimeFormatter = new Intl.DateTimeFormat("en-NZ", {
+  timeZone: AUCKLAND_TIMEZONE,
+  day: "2-digit",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
 
 function getDateParts(formatter, date) {
-  const parts = formatter.formatToParts(date);
   const values = {};
-  for (const part of parts) {
+  for (const part of formatter.formatToParts(date)) {
     if (part.type !== "literal") {
       values[part.type] = part.value;
     }
@@ -57,851 +71,425 @@ function aucklandTodayKey() {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function parseDateKeyParts(dateKey) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey || "");
-  if (!match) {
-    return null;
-  }
-  return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    day: Number(match[3]),
-  };
-}
-
-function pad2(value) {
-  return String(value).padStart(2, "0");
-}
-
-function formatDateKeyFromUtcDate(date) {
-  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(
-    date.getUTCDate(),
-  )}`;
+function isValidDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function shiftDateKey(dateKey, deltaDays) {
-  const parts = parseDateKeyParts(dateKey);
-  if (!parts) {
+  if (!isValidDate(dateKey)) {
     return null;
   }
-  const utcMs = Date.UTC(parts.year, parts.month - 1, parts.day);
-  return formatDateKeyFromUtcDate(new Date(utcMs + deltaDays * DAY_MS));
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day) + deltaDays * DAY_MS);
+  return [
+    shifted.getUTCFullYear(),
+    String(shifted.getUTCMonth() + 1).padStart(2, "0"),
+    String(shifted.getUTCDate()).padStart(2, "0"),
+  ].join("-");
 }
 
-function buildPreviousDateKeys(dateKey, count) {
-  const keys = [];
-  for (let offset = 1; offset <= count; offset += 1) {
-    const previousDate = shiftDateKey(dateKey, -offset);
-    if (previousDate) {
-      keys.push(previousDate);
-    }
+function formatDateTitle(dateKey) {
+  if (!isValidDate(dateKey)) {
+    return dateKey;
   }
-  return keys;
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-NZ", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day, 12)));
 }
 
-function parseMinute(tsLocal) {
-  const match = /(\d{2}):(\d{2})(?::\d{2})?$/.exec(tsLocal || "");
-  if (!match) {
+function celsiusToFahrenheit(value) {
+  return (value * 9) / 5 + 32;
+}
+
+function temperatureValue(reading, unit) {
+  if (!reading || !Number.isFinite(reading.tempC)) {
     return null;
   }
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return null;
+  if (unit === "F") {
+    return Number.isFinite(reading.tempF)
+      ? reading.tempF
+      : celsiusToFahrenheit(reading.tempC);
   }
-  return hour * 60 + minute;
+  return reading.tempC;
 }
 
-function minuteLabel(totalMinutes) {
-  if (!Number.isFinite(totalMinutes)) {
-    return "";
-  }
-  const normalized = Math.max(0, Math.min(1439, Math.round(totalMinutes)));
-  const hour24 = Math.floor(normalized / 60);
-  const minute = normalized % 60;
-  const period = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 || 12;
-  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+function formatTemperature(reading, unit, digits = 1) {
+  const value = temperatureValue(reading, unit);
+  return Number.isFinite(value) ? `${value.toFixed(digits)}°` : "—";
 }
 
-function formatTemp(value, unit) {
-  if (value === undefined || value === null) {
+function formatTemperatureValue(valueC, unit, digits = 1) {
+  if (!Number.isFinite(valueC)) {
     return "—";
   }
-  return `${value.toFixed(1)}°${unit}`;
+  const value = unit === "F" ? celsiusToFahrenheit(valueC) : valueC;
+  return `${value.toFixed(digits)}°`;
 }
 
-function formatDelta(value, unit) {
-  if (value === undefined || value === null) {
+function formatDelta(deltaC, unit) {
+  if (!Number.isFinite(deltaC)) {
     return "—";
   }
+  const value = unit === "F" ? (deltaC * 9) / 5 : deltaC;
   const prefix = value > 0 ? "+" : "";
-  return `${prefix}${value.toFixed(1)}°${unit}`;
-}
-
-function formatStoredLocalDateTime(tsLocal) {
-  const match =
-    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(tsLocal || "");
-  if (!match) {
-    return tsLocal || "—";
-  }
-  const hour24 = Number(match[2]);
-  const minute = Number(match[3]);
-  if (!Number.isFinite(hour24) || !Number.isFinite(minute)) {
-    return tsLocal;
-  }
-  const period = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 || 12;
-  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
-}
-
-function formatStoredLocalTime(tsLocal) {
-  const match =
-    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(tsLocal || "");
-  if (!match) {
-    return tsLocal || "—";
-  }
-  const hour24 = Number(match[2]);
-  const minute = Number(match[3]);
-  if (!Number.isFinite(hour24) || !Number.isFinite(minute)) {
-    return tsLocal;
-  }
-  const period = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 || 12;
-  return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
-}
-
-function formatAucklandDateTimeSeconds(epochMs) {
-  if (!Number.isFinite(epochMs)) {
-    return "—";
-  }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: AUCKLAND_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
-}
-
-function formatAucklandAxisDateTime(epochMs) {
-  if (!Number.isFinite(epochMs)) {
-    return "";
-  }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: AUCKLAND_TIMEZONE,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "numeric",
-    hour12: true,
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.month}/${parts.day} ${parts.hour} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
-}
-
-function formatChicagoDateTimeSeconds(epochMs) {
-  if (!Number.isFinite(epochMs)) {
-    return "—";
-  }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: CHICAGO_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
+  return `${prefix}${value.toFixed(1)}°`;
 }
 
 function formatAucklandClock(epochMs) {
+  return Number.isFinite(epochMs)
+    ? aucklandClockFormatter.format(new Date(epochMs))
+    : "—";
+}
+
+function formatAucklandTime(epochMs, withDate = false) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: AUCKLAND_TIMEZONE,
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-    timeZoneName: "short",
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.weekday} ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""} ${parts.timeZoneName ?? ""}`.trim();
+  return (withDate ? aucklandDateTimeFormatter : aucklandTimeFormatter).format(
+    new Date(epochMs),
+  );
 }
 
-function formatNoteCreatedAt(epochMs) {
-  if (!Number.isFinite(epochMs)) {
-    return "—";
+function formatAge(ageMs) {
+  if (!Number.isFinite(ageMs) || ageMs < 0) {
+    return "unknown age";
   }
-  return new Date(epochMs).toLocaleString();
+  if (ageMs < MINUTE_MS) {
+    return `${Math.max(1, Math.round(ageMs / 1000))} sec ago`;
+  }
+  const minutes = Math.floor(ageMs / MINUTE_MS);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m ago` : `${hours}h ago`;
 }
 
-function formatRaceWinner(winner) {
-  if (winner === "preflight") {
-    return "PreFlight";
-  }
-  if (winner === "tgftp") {
-    return "NOAA tgftp";
-  }
-  if (winner === "tie") {
-    return "Tie";
-  }
-  return "Pending";
+function formatCollectorTime(epochMs) {
+  return Number.isFinite(epochMs)
+    ? aucklandDateTimeFormatter.format(new Date(epochMs))
+    : "Never";
 }
 
-function getTrendPointColor(changeDirection) {
-  if (changeDirection === "up") {
-    return "#15803d";
-  }
-  if (changeDirection === "down") {
-    return "#dc2626";
-  }
-  if (changeDirection === "same") {
-    return "#6b7280";
-  }
-  return "#0f4c81";
-}
-
-function formatLeadMs(leadMs) {
-  if (!Number.isFinite(leadMs)) {
-    return "—";
-  }
-  if (leadMs > 0 && leadMs < 1000) {
-    return "<1s";
-  }
-  if (leadMs < 120000) {
-    return `${(leadMs / 1000).toFixed(1)}s`;
-  }
-  return `${(leadMs / 60000).toFixed(1)} min`;
-}
-
-function compareCloudLayers(a, b) {
-  const priorityDelta =
-    (CLOUD_COVER_PRIORITY[b.coverage] ?? 0) - (CLOUD_COVER_PRIORITY[a.coverage] ?? 0);
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-
-  const aBase = Number.isFinite(a.baseFt) ? a.baseFt : Number.POSITIVE_INFINITY;
-  const bBase = Number.isFinite(b.baseFt) ? b.baseFt : Number.POSITIVE_INFINITY;
-  return aBase - bBase;
-}
-
-function formatCloudBaseFeet(baseFt) {
-  if (!Number.isFinite(baseFt)) {
+function findDeltaReading(rows, latest, targetMinutes) {
+  if (!latest || rows.length < 2) {
     return null;
   }
-  return `${baseFt.toLocaleString("en-US")} ft`;
-}
-
-function buildCloudVisualMeta({ fillClassName, coverLevel, coverLabel, baseFt }) {
-  let baseVisual = null;
-  if (Number.isFinite(baseFt)) {
-    if (baseFt <= 1000) {
-      baseVisual = {
-        tierIndex: 0,
-        label: "Low base",
-        className: "border-rose-200 bg-rose-50 text-rose-800",
-      };
-    } else if (baseFt <= 3000) {
-      baseVisual = {
-        tierIndex: 1,
-        label: "Mid base",
-        className: "border-amber-200 bg-amber-50 text-amber-900",
-      };
-    } else {
-      baseVisual = {
-        tierIndex: 2,
-        label: "Higher base",
-        className: "border-emerald-200 bg-emerald-50 text-emerald-800",
-      };
-    }
-  }
-
-  return {
-    showVisuals: true,
-    fillClassName,
-    coverLevel,
-    coverLabel,
-    baseVisual,
-  };
-}
-
-function parseMetarCloudToken(token) {
-  const normalized = String(token ?? "").toUpperCase().replace(/=+$/, "");
-  if (!normalized) {
-    return null;
-  }
-  if (CLEAR_SKY_TOKENS.has(normalized)) {
-    return { kind: "clear" };
-  }
-
-  const match =
-    /^(FEW|SCT|BKN|OVC|VV)(\d{3}|\/\/\/)?(?:\/\/\/)?(?:[A-Z]{2,3})?$/.exec(
-      normalized,
-    );
-  if (!match) {
-    return null;
-  }
-
-  return {
-    kind: "layer",
-    coverage: match[1],
-    baseFt: match[2] && match[2] !== "///" ? Number(match[2]) * 100 : null,
-  };
-}
-
-function summarizeMetarClouds(rawMetar) {
-  if (typeof rawMetar !== "string" || !rawMetar.trim()) {
-    return null;
-  }
-
-  const tokens = rawMetar
-    .toUpperCase()
-    .replace(/=/g, "")
-    .split(/\s+/)
-    .filter(Boolean);
-  const layers = [];
-  let sawClearToken = false;
-
-  for (const token of tokens) {
-    const parsed = parseMetarCloudToken(token);
-    if (!parsed) {
-      continue;
-    }
-    if (parsed.kind === "clear") {
-      sawClearToken = true;
-      continue;
-    }
-    layers.push(parsed);
-  }
-
-  if (!layers.length && sawClearToken) {
-    return {
-      badgeLabel: "Clear",
-      badgeClassName: "border-emerald-200 bg-emerald-50 text-emerald-800",
-      headline: "Open sky",
-      detail: "No significant cloud was reported in the latest official METAR.",
-      ...buildCloudVisualMeta({
-        fillClassName: "bg-emerald-400",
-        coverLevel: 0,
-        coverLabel: "Clear",
-        baseFt: null,
-      }),
-    };
-  }
-
-  if (!layers.length) {
-    return {
-      badgeLabel: "Unknown",
-      badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
-      headline: "Clouds not reported",
-      detail: "The latest official METAR did not include a cloud layer I can summarize.",
-      showVisuals: false,
-    };
-  }
-
-  const sortedLayers = [...layers].sort(compareCloudLayers);
-  const headlineLayer = sortedLayers[0];
-  const ceilingLayer =
-    sortedLayers.find((layer) => ["BKN", "OVC", "VV"].includes(layer.coverage)) ?? null;
-  const layerBaseLabel = formatCloudBaseFeet(headlineLayer.baseFt);
-  const ceilingBaseLabel = formatCloudBaseFeet(ceilingLayer?.baseFt);
-
-  switch (headlineLayer.coverage) {
-    case "FEW":
-      return {
-        badgeLabel: "Few Clouds",
-        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
-        headline: "Mostly open sky",
-        detail: layerBaseLabel
-          ? `Only a small amount of cloud was reported, based around ${layerBaseLabel} above the airport.`
-          : "Only a small amount of cloud was reported in the latest official METAR.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-sky-400",
-          coverLevel: 1,
-          coverLabel: "A little cloud",
-          baseFt: headlineLayer.baseFt,
-        }),
-      };
-    case "SCT":
-      return {
-        badgeLabel: "Partly Cloudy",
-        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
-        headline: "Patches of cloud around the airport",
-        detail: layerBaseLabel
-          ? `Part of the sky is covered by cloud, with bases around ${layerBaseLabel} above the airport.`
-          : "Part of the sky is covered by cloud in the latest official METAR.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-sky-500",
-          coverLevel: 2,
-          coverLabel: "Partial cover",
-          baseFt: headlineLayer.baseFt,
-        }),
-      };
-    case "BKN":
-      return {
-        badgeLabel: "Mostly Cloudy",
-        badgeClassName: "border-amber-200 bg-amber-50 text-amber-900",
-        headline: "Clouds covering most of the sky",
-        detail: ceilingBaseLabel
-          ? `Most of the sky is under cloud. The main cloud deck starts around ${ceilingBaseLabel} above the airport.`
-          : "Most of the sky is under cloud. The METAR did not include a usable cloud-base height.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-amber-400",
-          coverLevel: 4,
-          coverLabel: "Mostly covered",
-          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
-        }),
-      };
-    case "OVC":
-      return {
-        badgeLabel: "Overcast",
-        badgeClassName: "border-slate-200 bg-slate-100 text-slate-800",
-        headline: "Gray sky overhead",
-        detail: ceilingBaseLabel
-          ? `The sky is fully covered by cloud. The cloud deck starts around ${ceilingBaseLabel} above the airport.`
-          : "The sky is fully covered by cloud. The METAR did not include a usable cloud-base height.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-slate-500",
-          coverLevel: 5,
-          coverLabel: "Full cover",
-          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
-        }),
-      };
-    case "VV":
-      return {
-        badgeLabel: "Obscured",
-        badgeClassName: "border-rose-200 bg-rose-50 text-rose-800",
-        headline: "Sky hidden by low cloud or fog",
-        detail: ceilingBaseLabel
-          ? `The sky is obscured. Vertical visibility is around ${ceilingBaseLabel} above the airport.`
-          : "The sky is obscured in the latest official METAR.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-rose-400",
-          coverLevel: 5,
-          coverLabel: "Obscured",
-          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
-        }),
-      };
-    default:
-      return {
-        badgeLabel: "Unknown",
-        badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
-        headline: "Clouds not reported",
-        detail: "The latest official METAR did not include a cloud layer I can summarize.",
-        showVisuals: false,
-      };
-  }
-}
-
-function selectLatestLiveCloudMetar(raceRows, summary, isToday) {
-  for (const row of raceRows) {
-    const rawMetar =
-      row?.rawMetar ??
-      row?.preflightRawMetar ??
-      row?.aerowebRawMetar ??
-      row?.tgftpRawMetar ??
-      null;
-    if (typeof rawMetar === "string" && rawMetar.trim()) {
-      return {
-        rawMetar,
-        observedAtUtc: Number.isFinite(row?.reportTsUtc) ? row.reportTsUtc : null,
-        reportType: row?.reportType ?? null,
-      };
-    }
-  }
-
-  if (isToday && typeof summary?.latestRawMetar === "string" && summary.latestRawMetar.trim()) {
-    return {
-      rawMetar: summary.latestRawMetar,
-      observedAtUtc: Number.isFinite(summary?.latestObsTimeUtc)
-        ? summary.latestObsTimeUtc
-        : null,
-      reportType: summary?.latestReportType ?? null,
-    };
-  }
-
-  return null;
-}
-
-function computeDisplayedRaceState(row) {
-  const preflightSeenAt = Number.isFinite(row?.preflightFirstSeenAt)
-    ? row.preflightFirstSeenAt
-    : null;
-  const tgftpSeenAt = Number.isFinite(row?.tgftpFirstSeenAt)
-    ? row.tgftpFirstSeenAt
-    : null;
-
-  if (preflightSeenAt === null || tgftpSeenAt === null) {
-    return { winner: null, leadMs: null };
-  }
-  if (preflightSeenAt === tgftpSeenAt) {
-    return { winner: "tie", leadMs: 0 };
-  }
-  if (preflightSeenAt < tgftpSeenAt) {
-    return { winner: "preflight", leadMs: tgftpSeenAt - preflightSeenAt };
-  }
-  return { winner: "tgftp", leadMs: preflightSeenAt - tgftpSeenAt };
-}
-
-function formatBackfillMessage(result) {
-  if (!result?.ok) {
-    return "Rolling sync skipped.";
-  }
-  return `Rolling sync: saved ${result.insertedCount} new rows from ${result.rowCount} NZWN messages for this date. PreFlight currently exposed ${result.exposedMessageCount} recent messages.`;
-}
-
-function formatLivePollMessage(result) {
-  if (!result?.ok) {
-    return "Latest official poll skipped.";
-  }
-
-  const firstSeenText = Number.isFinite(result.row?.preflightFirstSeenAt)
-    ? formatAucklandDateTimeSeconds(result.row.preflightFirstSeenAt)
-    : null;
-  const lagText = Number.isFinite(result.availabilityLagMs)
-    ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
-    : null;
-
-  return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
-}
-
-function formatForecastSnapshotMessage(result) {
-  if (result?.status !== "ok") {
-    return "MetService forecast snapshot failed.";
-  }
-  return `Forecast snapshot: stored ${result.inserted} new rows for ${result.forecastDayCount} days at ${formatStoredLocalDateTime(result.capturedAtLocal)}.`;
-}
-
-function buildLineDataset(rows, unit) {
-  const points = rows
-    .map((row) => {
-      const x = parseMinute(row.obsTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return {
-        x,
-        y,
-        reportType: row.reportType,
-      };
-    })
-    .filter(Boolean);
-
-  return {
-    label: "Official PreFlight",
-    data: points,
-    borderColor: "#0f4c81",
-    backgroundColor: "#0f4c81",
-    pointRadius: points.map((point) => (point.reportType === "SPECI" ? 4.5 : 2.5)),
-    pointHoverRadius: points.map((point) => (point.reportType === "SPECI" ? 6 : 4)),
-    pointHitRadius: 18,
-    pointBackgroundColor: points.map((point) =>
-      point.reportType === "SPECI" ? "#b91c1c" : "#0f4c81",
-    ),
-    pointBorderColor: points.map((point) =>
-      point.reportType === "SPECI" ? "#7f1d1d" : "#0b365d",
-    ),
-    pointBorderWidth: 1.5,
-    borderWidth: 2,
-    tension: 0.22,
-    showLine: true,
-  };
-}
-
-function buildMetServiceDataset(metServiceRows, currentReading, unit, selectedDate) {
-  const points = metServiceRows
-    .map((row) => {
-      const x = parseMinute(row.obsTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return { x, y };
-    })
-    .filter(Boolean);
-
-  // Append the live current reading if it's for the selected date and
-  // newer than the latest stored row (avoids duplicate).
-  if (
-    currentReading?.status === "ok" &&
-    currentReading.observedAtLocal?.slice(0, 10) === selectedDate
-  ) {
-    const liveX = parseMinute(currentReading.observedAtLocal);
-    const liveY = unit === "C" ? currentReading.tempC : currentReading.tempF;
-    if (liveX !== null && Number.isFinite(liveY)) {
-      const lastX = points.length ? points[points.length - 1].x : -1;
-      if (liveX > lastX) {
-        points.push({ x: liveX, y: liveY });
-      }
-    }
-  }
-
-  if (!points.length) {
-    return null;
-  }
-
-  return {
-    label: "MetService AWS",
-    data: points,
-    borderColor: "#16a34a",
-    backgroundColor: "#16a34a",
-    pointRadius: 3,
-    pointHoverRadius: 5,
-    pointHitRadius: 18,
-    pointStyle: "rectRot",
-    pointBorderColor: "#166534",
-    pointBorderWidth: 1.5,
-    borderWidth: 2,
-    tension: 0.22,
-    showLine: true,
-  };
-}
-
-function buildMetServiceForecastDataset(forecastRows, unit) {
-  const points = forecastRows
-    .map((row) => {
-      const x = parseMinute(row.forecastTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return { x, y };
-    })
-    .filter(Boolean);
-
-  if (!points.length) {
-    return null;
-  }
-
-  return {
-    label: "MetService Hourly Forecast",
-    data: points,
-    borderColor: "#f59e0b",
-    backgroundColor: "#f59e0b",
-    pointRadius: 3,
-    pointHoverRadius: 5,
-    pointHitRadius: 18,
-    pointStyle: "triangle",
-    pointBorderColor: "#b45309",
-    pointBorderWidth: 1.5,
-    borderWidth: 2,
-    borderDash: [6, 3],
-    tension: 0.22,
-    showLine: true,
-  };
-}
-
-function buildForecastPeakByDate(rows) {
-  const rowsByDate = new Map();
+  const target = latest.obsTimeUtc - targetMinutes * MINUTE_MS;
+  let best = null;
+  let bestDistance = Infinity;
   for (const row of rows) {
-    if (!row?.date || !Number.isFinite(row?.tempC) || !Number.isFinite(row?.validTimeUtc)) {
+    if (row.obsTimeUtc >= latest.obsTimeUtc) {
       continue;
     }
-    if (!rowsByDate.has(row.date)) {
-      rowsByDate.set(row.date, []);
-    }
-    rowsByDate.get(row.date).push(row);
-  }
-
-  const peaks = new Map();
-  for (const [dayDate, dayRows] of rowsByDate.entries()) {
-    const sortedRows = [...dayRows].sort((a, b) => a.validTimeUtc - b.validTimeUtc);
-    let maxTempC = Number.NEGATIVE_INFINITY;
-    for (const row of sortedRows) {
-      if (row.tempC > maxTempC) {
-        maxTempC = row.tempC;
-      }
-    }
-    if (!Number.isFinite(maxTempC)) {
-      continue;
-    }
-
-    let peakWindow = null;
-    for (const row of sortedRows) {
-      if (row.tempC !== maxTempC) {
-        if (peakWindow) {
-          break;
-        }
-        continue;
-      }
-
-      if (!peakWindow) {
-        peakWindow = {
-          date: dayDate,
-          startValidTimeUtc: row.validTimeUtc,
-          endValidTimeUtc: row.validTimeUtc,
-          startValidTimeLocal: row.validTimeLocal,
-          endValidTimeLocal: row.validTimeLocal,
-          tempC: row.tempC,
-          tempF: row.tempF,
-          phrase: row.phrase ?? null,
-        };
-        continue;
-      }
-
-      if (row.validTimeUtc - peakWindow.endValidTimeUtc <= 90 * 60 * 1000) {
-        peakWindow.endValidTimeUtc = row.validTimeUtc;
-        peakWindow.endValidTimeLocal = row.validTimeLocal;
-        continue;
-      }
-
-      break;
-    }
-
-    if (peakWindow) {
-      peaks.set(dayDate, peakWindow);
+    const distance = Math.abs(row.obsTimeUtc - target);
+    if (distance < bestDistance) {
+      best = row;
+      bestDistance = distance;
     }
   }
-
-  return peaks;
+  return bestDistance <= 15 * MINUTE_MS ? best : null;
 }
 
-function formatPeakWindow(peak) {
-  if (!peak?.startValidTimeLocal) {
-    return "—";
+function freshnessState({
+  queryLoading,
+  approved,
+  isToday,
+  latest,
+  ageMs,
+  collectorStatus,
+}) {
+  if (queryLoading) {
+    return {
+      key: "loading",
+      label: "Connecting",
+      detail: "Reading the Wellington collector",
+      className: "border-white/15 bg-white/5 text-white/70",
+      dotClassName: "bg-white/50",
+    };
   }
-  const startLabel = formatStoredLocalTime(peak.startValidTimeLocal);
-  const endLabel =
-    peak.endValidTimeLocal && peak.endValidTimeLocal !== peak.startValidTimeLocal
-      ? formatStoredLocalTime(peak.endValidTimeLocal)
-      : null;
-  return endLabel ? `${startLabel} to ${endLabel}` : startLabel;
+  if (!approved) {
+    return {
+      key: "approval_required",
+      label: "Approval required",
+      detail: `${APPROVAL_FLAG} is not enabled`,
+      className: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+      dotClassName: "bg-amber-300",
+    };
+  }
+  if (!isToday) {
+    return {
+      key: "archive",
+      label: "Archive",
+      detail: "Stored observations for the selected Wellington date",
+      className: "border-sky-300/25 bg-sky-300/10 text-sky-100",
+      dotClassName: "bg-sky-300",
+    };
+  }
+  if (collectorStatus === "outside_collection_window") {
+    return {
+      key: "outside_window",
+      label: "Collector resting",
+      detail: "Outside the configured Wellington collection window",
+      className: "border-violet-300/25 bg-violet-300/10 text-violet-100",
+      dotClassName: "bg-violet-300",
+    };
+  }
+  if (!latest) {
+    const isError = collectorStatus === "error";
+    return {
+      key: isError ? "error" : "no_data",
+      label: isError ? "Collector error" : "Waiting for data",
+      detail: "No stored 93439 observation is available yet",
+      className: "border-rose-300/25 bg-rose-300/10 text-rose-100",
+      dotClassName: "bg-rose-300",
+    };
+  }
+  if (ageMs <= 5 * MINUTE_MS) {
+    return {
+      key: "current",
+      label: "Near-live",
+      detail: "Minute-fed MetService browser signal",
+      className: "border-emerald-300/30 bg-emerald-300/10 text-emerald-50",
+      dotClassName: "bg-emerald-300 shadow-[0_0_14px_rgba(110,231,183,0.9)]",
+    };
+  }
+  if (ageMs <= 12 * MINUTE_MS) {
+    return {
+      key: "delayed",
+      label: "Delayed",
+      detail: "Public delivery is behind the station clock",
+      className: "border-amber-300/30 bg-amber-300/10 text-amber-100",
+      dotClassName: "bg-amber-300",
+    };
+  }
+  return {
+    key: "stale",
+    label: "Stale",
+    detail: "The last accepted observation is no longer current",
+    className: "border-rose-300/30 bg-rose-300/10 text-rose-100",
+    dotClassName: "bg-rose-300",
+  };
+}
+
+function emptyHeroCopy(statusKey) {
+  if (statusKey === "approval_required") {
+    return {
+      display: "LOCKED",
+      title: "Near-live temperature is ready, but not activated.",
+      detail:
+        "The collector fails closed until the Convex production approval flag is exactly true. No substitute temperature is shown in its place.",
+    };
+  }
+  if (statusKey === "outside_window") {
+    return {
+      display: "RESTING",
+      title: "The daytime collector is outside its operating window.",
+      detail:
+        "Collection resumes automatically at 09:00 Wellington time. The latest accepted reading will appear here when the window opens.",
+    };
+  }
+  if (statusKey === "archive") {
+    return {
+      display: "NO DATA",
+      title: "No stored station readings exist for this date.",
+      detail:
+        "Historical pages only contain observations captured while the collector was active.",
+    };
+  }
+  if (statusKey === "error") {
+    return {
+      display: "OFFLINE",
+      title: "The latest collection attempt did not complete.",
+      detail:
+        "The collector retained the last safe state. Review the source-control panel for the recorded error.",
+    };
+  }
+  return {
+    display: "WAITING",
+    title: "Waiting for the first accepted 93439 observation.",
+    detail:
+      "The page will update automatically when Convex stores a timestamped station reading.",
+  };
+}
+
+function StatusPill({ state }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] ${state.className}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${state.dotClassName}`} />
+      {state.label}
+    </span>
+  );
+}
+
+function MetricCard({ eyebrow, value, detail, accent = "text-white" }) {
+  return (
+    <div className="rounded-[1.4rem] border border-white/10 bg-white/[0.045] p-4 backdrop-blur">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/55">
+        {eyebrow}
+      </p>
+      <p className={`mt-2 text-2xl font-semibold tracking-tight ${accent}`}>
+        {value}
+      </p>
+      <p className="mt-1 text-xs leading-5 text-white/55">{detail}</p>
+    </div>
+  );
+}
+
+function ArrowIcon({ direction = "right" }) {
+  const rotation =
+    direction === "left" ? "rotate-180" : direction === "up" ? "-rotate-90" : "";
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+      className={`h-4 w-4 ${rotation}`}
+    >
+      <path
+        d="M4 10h12m-4.5-4.5L16 10l-4.5 4.5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function RefreshIcon({ spinning = false }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+      className={`h-4 w-4 ${spinning ? "animate-spin" : ""}`}
+    >
+      <path
+        d="M16.4 7A6.75 6.75 0 1 0 16 13.8M16.4 7V3.8M16.4 7h-3.2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EmptyChartState({ status }) {
+  return (
+    <div className="flex h-[300px] items-center justify-center rounded-2xl border border-dashed border-white/10 bg-black/10 px-6 text-center">
+      <div>
+        <div className="mx-auto h-10 w-10 rounded-full border border-white/10 bg-white/5" />
+        <p className="mt-4 text-sm font-medium text-white/65">
+          {status === "approval_required"
+            ? "Live collection is locked until provider approval is recorded."
+            : "Temperature observations will appear here as they are collected."}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export default function NzwnDayPage() {
   const params = useParams();
   const router = useRouter();
   const date = String(params?.date ?? "");
-  const [displayUnit, setDisplayUnit] = useState("C");
+  const [unit, setUnit] = useState("C");
   const [inputDate, setInputDate] = useState(date);
-  const [liveMessage, setLiveMessage] = useState("");
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isNotesOpen, setIsNotesOpen] = useState(false);
-  const [deletingNoteId, setDeletingNoteId] = useState(null);
   const [clockNowMs, setClockNowMs] = useState(null);
-  const [weatherPanel, setWeatherPanel] = useState(null);
-  const [weatherPanelError, setWeatherPanelError] = useState("");
-  const [isWeatherLoading, setIsWeatherLoading] = useState(false);
-  const inFlightRef = useRef(false);
-  const backfilledDateRef = useRef("");
-  const weatherRequestRef = useRef(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const bootstrapDateRef = useRef("");
 
-  const isDateValid = isValidDate(date);
-  const aucklandTodayDate = aucklandTodayKey();
-  const isToday = isDateValid && date === aucklandTodayDate;
-  const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
+  const validDate = isValidDate(date);
+  const today = aucklandTodayKey();
+  const isToday = validDate && date === today;
+  const previousDate = shiftDateKey(date, -1);
+  const nextDate = shiftDateKey(date, 1);
 
-  const backfillDay = useAction("preflight:backfillDayStationMessages");
-  const pollLatest = useAction("preflight:pollLatestStationMetar");
-  const loadNzwnWeather = useAction("nzwnWeather:getDayPageWeather");
-  const collectForecastSnapshot = useAction("nzwnWeather:collectForecastSnapshot");
-  const deleteNote = useMutation("notes:deleteNote");
-
-  const dayData = useQuery(
+  const liveData = useQuery(
+    "nzwnWeather:getLiveTemperature",
+    validDate ? { date } : "skip",
+  );
+  const officialData = useQuery(
     "preflight:getDayStationRows",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
-      : "skip",
+    validDate ? { stationIcao: STATION_ICAO, date } : "skip",
   );
-  const metServiceData = useQuery(
-    "nzwnWeather:getMetServiceObservations",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
-      : "skip",
+  const pollLiveTemperature = useAction(
+    "nzwnWeather:pollMetServiceCurrentConditions",
   );
-  const metServiceForecastData = useQuery(
-    "nzwnWeather:getMetServiceHourlyForecasts",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
-      : "skip",
+  const backfillOfficialDay = useAction("preflight:backfillDayStationMessages");
+  const pollOfficialLatest = useAction("preflight:pollLatestStationMetar");
+
+  const approval = liveData?.approval ?? null;
+  const approved = approval?.approved === true;
+  const collector = liveData?.collector ?? null;
+  const collectionWindow = liveData?.collectionWindow ?? null;
+
+  const liveRows = useMemo(
+    () =>
+      [...(liveData?.observations ?? [])].sort(
+        (left, right) => left.obsTimeUtc - right.obsTimeUtc,
+      ),
+    [liveData?.observations],
   );
-  const raceData = useQuery("preflight:getRecentPublishRaceReports", {
-    stationIcao: STATION_ICAO,
-    limit: 12,
-  });
-  const forecastTrendData = useQuery(
-    "nzwnWeather:getForecastTrend",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          targetDate: date,
-        }
-      : "skip",
-  );
-  const stationNotes = useQuery(
-    "notes:listNotes",
-    isNotesOpen
-      ? {
-          stationIcao: STATION_ICAO,
-        }
-      : "skip",
+  const officialRows = useMemo(
+    () =>
+      [...(officialData?.rows ?? [])].sort(
+        (left, right) => left.obsTimeUtc - right.obsTimeUtc,
+      ),
+    [officialData?.rows],
   );
 
-  const forecastTrendRows = forecastTrendData?.rows ?? [];
-  const rows = dayData?.rows ?? [];
-  const summary = dayData?.summary ?? null;
-  const metServiceRows = metServiceData?.rows ?? [];
-  const metServiceForecastRows = metServiceForecastData?.rows ?? [];
-  const raceRows = raceData?.rows ?? [];
-  const displayedRaceRows = useMemo(
-    () =>
-      raceRows.map((row) => ({
-        ...row,
-        displayRace: computeDisplayedRaceState(row),
-      })),
-    [raceRows],
-  );
-  const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
-  const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
-  const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
-  const currentReading = weatherPanel?.currentReading ?? null;
-  const weatherForecast = weatherPanel?.forecast ?? null;
-  const weatherForecastDays = weatherForecast?.days ?? [];
-  const weatherHourly = weatherPanel?.hourly ?? null;
-  const weatherHourlyRows = weatherHourly?.rows ?? [];
-  const selectedDateForecast = weatherPanel?.selectedDateForecast ?? null;
-  const latestLiveCloudMetar = useMemo(
-    () => selectLatestLiveCloudMetar(raceRows, summary, isToday),
-    [raceRows, summary, isToday],
-  );
-  const liveCloudSummary = useMemo(
-    () => summarizeMetarClouds(latestLiveCloudMetar?.rawMetar),
-    [latestLiveCloudMetar],
-  );
+  const newestStoredReading =
+    liveRows.at(-1) ?? liveData?.latestForDate ?? null;
+  const latest =
+    liveData?.latestForDate &&
+    (!newestStoredReading ||
+      liveData.latestForDate.obsTimeUtc > newestStoredReading.obsTimeUtc)
+      ? liveData.latestForDate
+      : newestStoredReading;
+  const canExposeStationReadings = !isToday || approved;
+  const displayRows = canExposeStationReadings ? liveRows : [];
+  const displayReading = canExposeStationReadings ? latest : null;
+  const latestOfficial = officialRows.at(-1) ?? null;
+  const ageMs =
+    isToday && latest && Number.isFinite(clockNowMs)
+      ? Math.max(0, clockNowMs - latest.obsTimeUtc)
+      : null;
+  const status = freshnessState({
+    queryLoading: liveData === undefined,
+    approved,
+    isToday,
+    latest,
+    ageMs,
+    collectorStatus: collector?.status,
+  });
+
+  const dayHighC = canExposeStationReadings
+    ? liveData?.summary?.maxTempC
+    : null;
+  const dayLowC = canExposeStationReadings
+    ? liveData?.summary?.minTempC
+    : null;
+  const deltaReference = findDeltaReading(displayRows, displayReading, 30);
+  const delta30C =
+    displayReading && deltaReference
+      ? Number((displayReading.tempC - deltaReference.tempC).toFixed(1))
+      : null;
+  const metarDeltaC =
+    displayReading && latestOfficial
+      ? Number((displayReading.tempC - latestOfficial.tempC).toFixed(1))
+      : null;
 
   useEffect(() => {
     setInputDate(date);
@@ -909,280 +497,172 @@ export default function NzwnDayPage() {
 
   useEffect(() => {
     setClockNowMs(Date.now());
-    const intervalId = window.setInterval(() => {
-      setClockNowMs(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    const intervalId = window.setInterval(() => setClockNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
-    if (!isDateValid) {
-      setWeatherPanel(null);
-      setWeatherPanelError("");
-      setIsWeatherLoading(false);
+    if (!validDate || bootstrapDateRef.current === date) {
       return;
     }
-
-    let cancelled = false;
-    const requestId = weatherRequestRef.current + 1;
-    weatherRequestRef.current = requestId;
-    setIsWeatherLoading(true);
-
-    async function loadWeatherPanel() {
-      try {
-        const result = await loadNzwnWeather({ date });
-        if (!cancelled && weatherRequestRef.current === requestId) {
-          setWeatherPanel(result);
-          setWeatherPanelError("");
-        }
-      } catch (error) {
-        console.error(error);
-        if (!cancelled && weatherRequestRef.current === requestId) {
-          const message = error instanceof Error ? error.message : String(error);
-          setWeatherPanel(null);
-          setWeatherPanelError(message);
-        }
-      } finally {
-        if (!cancelled && weatherRequestRef.current === requestId) {
-          setIsWeatherLoading(false);
-        }
-      }
-    }
-
-    loadWeatherPanel();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [date, isDateValid, loadNzwnWeather]);
-
-  useEffect(() => {
-    if (!isDateValid) {
-      setLiveMessage("");
-      return;
-    }
-
+    bootstrapDateRef.current = date;
     let cancelled = false;
 
-    async function bootstrap() {
-      if (inFlightRef.current) {
+    async function syncOfficialReference() {
+      const results = await Promise.allSettled([
+        backfillOfficialDay({ stationIcao: STATION_ICAO, date }),
+        isToday ? pollOfficialLatest({ stationIcao: STATION_ICAO }) : null,
+      ]);
+      if (cancelled) {
         return;
       }
-      inFlightRef.current = true;
-      try {
-        const messages = [];
-
-        if (backfilledDateRef.current !== date) {
-          const backfillResult = await backfillDay({
-            stationIcao: STATION_ICAO,
-            date,
-          });
-          messages.push(formatBackfillMessage(backfillResult));
-          backfilledDateRef.current = date;
-        }
-
-        if (isToday) {
-          const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-          messages.push(formatLivePollMessage(pollResult));
-        }
-
-        if (!cancelled) {
-          setLiveMessage(messages.join(" "));
-        }
-      } catch (error) {
-        console.error(error);
-        if (!cancelled) {
-          const message = error instanceof Error ? error.message : String(error);
-          setLiveMessage(`NZWN sync failed: ${message}`);
-        }
-      } finally {
-        inFlightRef.current = false;
-      }
+      const failures = results.filter((result) => result.status === "rejected");
+      setSyncMessage(
+        failures.length
+          ? "Official METAR reference could not be refreshed."
+          : "Official METAR reference is synchronized.",
+      );
     }
 
-    bootstrap();
-
+    syncOfficialReference();
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, backfillDay, pollLatest]);
-
-  async function handleRefreshNow() {
-    if (!isDateValid || inFlightRef.current) {
-      return;
-    }
-
-    setIsRefreshing(true);
-    inFlightRef.current = true;
-    const weatherRequestId = weatherRequestRef.current + 1;
-    weatherRequestRef.current = weatherRequestId;
-    setIsWeatherLoading(true);
-    try {
-      const [officialResult, weatherResult, forecastSnapshotResult] = await Promise.allSettled([
-        (async () => {
-          const messages = [];
-          const backfillResult = await backfillDay({
-            stationIcao: STATION_ICAO,
-            date,
-          });
-          backfilledDateRef.current = date;
-          messages.push(formatBackfillMessage(backfillResult));
-
-          if (isToday) {
-            const pollResult = await pollLatest({ stationIcao: STATION_ICAO });
-            messages.push(formatLivePollMessage(pollResult));
-          }
-
-          return messages.join(" ");
-        })(),
-        loadNzwnWeather({ date }),
-        collectForecastSnapshot({ stationIcao: STATION_ICAO }),
-      ]);
-
-      const refreshMessages = [];
-      if (officialResult.status === "fulfilled") {
-        refreshMessages.push(officialResult.value);
-      } else {
-        console.error(officialResult.reason);
-        const message =
-          officialResult.reason instanceof Error
-            ? officialResult.reason.message
-            : String(officialResult.reason);
-        refreshMessages.push(`Manual refresh failed: ${message}`);
-      }
-
-      if (weatherResult.status === "fulfilled") {
-        if (weatherRequestRef.current === weatherRequestId) {
-          setWeatherPanel(weatherResult.value);
-          setWeatherPanelError("");
-        }
-      } else {
-        console.error(weatherResult.reason);
-        if (weatherRequestRef.current === weatherRequestId) {
-          const message =
-            weatherResult.reason instanceof Error
-              ? weatherResult.reason.message
-              : String(weatherResult.reason);
-          setWeatherPanelError(message);
-        }
-      }
-
-      if (forecastSnapshotResult.status === "fulfilled") {
-        refreshMessages.push(formatForecastSnapshotMessage(forecastSnapshotResult.value));
-      } else {
-        console.error(forecastSnapshotResult.reason);
-        const message =
-          forecastSnapshotResult.reason instanceof Error
-            ? forecastSnapshotResult.reason.message
-            : String(forecastSnapshotResult.reason);
-        refreshMessages.push(`Forecast snapshot failed: ${message}`);
-      }
-
-      setLiveMessage(refreshMessages.filter(Boolean).join(" "));
-    } catch (error) {
-      console.error(error);
-      const message = error instanceof Error ? error.message : String(error);
-      setLiveMessage(`Manual refresh failed: ${message}`);
-    } finally {
-      inFlightRef.current = false;
-      setIsRefreshing(false);
-      if (weatherRequestRef.current === weatherRequestId) {
-        setIsWeatherLoading(false);
-      }
-    }
-  }
-
-  async function handleDeleteNote(note) {
-    const label = note.title || note.body?.slice(0, 60) || "this note";
-    const confirmed = window.confirm(`Delete ${label}?`);
-    if (!confirmed) {
-      return;
-    }
-
-    setDeletingNoteId(note._id);
-    try {
-      await deleteNote({ noteId: note._id });
-    } catch (error) {
-      console.error(error);
-      const message = error instanceof Error ? error.message : String(error);
-      window.alert(`Delete failed: ${message}`);
-    } finally {
-      setDeletingNoteId(null);
-    }
-  }
-
-  function handleGoToDate(event) {
-    event.preventDefault();
-    if (!isValidDate(inputDate)) {
-      return;
-    }
-    router.push(`/nzwn/day/${inputDate}`);
-  }
-
-  const chartData = useMemo(
-    () => {
-      const datasets = [];
-      if (rows.length) {
-        datasets.push(buildLineDataset(rows, displayUnit));
-      }
-      const metDs = buildMetServiceDataset(metServiceRows, currentReading, displayUnit, date);
-      if (metDs) {
-        datasets.push(metDs);
-      }
-      const metFcDs = buildMetServiceForecastDataset(metServiceForecastRows, displayUnit);
-      if (metFcDs) {
-        datasets.push(metFcDs);
-      }
-      return { datasets };
-    },
-    [rows, displayUnit, metServiceRows, metServiceForecastRows, currentReading, date],
-  );
-  const chartWidthPx = useMemo(() => {
-    const hasLiveMetServicePoint =
-      currentReading?.status === "ok" &&
-      currentReading.observedAtLocal?.slice(0, 10) === date;
-    const pointCount = Math.max(
-      rows.length,
-      metServiceRows.length + (hasLiveMetServicePoint ? 1 : 0),
-      24,
-    );
-    return Math.min(2200, Math.max(840, pointCount * 34));
   }, [
-    rows.length,
-    metServiceRows.length,
-    currentReading?.status,
-    currentReading?.observedAtLocal,
+    backfillOfficialDay,
     date,
+    isToday,
+    pollOfficialLatest,
+    validDate,
   ]);
+
+  async function handleRefresh() {
+    if (!isToday || isRefreshing) {
+      return;
+    }
+    setIsRefreshing(true);
+    setSyncMessage("");
+    const results = await Promise.allSettled([
+      pollLiveTemperature({ stationIcao: STATION_ICAO }),
+      pollOfficialLatest({ stationIcao: STATION_ICAO }),
+    ]);
+    const liveResult = results[0];
+    const officialResult = results[1];
+    const messages = [];
+
+    if (liveResult.status === "fulfilled") {
+      if (liveResult.value?.status === "ok") {
+        if (liveResult.value?.ingestResult === "inserted") {
+          messages.push("New 93439 observation accepted.");
+        } else if (liveResult.value?.ingestResult === "stale_rejected") {
+          messages.push("Older cached observation rejected; current value retained.");
+        } else {
+          messages.push("Checked 93439; no newer observation yet.");
+        }
+      } else if (liveResult.value?.status === "approval_required") {
+        messages.push(`Live collection requires ${APPROVAL_FLAG}.`);
+      } else if (liveResult.value?.status === "outside_collection_window") {
+        messages.push("Live collector is outside its Wellington time window.");
+      } else {
+        messages.push(liveResult.value?.message || "Live temperature was not updated.");
+      }
+    } else {
+      messages.push("Live temperature refresh failed.");
+    }
+
+    messages.push(
+      officialResult.status === "fulfilled"
+        ? "METAR reference refreshed."
+        : "METAR reference refresh failed.",
+    );
+    setSyncMessage(messages.join(" "));
+    setIsRefreshing(false);
+  }
+
+  function handleDateSubmit(event) {
+    event.preventDefault();
+    if (isValidDate(inputDate)) {
+      router.push(`/nzwn/day/${inputDate}`);
+    }
+  }
+
+  const chartData = useMemo(() => {
+    const livePoints = displayRows.map((row) => ({
+      x: row.obsTimeUtc,
+      y: temperatureValue(row, unit),
+      row,
+    }));
+    const officialPoints = officialRows.map((row) => ({
+      x: row.obsTimeUtc,
+      y: unit === "F" ? row.tempF : row.tempC,
+      row,
+    }));
+    return {
+      datasets: [
+        {
+          label: "MetService 93439",
+          data: livePoints,
+          borderColor: "#5eead4",
+          backgroundColor: "#5eead4",
+          borderWidth: 2.5,
+          pointRadius: livePoints.length > 80 ? 0 : 2,
+          pointHoverRadius: 5,
+          tension: 0.22,
+        },
+        {
+          label: "Official METAR",
+          data: officialPoints,
+          borderColor: "#fbbf24",
+          backgroundColor: "#fbbf24",
+          borderWidth: 0,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointStyle: "rectRot",
+          showLine: false,
+        },
+      ],
+    };
+  }, [displayRows, officialRows, unit]);
 
   const chartOptions = useMemo(
     () => ({
       responsive: true,
       maintainAspectRatio: false,
       parsing: false,
+      animation: { duration: 250 },
       interaction: {
         mode: "nearest",
         axis: "x",
         intersect: false,
       },
       plugins: {
-        legend: { position: "top" },
+        legend: {
+          position: "top",
+          align: "end",
+          labels: {
+            color: "rgba(255,255,255,0.62)",
+            boxWidth: 10,
+            boxHeight: 10,
+            usePointStyle: true,
+            font: { family: "IBM Plex Mono", size: 10 },
+          },
+        },
         tooltip: {
-          padding: 10,
-          titleFont: { size: 13 },
-          bodyFont: { size: 12 },
+          backgroundColor: "#0b1f1c",
+          borderColor: "rgba(94,234,212,0.28)",
+          borderWidth: 1,
+          titleColor: "#ccfbf1",
+          bodyColor: "#f0fdfa",
           callbacks: {
             title(items) {
-              if (!items.length) {
-                return "";
-              }
-              return `Local ${minuteLabel(items[0].parsed.x)}`;
+              return items.length
+                ? formatAucklandTime(Number(items[0].parsed.x), true)
+                : "";
             },
-            label(item) {
-              const reportType = item.raw?.reportType ? `${item.raw.reportType} ` : "";
-              return `${reportType}${item.parsed.y.toFixed(1)}°${displayUnit}`;
+            label(context) {
+              return `${context.dataset.label}: ${Number(context.parsed.y).toFixed(
+                1,
+              )}°${unit}`;
             },
           },
         },
@@ -1190,1175 +670,558 @@ export default function NzwnDayPage() {
       scales: {
         x: {
           type: "linear",
-          min: 0,
-          max: 1439,
-          title: { display: true, text: "Local Time (Pacific/Auckland)" },
+          grid: { color: "rgba(255,255,255,0.055)" },
+          border: { display: false },
           ticks: {
-            stepSize: 60,
+            color: "rgba(255,255,255,0.42)",
+            maxTicksLimit: 7,
             callback(value) {
-              return minuteLabel(Number(value));
+              return formatAucklandTime(Number(value));
             },
+            font: { family: "IBM Plex Mono", size: 10 },
           },
         },
         y: {
-          title: { display: true, text: `Temperature (°${displayUnit})` },
+          grid: { color: "rgba(255,255,255,0.07)" },
+          border: { display: false },
           ticks: {
-            stepSize: 0.5,
-          },
-        },
-      },
-    }),
-    [displayUnit],
-  );
-
-  const forecastPeakByDate = useMemo(
-    () => buildForecastPeakByDate(weatherHourlyRows),
-    [weatherHourlyRows],
-  );
-  const selectedForecastPeak = forecastPeakByDate.get(date) ?? null;
-  const todayForecastPeak =
-    forecastPeakByDate.get(weatherPanel?.todayDate ?? aucklandTodayDate) ?? null;
-  const forecastPeak = selectedForecastPeak ?? todayForecastPeak;
-  const forecastTrendChartPoints = useMemo(
-    () =>
-      forecastTrendRows
-        .filter((row) => Number.isFinite(row.maxTempC) && Number.isFinite(row.capturedAt))
-        .map((row) => {
-          const deltaC = row.deltaC ?? null;
-          let changeDirection = null;
-          if (deltaC !== null) {
-            if (deltaC > 0) {
-              changeDirection = "up";
-            } else if (deltaC < 0) {
-              changeDirection = "down";
-            } else {
-              changeDirection = "same";
-            }
-          }
-
-          return {
-            x: row.capturedAt,
-            y: displayUnit === "C" ? row.maxTempC : (row.maxTempC * 9) / 5 + 32,
-            capturedAtLocal: row.capturedAtLocal,
-            delta:
-              deltaC === null
-                ? null
-                : displayUnit === "C"
-                  ? deltaC
-                  : (deltaC * 9) / 5,
-            changeDirection,
-          };
-        })
-        .filter((row) => Number.isFinite(row.y)),
-    [displayUnit, forecastTrendRows],
-  );
-  const forecastTrendSummary = useMemo(() => {
-    if (!forecastTrendChartPoints.length) {
-      return null;
-    }
-
-    let minPoint = forecastTrendChartPoints[0];
-    let maxPoint = forecastTrendChartPoints[0];
-    let changeCount = 0;
-    for (const point of forecastTrendChartPoints) {
-      if (point.y < minPoint.y) {
-        minPoint = point;
-      }
-      if (point.y > maxPoint.y) {
-        maxPoint = point;
-      }
-      if (point.delta !== null && Math.abs(point.delta) > 0.0001) {
-        changeCount += 1;
-      }
-    }
-
-    const firstPoint = forecastTrendChartPoints[0];
-    const latestPoint = forecastTrendChartPoints[forecastTrendChartPoints.length - 1];
-    return {
-      firstPoint,
-      latestPoint,
-      minPoint,
-      maxPoint,
-      pointCount: forecastTrendChartPoints.length,
-      changeCount,
-      netDelta: latestPoint.y - firstPoint.y,
-    };
-  }, [forecastTrendChartPoints]);
-  const officialTrendMaxC = forecastTrendData?.actualMaxC ?? summary?.maxTempC ?? null;
-  const officialTrendMax =
-    officialTrendMaxC === null
-      ? null
-      : displayUnit === "C"
-        ? officialTrendMaxC
-        : (officialTrendMaxC * 9) / 5 + 32;
-  const officialTrendMaxAtLocal = summary?.maxTempAtLocal ?? null;
-  const forecastTrendChartData = useMemo(
-    () => ({
-      datasets: [
-        {
-          label: "Predicted High",
-          data: forecastTrendChartPoints,
-          borderColor: "#0f4c81",
-          backgroundColor: "#0f4c81",
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          pointHitRadius: 18,
-          pointBackgroundColor: forecastTrendChartPoints.map((point) =>
-            getTrendPointColor(point.changeDirection),
-          ),
-          pointBorderColor: forecastTrendChartPoints.map((point) =>
-            getTrendPointColor(point.changeDirection),
-          ),
-          pointBorderWidth: 1.5,
-          borderWidth: 2,
-          stepped: true,
-          tension: 0,
-          showLine: true,
-        },
-      ],
-    }),
-    [forecastTrendChartPoints],
-  );
-  const forecastTrendChartOptions = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      parsing: false,
-      interaction: {
-        mode: "nearest",
-        axis: "x",
-        intersect: false,
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title(items) {
-              if (!items.length) {
-                return "";
-              }
-              return formatStoredLocalDateTime(items[0].raw?.capturedAtLocal);
-            },
-            label(item) {
-              return `Predicted high ${item.parsed.y.toFixed(1)}°${displayUnit}`;
-            },
-            afterLabel(item) {
-              const delta = item.raw?.delta;
-              return delta === null || delta === undefined
-                ? ""
-                : `Change ${formatDelta(delta, displayUnit)}`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          type: "linear",
-          ticks: {
+            color: "rgba(255,255,255,0.42)",
             callback(value) {
-              return formatAucklandAxisDateTime(Number(value));
+              return `${Number(value).toFixed(0)}°`;
             },
+            font: { family: "IBM Plex Mono", size: 10 },
           },
-        },
-        y: {
-          title: { display: true, text: `Predicted High (°${displayUnit})` },
         },
       },
     }),
-    [displayUnit],
+    [unit],
   );
 
-  if (!isDateValid) {
+  const recentRows = useMemo(
+    () => displayRows.slice(-8).reverse(),
+    [displayRows],
+  );
+  const refreshDisabled =
+    !isToday ||
+    isRefreshing ||
+    !approved ||
+    collectionWindow?.activeNow === false;
+  const refreshLabel = !isToday
+    ? "Viewing archive"
+    : !approved
+      ? "Approval required"
+      : collectionWindow?.activeNow === false
+        ? "Outside collection window"
+        : isRefreshing
+          ? "Refreshing"
+          : "Refresh now";
+  const emptyHero = emptyHeroCopy(status.key);
+
+  if (!validDate) {
     return (
-      <main className="min-h-screen px-4 py-8 md:px-8">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-6">
-          <h1 className="text-2xl font-semibold text-red-800">Invalid NZWN date</h1>
-          <p className="mt-2 text-sm text-red-700">
-            Use a `YYYY-MM-DD` date in the route.
+      <main className="flex min-h-screen items-center justify-center bg-[#06100f] px-5 text-white">
+        <section className="w-full max-w-lg rounded-[2rem] border border-rose-300/20 bg-white/5 p-7">
+          <p className="font-mono text-xs uppercase tracking-[0.22em] text-rose-200">
+            Invalid route
           </p>
-          <div className="mt-4">
-            <Link
-              href="/nzwn/today"
-              className="inline-flex rounded-full border border-red-300 px-4 py-2 text-sm font-semibold text-red-800"
-            >
-              Open NZWN today
-            </Link>
-          </div>
-        </div>
+          <h1 className="mt-3 text-3xl font-semibold">Use a Wellington date</h1>
+          <p className="mt-3 text-sm leading-6 text-white/55">
+            NZWN day routes require a date formatted as YYYY-MM-DD.
+          </p>
+          <Link
+            href="/nzwn/today"
+            className="mt-6 inline-flex items-center gap-2 rounded-full bg-teal-300 px-5 py-2.5 text-sm font-semibold text-[#05201c]"
+          >
+            Open today <ArrowIcon />
+          </Link>
+        </section>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen px-4 py-8 md:px-8">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
-          <p className="inline-flex rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold tracking-[0.18em] text-accent">
-            STATION {STATION_ICAO}
-          </p>
-          <h1 className="mt-3 text-2xl font-semibold text-foreground">
-            {STATION_NAME} Official METAR Day Chart
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
-            Official NZWN METAR from MetService&apos;s PreFlight product. Today is
-            kept live from the official rolling endpoint; selected dates can only
-            be backfilled from the recent messages that endpoint still exposes, so
-            older dates depend on rows we already captured live.
-          </p>
+    <main className="relative min-h-screen overflow-hidden bg-[#06100f] px-4 py-4 text-[#e9fbf5] sm:px-6 sm:py-6 lg:px-8">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_14%_0%,rgba(20,184,166,0.16),transparent_32%),radial-gradient(circle_at_90%_12%,rgba(56,189,248,0.10),transparent_30%),linear-gradient(180deg,#06100f_0%,#071715_48%,#06100f_100%)]" />
+      <div className="pointer-events-none absolute left-[-12rem] top-[26rem] h-96 w-96 rounded-full bg-teal-400/5 blur-3xl" />
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="relative mx-auto max-w-[1440px]">
+        <nav className="flex flex-wrap items-center justify-between gap-4 rounded-[1.6rem] border border-white/10 bg-black/15 px-4 py-3 backdrop-blur-xl sm:px-5">
+          <div className="flex items-center gap-3">
             <Link
               href="/"
-              className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/65 transition hover:border-teal-300/40 hover:text-teal-100"
+              aria-label="Home"
             >
-              Home
+              <ArrowIcon direction="left" />
             </Link>
-            <Link
-              href="/nzwn/today"
-              className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 hover:border-sky-400"
-            >
-              Current Date {aucklandTodayDate}
-            </Link>
-            {quickPreviousDates.map((previousDate) => (
-              <Link
-                key={previousDate}
-                href={`/nzwn/day/${previousDate}`}
-                className="inline-flex rounded-full border border-black/15 bg-white/70 px-4 py-2 text-sm font-semibold text-black hover:border-black"
-              >
-                {previousDate}
-              </Link>
-            ))}
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-teal-200/55">
+                Wellington · New Zealand
+              </p>
+              <h1 className="text-sm font-semibold text-white/90">
+                NZWN Surface Monitor
+              </h1>
+            </div>
           </div>
 
-          <form onSubmit={handleGoToDate} className="mt-4 flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium text-black/70" htmlFor="nzwn-day-picker">
-              Pick Date
-            </label>
-            <input
-              id="nzwn-day-picker"
-              type="date"
-              value={inputDate}
-              onChange={(event) => setInputDate(event.target.value)}
-              className="rounded-2xl border border-black/15 bg-white px-3 py-2 text-sm text-black outline-none focus:border-black"
-            />
-            <button
-              type="submit"
-              className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent"
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-2 font-mono text-[11px] text-white/55 md:inline-flex">
+              {formatAucklandClock(clockNowMs)}
+            </span>
+            <div
+              className="inline-flex rounded-full border border-white/10 bg-white/5 p-1"
+              role="group"
+              aria-label="Temperature unit"
             >
-              Go
-            </button>
-          </form>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-full border border-black/10 bg-white/70 p-1">
-              {["C", "F"].map((unit) => (
+              {["C", "F"].map((option) => (
                 <button
-                  key={unit}
+                  key={option}
                   type="button"
-                  onClick={() => setDisplayUnit(unit)}
-                  className={`rounded-full px-3 py-1 text-sm font-semibold ${
-                    displayUnit === unit
-                      ? "bg-black text-white"
-                      : "text-black/70 hover:text-black"
+                  onClick={() => setUnit(option)}
+                  aria-pressed={unit === option}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                    unit === option
+                      ? "bg-teal-300 text-[#06231f]"
+                      : "text-white/50 hover:text-white"
                   }`}
                 >
-                  °{unit}
+                  °{option}
                 </button>
               ))}
             </div>
-            <Link
-              href="/nzwn/forecast-accuracy"
-              className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 transition hover:border-sky-400"
-            >
-              Forecast Accuracy
-            </Link>
-            <button
-              type="button"
-              onClick={handleRefreshNow}
-              disabled={isRefreshing}
-              className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isRefreshing ? "Refreshing..." : "Refresh Current Data"}
-            </button>
-            {isToday ? (
-              <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
-                Live official ingest enabled
-              </span>
-            ) : null}
           </div>
+        </nav>
 
-          <div className="mt-4 inline-flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-sky-950">
-            <span className="font-semibold uppercase tracking-[0.16em] text-sky-800">
-              Wellington Time
-            </span>
-            <span className="font-medium">{formatAucklandClock(clockNowMs)}</span>
-          </div>
+        <section className="mt-4 overflow-hidden rounded-[2rem] border border-white/10 bg-[#0a1b18]/90 shadow-[0_30px_100px_rgba(0,0,0,0.32)]">
+          <div className="grid xl:grid-cols-[minmax(0,1.55fr)_minmax(330px,0.65fr)]">
+            <div className="relative min-h-[480px] overflow-hidden border-b border-white/10 p-6 sm:p-8 xl:border-b-0 xl:border-r">
+              <div className="pointer-events-none absolute -right-24 -top-28 h-[30rem] w-[30rem] rounded-full border border-teal-300/10" />
+              <div className="pointer-events-none absolute -right-12 -top-16 h-[22rem] w-[22rem] rounded-full border border-teal-300/10" />
+              <div className="pointer-events-none absolute bottom-0 left-0 h-40 w-full bg-[linear-gradient(180deg,transparent,rgba(94,234,212,0.035))]" />
 
-          <p className="mt-4 text-sm text-black/70">
-            {liveMessage || "Waiting for PreFlight sync..."}
-          </p>
-        </header>
-
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Latest
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {summary ? formatTemp(latestTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              {summary?.latestReportType ?? "—"} at{" "}
-              {summary?.latestObsTimeLocal
-                ? formatStoredLocalDateTime(summary.latestObsTimeLocal)
-                : "—"}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Day Range
-            </p>
-            <p className="mt-2 text-xl font-semibold text-foreground">
-              Max {summary ? formatTemp(maxTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-1 text-sm text-black/65">
-              {summary?.maxTempAtLocal
-                ? `at ${formatStoredLocalDateTime(summary.maxTempAtLocal)}`
-                : "—"}
-            </p>
-            <p className="mt-3 text-xl font-semibold text-foreground">
-              Min {summary ? formatTemp(minTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-1 text-sm text-black/65">
-              {summary?.minTempAtLocal
-                ? `at ${formatStoredLocalDateTime(summary.minTempAtLocal)}`
-                : "—"}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Messages
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {summary?.obsCount ?? 0}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              Routine NZWN METAR is typically every 30 minutes. Full-day coverage
-              depends on rows being captured live because PreFlight only exposes a
-              rolling recent window.
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Near-Live Now
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {currentReading?.status === "ok"
-                ? formatTemp(
-                    displayUnit === "C" ? currentReading.tempC : currentReading.tempF,
-                    displayUnit,
-                  )
-                : "—"}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              {currentReading?.observedAtLocal
-                ? `MetService airport current at ${formatStoredLocalDateTime(
-                    currentReading.observedAtLocal,
-                  )}`
-                : "Unofficial airport-current feed not loaded yet."}
-            </p>
-            {liveCloudSummary ? (
-              <>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <span
-                    className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${liveCloudSummary.badgeClassName}`}
-                  >
-                    {liveCloudSummary.badgeLabel}
-                  </span>
-                  <span className="text-sm font-semibold text-black/85">
-                    {liveCloudSummary.headline}
-                  </span>
-                </div>
-                {liveCloudSummary.showVisuals ? (
-                  <div className="mt-3 rounded-2xl border border-black/10 bg-[linear-gradient(180deg,rgba(224,242,254,0.8),rgba(255,255,255,0.95))] p-3">
-                    <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
-                      <span>Sky Cover</span>
-                      <span>{liveCloudSummary.coverLabel}</span>
-                    </div>
-                    <div className="mt-2 flex gap-1.5">
-                      {Array.from({ length: 5 }).map((_, index) => (
-                        <span
-                          key={`cloud-cover-${index}`}
-                          className={`h-2.5 flex-1 rounded-full ${
-                            index < liveCloudSummary.coverLevel
-                              ? liveCloudSummary.fillClassName
-                              : "bg-white/80"
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    {liveCloudSummary.baseVisual ? (
-                      <>
-                        <div className="mt-3 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
-                          <span>Cloud Base</span>
-                          <span>{liveCloudSummary.baseVisual.label}</span>
-                        </div>
-                        <div className="mt-2 grid grid-cols-3 gap-1.5">
-                          {["Low", "Mid", "High"].map((label, index) => {
-                            const isActive = index === liveCloudSummary.baseVisual.tierIndex;
-                            return (
-                              <span
-                                key={`cloud-base-${label}`}
-                                className={`rounded-full border px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.08em] ${
-                                  isActive
-                                    ? liveCloudSummary.baseVisual.className
-                                    : "border-black/10 bg-white/80 text-black/45"
-                                }`}
-                              >
-                                {label}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </>
-                    ) : null}
+              <div className="relative flex h-full flex-col justify-between">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <StatusPill state={status} />
+                    <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.22em] text-white/55">
+                      Wellington Aero AWS · Station {STATION_ID}
+                    </p>
                   </div>
-                ) : null}
-                <p className="mt-2 text-sm text-black/65">
-                  {liveCloudSummary.detail}
-                </p>
-              </>
-            ) : (
-              <p className="mt-3 text-sm text-black/65">
-                Cloud conditions not available yet from the latest official METAR.
-              </p>
-            )}
-            <p className="mt-2 text-xs text-black/55">
-              Temperature is unofficial MetService current. Cloud label comes from
-              the latest official NZWN {latestLiveCloudMetar?.reportType ?? "METAR"}
-              {Number.isFinite(latestLiveCloudMetar?.observedAtUtc)
-                ? ` at ${formatAucklandDateTimeSeconds(latestLiveCloudMetar.observedAtUtc)}.`
-                : "."}
-            </p>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">NZWN Notes</h2>
-              <p className="mt-1 text-sm text-black/60">
-                Station-scoped notes tagged `{STATION_ICAO}` from the shared notes
-                workspace.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsNotesOpen((current) => !current)}
-                className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent"
-              >
-                {isNotesOpen ? "Hide NZWN Notes" : "Show NZWN Notes"}
-              </button>
-              <Link
-                href={`/notes?stationIcao=${STATION_ICAO}`}
-                className="rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black transition hover:border-black"
-              >
-                Open Notes Workspace
-              </Link>
-            </div>
-          </div>
-
-          {isNotesOpen ? (
-            <div className="mt-4">
-              {stationNotes === undefined ? (
-                <p className="text-sm text-black/65">Loading NZWN notes...</p>
-              ) : stationNotes.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-black/15 bg-black/[0.02] px-4 py-5 text-sm text-black/55">
-                  No notes tagged `{STATION_ICAO}` yet. Save one from the notes
-                  workspace with station `{STATION_ICAO}`.
+                  <div className="text-right">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/50">
+                      Selected day
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-white/70">
+                      {formatDateTitle(date)}
+                    </p>
+                  </div>
                 </div>
-              ) : (
-                <div className="grid gap-4">
-                  {stationNotes.map((note) => (
-                    <article
-                      key={note._id}
-                      className="rounded-2xl border border-black/10 bg-white/75 p-4"
-                    >
-                      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-black/55">
-                        <span>{formatNoteCreatedAt(note.createdAt)}</span>
-                        <span className="inline-flex rounded-full bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
-                          {STATION_ICAO}
+
+                <div className="relative py-10 sm:py-12">
+                  {displayReading ? (
+                    <>
+                      <div className="flex items-start">
+                        <span className="text-[clamp(5.4rem,15vw,11.5rem)] font-semibold leading-[0.78] tracking-[-0.09em] text-white">
+                          {formatTemperature(displayReading, unit)}
+                        </span>
+                        <span className="ml-3 mt-1 font-mono text-sm font-medium text-teal-200/70 sm:mt-4">
+                          {unit}
                         </span>
                       </div>
-                      {note.title ? (
-                        <h3 className="mt-2 text-lg font-semibold text-black">
-                          {note.title}
-                        </h3>
-                      ) : null}
-                      {note.body ? (
-                        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-black/80">
-                          {note.body}
-                        </p>
-                      ) : null}
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteNote(note)}
-                          disabled={deletingNoteId === note._id}
-                          className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-800 transition hover:border-red-400 disabled:cursor-not-allowed disabled:opacity-60"
+                      <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+                        <span className="font-mono text-white/58">
+                          OBS {formatAucklandTime(displayReading.obsTimeUtc, true)}
+                        </span>
+                        {isToday ? (
+                          <span className="text-white/55">{formatAge(ageMs)}</span>
+                        ) : null}
+                        <span
+                          className={`font-semibold ${
+                            Number.isFinite(delta30C)
+                              ? delta30C > 0
+                                ? "text-amber-200"
+                                : delta30C < 0
+                                  ? "text-sky-200"
+                                  : "text-white/60"
+                              : "text-white/55"
+                          }`}
                         >
-                          {deletingNoteId === note._id ? "Deleting..." : "Delete Note"}
-                        </button>
+                          {Number.isFinite(delta30C)
+                            ? `${formatDelta(delta30C, unit)} / 30 min`
+                            : "30 min trend pending"}
+                        </span>
                       </div>
-                      {note.images.length > 0 ? (
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {note.images.map((image, imageIndex) =>
-                            image.url ? (
-                              <a
-                                key={`${note._id}-${image.storageId}`}
-                                href={image.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="overflow-hidden rounded-xl border border-black/10 bg-white"
-                              >
-                                <img
-                                  src={image.url}
-                                  alt={`NZWN note image ${imageIndex + 1}`}
-                                  className="h-40 w-full object-cover transition hover:scale-[1.02]"
-                                />
-                              </a>
-                            ) : null,
-                          )}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
+                    </>
+                  ) : (
+                    <div className="max-w-2xl py-6">
+                      <p className="font-mono text-[clamp(3.8rem,11vw,8.5rem)] font-semibold leading-none tracking-[-0.06em] text-white/18">
+                        {emptyHero.display}
+                      </p>
+                      <h2 className="mt-7 text-2xl font-semibold text-white sm:text-3xl">
+                        {emptyHero.title}
+                      </h2>
+                      <p className="mt-3 max-w-xl text-sm leading-6 text-white/50">
+                        {emptyHero.detail}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
+
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <p className="max-w-2xl text-xs leading-5 text-white/55">
+                    Minute-resolution source signal delivered through MetService&apos;s
+                    public station page. Public caching can delay or regress a
+                    response; the collector only accepts newer timestamps.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleRefresh}
+                    disabled={refreshDisabled}
+                    className="inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-200/10 px-4 py-2.5 text-xs font-semibold text-teal-50 transition hover:border-teal-200/45 hover:bg-teal-200/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-white/30"
+                  >
+                    <RefreshIcon spinning={isRefreshing} />
+                    {refreshLabel}
+                  </button>
+                </div>
+              </div>
             </div>
-          ) : null}
+
+            <aside className="flex flex-col justify-between bg-black/10 p-6 sm:p-8">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-teal-100/45">
+                  Signal summary
+                </p>
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  <MetricCard
+                    eyebrow="High so far"
+                    value={formatTemperatureValue(dayHighC, unit)}
+                    detail={
+                      canExposeStationReadings
+                        ? liveData?.summary?.maxTempAtLocal || "No accepted high"
+                        : "Approval required"
+                    }
+                    accent="text-amber-100"
+                  />
+                  <MetricCard
+                    eyebrow="Low so far"
+                    value={formatTemperatureValue(dayLowC, unit)}
+                    detail={
+                      canExposeStationReadings
+                        ? liveData?.summary?.minTempAtLocal || "No accepted low"
+                        : "Approval required"
+                    }
+                    accent="text-sky-100"
+                  />
+                  <MetricCard
+                    eyebrow="Humidity"
+                    value={
+                      Number.isFinite(displayReading?.relativeHumidity)
+                        ? `${displayReading.relativeHumidity}%`
+                        : "—"
+                    }
+                    detail="Station relative humidity"
+                  />
+                  <MetricCard
+                    eyebrow="Pressure"
+                    value={
+                      Number.isFinite(displayReading?.pressureHpa)
+                        ? `${displayReading.pressureHpa.toFixed(0)}`
+                        : "—"
+                    }
+                    detail="hPa at sea level"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-7 border-t border-white/10 pt-6">
+                <div className="flex items-end justify-between gap-4">
+                  <div>
+                    <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/50">
+                      Official METAR check
+                    </p>
+                    <p className="mt-2 text-3xl font-semibold text-amber-100">
+                      {latestOfficial
+                        ? `${unit === "F" ? latestOfficial.tempF.toFixed(1) : latestOfficial.tempC.toFixed(1)}°`
+                        : "—"}
+                      <span className="ml-1 text-sm text-amber-100/45">{unit}</span>
+                    </p>
+                  </div>
+                  <p className="pb-1 text-right font-mono text-[10px] leading-5 text-white/50">
+                    {latestOfficial
+                      ? formatAucklandTime(latestOfficial.obsTimeUtc, true)
+                      : "No report"}
+                  </p>
+                </div>
+                <div className="mt-4 flex items-center justify-between rounded-2xl border border-amber-200/10 bg-amber-200/[0.045] px-4 py-3">
+                  <span className="text-xs text-white/55">Fast feed vs METAR</span>
+                  <span className="font-mono text-xs font-semibold text-amber-100/80">
+                    {formatDelta(metarDeltaC, unit)}
+                  </span>
+                </div>
+              </div>
+            </aside>
+          </div>
         </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">
-                Temperature Line
-              </h2>
-              <p className="mt-1 text-sm text-black/60">
-                Blue = METAR (red = SPECI). Green = MetService AWS.
-                Orange dashed = MetService hourly forecast.
+        <section className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(300px,0.45fr)]">
+          <article className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-5 backdrop-blur sm:p-7">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-teal-100/45">
+                  Temperature trajectory
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-white">
+                  Fast station signal vs routine METAR
+                </h2>
+              </div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/55">
+                      {displayRows.length} accepted readings · {officialRows.length} METAR
               </p>
             </div>
-            <p className="text-xs font-medium uppercase tracking-[0.16em] text-black/45">
-              Swipe left/right on mobile
-            </p>
-          </div>
-
-          <div className="mt-6 overflow-x-auto overscroll-x-contain pb-2 touch-pan-x [-webkit-overflow-scrolling:touch]">
             <div
-              className="h-[620px]"
-              style={{ width: `max(100%, ${chartWidthPx}px)` }}
+              className="mt-6 h-[320px] sm:h-[370px]"
+              role="img"
+              aria-label={`Temperature trajectory for NZWN on ${date}: ${displayRows.length} station readings and ${officialRows.length} official METAR observations.`}
             >
-              {rows.length ? (
+              {displayRows.length || officialRows.length ? (
                 <Line data={chartData} options={chartOptions} />
               ) : (
-                <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                  No NZWN observations stored for this date yet.
-                </div>
+                <EmptyChartState status={status.key} />
               )}
             </div>
-          </div>
-        </section>
+          </article>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">Latest Raw METAR</h2>
-          <div className="mt-4 rounded-2xl border border-black/10 bg-black/[0.02] p-4 font-mono text-sm text-black/80">
-            {summary?.latestRawMetar ?? "No latest raw METAR stored yet."}
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">
-                MetService + Google
-              </h2>
-              <p className="mt-1 max-w-3xl text-sm text-black/60">
-                MetService airport current for NZWN (Lyall Bay / station 93439),
-                MetService 10-day forecast, and Google hourly timing for forecast
-                peak windows. Peak-window cells only fill when the hourly window
-                covers that date.
-              </p>
-            </div>
-            {isWeatherLoading ? (
-              <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-sky-800">
-                Loading live forecast data
-              </span>
-            ) : null}
-          </div>
-
-          {weatherPanelError ? (
-            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-              Weather panel load failed: {weatherPanelError}
-            </div>
-          ) : null}
-
-          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                MetService Current Temperature
-              </p>
-              <p className="mt-2 text-3xl font-semibold text-black">
-                {currentReading?.status === "ok"
-                  ? formatTemp(
-                      displayUnit === "C" ? currentReading.tempC : currentReading.tempF,
-                      displayUnit,
-                    )
-                  : "—"}
-              </p>
-              <p className="mt-2 text-sm text-black/60">
-                Observed{" "}
-                {currentReading?.observedAtLocal
-                  ? formatStoredLocalDateTime(currentReading.observedAtLocal)
-                  : "—"}
-              </p>
-              <p className="mt-1 text-xs text-black/55">
-                {currentReading?.status === "error"
-                  ? currentReading.error || "MetService current conditions unavailable."
-                  : currentReading?.phrase ||
-                    "Wellington airport current conditions from MetService."}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                Forecast Peak Time
-              </p>
-              <p className="mt-2 text-3xl font-semibold text-black">
-                {formatPeakWindow(forecastPeak)}
-              </p>
-              <p className="mt-2 text-sm text-black/60">
-                {forecastPeak?.date
-                  ? `Google hourly peak for ${forecastPeak.date}`
-                  : "Hourly peak time is only available inside the current Google forecast window."}
-              </p>
-              <p className="mt-1 text-xs text-black/55">
-                {weatherHourly?.status === "error"
-                  ? weatherHourly.error || "Hourly forecast unavailable."
-                  : forecastPeak
-                    ? `${formatTemp(
-                        displayUnit === "C" ? forecastPeak.tempC : forecastPeak.tempF,
-                        displayUnit,
-                      )}${forecastPeak.phrase ? ` | ${forecastPeak.phrase}` : ""}`
-                    : "Selected date peak timing is not available from the current hourly forecast window."}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                MetService Forecast
-              </p>
-              <p className="mt-2 text-3xl font-semibold text-black">
-                {selectedDateForecast
-                  ? formatTemp(
-                      displayUnit === "C"
-                        ? selectedDateForecast.maxTempC
-                        : selectedDateForecast.maxTempF,
-                      displayUnit,
-                    )
-                  : "—"}
-              </p>
-              <p className="mt-2 text-sm text-black/60">Selected Date {date}</p>
-              <p className="mt-1 text-xs text-black/55">
-                {weatherForecast?.status === "error"
-                  ? weatherForecast.error || "Forecast unavailable."
-                  : selectedDateForecast
-                    ? `Min ${formatTemp(
-                        displayUnit === "C"
-                          ? selectedDateForecast.minTempC
-                          : selectedDateForecast.minTempF,
-                        displayUnit,
-                      )}${selectedDateForecast.dayPhrase ? ` | ${selectedDateForecast.dayPhrase}` : ""}`
-                    : "Selected date is outside the current MetService forecast window."}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                Current Details
-              </p>
-              <div className="mt-3 space-y-2 text-sm text-black/70">
-                <p>
-                  Humidity:{" "}
-                  {Number.isFinite(currentReading?.relativeHumidity)
-                    ? `${currentReading.relativeHumidity}%`
+          <aside className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-5 backdrop-blur sm:p-7">
+            <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-teal-100/45">
+              Wind at station
+            </p>
+            <div className="mt-7 flex items-center gap-5">
+              <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-teal-200/20 bg-teal-200/[0.06]">
+                <span className="text-2xl font-semibold text-teal-100">
+                  {displayReading?.windDirection || "—"}
+                </span>
+              </div>
+              <div>
+                <p className="text-4xl font-semibold tracking-tight text-white">
+                  {Number.isFinite(displayReading?.windSpeedKph)
+                    ? displayReading.windSpeedKph.toFixed(0)
                     : "—"}
+                  <span className="ml-2 text-sm font-medium text-white/50">km/h</span>
                 </p>
-                <p>
-                  Wind:{" "}
-                  {Number.isFinite(currentReading?.windSpeedKph)
-                    ? `${currentReading.windSpeedKph} km/h`
-                    : "—"}
-                </p>
-                <p>
-                  Gust:{" "}
-                  {Number.isFinite(currentReading?.windGustKph)
-                    ? `${currentReading.windGustKph} km/h`
-                    : "—"}
-                </p>
-                <p>
-                  Pressure:{" "}
-                  {Number.isFinite(currentReading?.pressureHpa)
-                    ? `${currentReading.pressureHpa} hPa`
-                    : "—"}
-                </p>
-                <p>
-                  Status:{" "}
-                  {currentReading?.status === "error"
-                    ? `Unavailable (${currentReading.error || "request failed"})`
-                    : currentReading?.sourceLabel ?? "Loaded"}
+                <p className="mt-2 text-sm text-white/55">
+                  Gust{" "}
+                  {Number.isFinite(displayReading?.windGustKph)
+                    ? `${displayReading.windGustKph.toFixed(0)} km/h`
+                    : "not reported"}
                 </p>
               </div>
             </div>
-          </div>
+
+            <div className="mt-8 space-y-4 border-t border-white/10 pt-6 text-xs">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-white/55">Collection window</span>
+                <span className="font-mono text-white/65">
+                  {collectionWindow
+                    ? `${collectionWindow.startLocal}–${collectionWindow.endLocal}`
+                    : "—"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-white/55">Last accepted</span>
+                <span className="text-right font-mono text-white/65">
+                  {formatCollectorTime(
+                    isToday
+                      ? collector?.latestObsTimeUtc ?? displayReading?.obsTimeUtc
+                      : displayReading?.obsTimeUtc,
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-white/55">Collector state</span>
+                <span className="font-mono text-white/65">
+                  {collector?.status?.replaceAll("_", " ") || "loading"}
+                </span>
+              </div>
+            </div>
+          </aside>
         </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">
-                MetService 10-Day Forecast
-              </h2>
-              <p className="mt-1 text-sm text-black/60">
-                Daily rows come from MetService&apos;s Lyall Bay forecast.
-                Peak Window comes from Google&apos;s hourly forecast API, so only
-                days inside that hourly window will show a hit time.
-              </p>
+        <section className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.42fr)]">
+          <article className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-5 backdrop-blur sm:p-7">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-teal-100/45">
+                  Accepted observations
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-white">
+                  Most recent station readings
+                </h2>
+              </div>
+              <span className="hidden text-xs text-white/50 sm:block">
+                Newest first
+              </span>
             </div>
-          </div>
 
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Date</th>
-                  <th className="px-3 py-2 font-semibold">Min</th>
-                  <th className="px-3 py-2 font-semibold">Max</th>
-                  <th className="px-3 py-2 font-semibold">Peak Window</th>
-                  <th className="px-3 py-2 font-semibold">Day</th>
-                  <th className="px-3 py-2 font-semibold">Night</th>
-                </tr>
-              </thead>
-              <tbody>
-                {weatherForecastDays.length ? (
-                  weatherForecastDays.map((day) => {
-                    const peak = forecastPeakByDate.get(day.date) ?? null;
-                    const isSelectedForecastDay = day.date === date;
-
+            <div className="mt-6 overflow-hidden rounded-2xl border border-white/10">
+              {recentRows.length ? (
+                <div className="divide-y divide-white/8">
+                  {recentRows.map((row, index) => {
+                    const nextOlder = recentRows[index + 1];
+                    const rowDeltaC = nextOlder
+                      ? Number((row.tempC - nextOlder.tempC).toFixed(1))
+                      : null;
                     return (
-                      <tr
-                        key={day.date}
-                        className={`border-b border-black/5 align-top last:border-b-0 ${
-                          isSelectedForecastDay ? "bg-amber-50/60" : ""
-                        }`}
+                      <div
+                        key={`${row.obsTimeUtc}-${row.source}`}
+                        className="grid grid-cols-[1fr_auto] items-center gap-4 bg-black/10 px-4 py-3.5 sm:grid-cols-[1fr_0.55fr_0.6fr_0.65fr]"
                       >
-                        <td className="px-3 py-3 whitespace-nowrap font-semibold text-black">
-                          {day.date}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {formatTemp(
-                            displayUnit === "C" ? day.minTempC : day.minTempF,
-                            displayUnit,
-                          )}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {formatTemp(
-                            displayUnit === "C" ? day.maxTempC : day.maxTempF,
-                            displayUnit,
-                          )}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {formatPeakWindow(peak)}
-                        </td>
-                        <td className="px-3 py-3 text-black/70">{day.dayPhrase || "—"}</td>
-                        <td className="px-3 py-3 text-black/70">{day.nightPhrase || "—"}</td>
-                      </tr>
+                        <div>
+                          <p className="font-mono text-xs font-medium text-white/75">
+                            {formatAucklandTime(row.obsTimeUtc, true)}
+                          </p>
+                          <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-white/55">
+                            {row.source}
+                          </p>
+                        </div>
+                        <p className="text-right text-lg font-semibold text-teal-100">
+                          {formatTemperature(row, unit)}
+                          <span className="ml-1 text-xs text-teal-100/40">{unit}</span>
+                        </p>
+                        <p className="hidden text-right font-mono text-xs text-white/55 sm:block">
+                          {formatDelta(rowDeltaC, unit)}
+                        </p>
+                        <p className="hidden text-right text-xs text-white/55 sm:block">
+                          {Number.isFinite(row.windSpeedKph)
+                            ? `${row.windSpeedKph.toFixed(0)} km/h ${row.windDirection || ""}`
+                            : "—"}
+                        </p>
+                      </div>
                     );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-black/55">
-                      {weatherForecast?.status === "error"
-                        ? weatherForecast.error || "MetService forecast unavailable."
-                        : isWeatherLoading
-                          ? "Loading MetService forecast..."
-                          : "No MetService forecast rows available."}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
-              <p className="mt-1 text-sm text-black/60">
-                Recent NZWN first-seen timing across official PreFlight and
-                NOAA `tgftp`. Times in this table are shown in
-                America/Chicago. This logger runs a 1-second watch starting at
-                `:04` and `:34` and also keeps minute fallback polls because
-                NZWN publication can drift well past the nominal schedule.
-              </p>
+                  })}
+                </div>
+              ) : (
+                <div className="px-5 py-12 text-center text-sm text-white/55">
+                  No accepted station readings for {date}.
+                </div>
+              )}
             </div>
-          </div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Report Time</th>
-                  <th className="px-3 py-2 font-semibold">Winner</th>
-                  <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">PreFlight Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
-                  <th className="px-3 py-2 font-semibold">Raw METAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedRaceRows.length ? (
-                  displayedRaceRows.map((row) => (
-                    <tr
-                      key={row._id}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatChicagoDateTimeSeconds(row.reportTsUtc)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.displayRace.winner === "preflight"
-                              ? "bg-emerald-50 text-emerald-800"
-                              : row.displayRace.winner === "tgftp"
-                                ? "bg-amber-50 text-amber-900"
-                                : row.displayRace.winner === "tie"
-                                  ? "bg-slate-100 text-slate-800"
-                                  : "bg-black/[0.05] text-black/65"
-                          }`}
-                        >
-                          {formatRaceWinner(row.displayRace.winner)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatLeadMs(row.displayRace.leadMs)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.preflightFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
-                      </td>
-                      <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.preflightRawMetar ??
-                          row.tgftpRawMetar ??
-                          row.rawMetar ??
-                          "—"}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
-                      No publish-race rows stored yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+          </article>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">Forecast History</h2>
-              <p className="mt-1 text-sm text-black/60">
-                Track how MetService changed its predicted high for {date} over
-                successive stored forecast captures, scored against the official
-                NZWN max.
-              </p>
+          <aside className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-5 backdrop-blur sm:p-7">
+            <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-teal-100/45">
+              Source control
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-white">
+              Transparent by default
+            </h2>
+
+            <div className="mt-6 rounded-2xl border border-white/10 bg-black/15 p-4">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-xs text-white/55">Production approval</span>
+                <span
+                  className={`rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${
+                    approved
+                      ? "bg-emerald-300/12 text-emerald-100"
+                      : "bg-amber-300/12 text-amber-100"
+                  }`}
+                >
+                  {approved ? "enabled" : "required"}
+                </span>
+              </div>
+              <code className="mt-4 block break-all rounded-xl bg-black/20 px-3 py-2.5 font-mono text-[11px] text-white/60">
+                {approval?.flagName || APPROVAL_FLAG}
+              </code>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-black/45">
-                Stored every 6 hours
-              </p>
+
+            <dl className="mt-6 space-y-4 text-xs">
+              <div>
+                <dt className="text-white/55">Station</dt>
+                <dd className="mt-1 font-mono text-white/65">
+                  NZWN · Wellington Aero AWS · {STATION_ID}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-white/55">Delivery</dt>
+                <dd className="mt-1 leading-5 text-white/60">
+                  Timestamped MetService public station-page JSON, filtered so an
+                  older cache response cannot replace a newer observation.
+                </dd>
+              </div>
+              <div>
+                <dt className="text-white/55">Last attempt</dt>
+                <dd className="mt-1 font-mono text-white/60">
+                  {formatCollectorTime(collector?.lastAttemptAt)}
+                </dd>
+              </div>
+              {collector?.status === "error" && collector?.lastError ? (
+                <div>
+                  <dt className="text-rose-200/55">Last collector error</dt>
+                  <dd className="mt-1 break-words text-rose-100/70">
+                    {collector.lastError}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+
+            <div className="mt-7 flex flex-wrap gap-2">
+              <a
+                href="https://www.metservice.com/weather-station-location/93439/wellington-international-airport-weather-station"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3.5 py-2 text-xs font-semibold text-white/60 transition hover:border-teal-200/30 hover:text-teal-100"
+              >
+                Open source page <ArrowIcon />
+              </a>
               <Link
                 href="/nzwn/forecast-accuracy"
-                className="text-sm text-blue-700 underline decoration-blue-300 underline-offset-2 hover:decoration-blue-600"
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3.5 py-2 text-xs font-semibold text-white/60 transition hover:border-teal-200/30 hover:text-teal-100"
               >
-                Full accuracy report
+                Forecast archive <ArrowIcon />
               </Link>
             </div>
-          </div>
-
-          {forecastTrendData === undefined ? (
-            <p className="mt-4 text-sm text-black/60">
-              Loading MetService forecast history for {date}...
-            </p>
-          ) : !forecastTrendRows.length ? (
-            <div className="mt-4 rounded-2xl border border-dashed border-black/15 bg-white/70 p-4 text-sm text-black/65">
-              No stored MetService forecast history for {date} yet. This history
-              only starts from saved 6-hour forecast snapshots, so older dates may
-              be empty until new polls accumulate.
-            </div>
-          ) : (
-            <>
-              <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    First Prediction
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold text-black">
-                    {formatTemp(forecastTrendSummary?.firstPoint?.y, displayUnit)}
-                  </p>
-                  <p className="mt-2 text-xs text-black/55">
-                    {formatStoredLocalDateTime(
-                      forecastTrendSummary?.firstPoint?.capturedAtLocal,
-                    )}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    Latest Prediction
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold text-black">
-                    {formatTemp(forecastTrendSummary?.latestPoint?.y, displayUnit)}
-                  </p>
-                  <p className="mt-2 text-xs text-black/55">
-                    {formatStoredLocalDateTime(
-                      forecastTrendSummary?.latestPoint?.capturedAtLocal,
-                    )}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    Net Change
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold text-black">
-                    {formatDelta(forecastTrendSummary?.netDelta, displayUnit)}
-                  </p>
-                  <p className="mt-2 text-xs text-black/55">
-                    {forecastTrendSummary?.changeCount ?? 0} changes
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    Lowest Seen
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold text-black">
-                    {formatTemp(forecastTrendSummary?.minPoint?.y, displayUnit)}
-                  </p>
-                  <p className="mt-2 text-xs text-black/55">
-                    {formatStoredLocalDateTime(
-                      forecastTrendSummary?.minPoint?.capturedAtLocal,
-                    )}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    Highest Seen
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold text-black">
-                    {formatTemp(forecastTrendSummary?.maxPoint?.y, displayUnit)}
-                  </p>
-                  <p className="mt-2 text-xs text-black/55">
-                    {formatStoredLocalDateTime(
-                      forecastTrendSummary?.maxPoint?.capturedAtLocal,
-                    )}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-black/10 bg-white/80 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-black/55">
-                    Official Max
-                  </p>
-                  <p className="mt-2 text-2xl font-semibold text-black">
-                    {formatTemp(officialTrendMax, displayUnit)}
-                  </p>
-                  <p className="mt-2 text-xs text-black/55">
-                    {officialTrendMaxAtLocal
-                      ? formatStoredLocalDateTime(officialTrendMaxAtLocal)
-                      : "Available after METAR ingest"}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-4 overflow-x-auto rounded-2xl border border-black/10 bg-white/75">
-                <div className="min-w-[760px] p-4">
-                  <div className="h-[320px]">
-                    <Line
-                      data={forecastTrendChartData}
-                      options={forecastTrendChartOptions}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 overflow-x-auto">
-                <table className="min-w-full border-collapse text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-black/10 text-black/55">
-                      <th className="px-3 py-2 font-semibold">Captured</th>
-                      <th className="px-3 py-2 font-semibold">Lead</th>
-                      <th className="px-3 py-2 font-semibold">Predicted High</th>
-                      <th className="px-3 py-2 font-semibold">Delta</th>
-                      <th className="px-3 py-2 font-semibold">Err vs official</th>
-                      <th className="px-3 py-2 font-semibold">Day</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {forecastTrendRows.map((row, index) => (
-                      <tr
-                        key={`${row.capturedAt}-${index}`}
-                        className="border-b border-black/5 align-top last:border-b-0"
-                      >
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {formatStoredLocalDateTime(row.capturedAtLocal)}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {Number.isFinite(row.leadDays) ? `${row.leadDays}d` : "—"}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {formatTemp(
-                            row.maxTempC === null
-                              ? null
-                              : displayUnit === "C"
-                                ? row.maxTempC
-                                : (row.maxTempC * 9) / 5 + 32,
-                            displayUnit,
-                          )}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {formatDelta(
-                            row.deltaC === null
-                              ? null
-                              : displayUnit === "C"
-                                ? row.deltaC
-                                : (row.deltaC * 9) / 5,
-                            displayUnit,
-                          )}
-                        </td>
-                        <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                          {formatDelta(
-                            row.errorC === null
-                              ? null
-                              : displayUnit === "C"
-                                ? row.errorC
-                                : (row.errorC * 9) / 5,
-                            displayUnit,
-                          )}
-                        </td>
-                        <td className="px-3 py-3 text-black/70">
-                          {row.dayPhrase || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {officialTrendMaxC !== null && (
-                <p className="mt-3 text-sm text-black/55">
-                  {forecastTrendData?.actualLabel ?? "Official NZWN max"}:{" "}
-                  <span className="font-semibold text-foreground">
-                    {formatTemp(officialTrendMax, displayUnit)}
-                  </span>{" "}
-                  ({forecastTrendData?.obsCount ?? summary?.obsCount ?? 0} official reports)
-                </p>
-              )}
-            </>
-          )}
+          </aside>
         </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">Raw Observations</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Local Time</th>
-                  <th className="px-3 py-2 font-semibold">Type</th>
-                  <th className="px-3 py-2 font-semibold">Temp</th>
-                  <th className="px-3 py-2 font-semibold">First Seen</th>
-                  <th className="px-3 py-2 font-semibold">Source</th>
-                  <th className="px-3 py-2 font-semibold">Raw METAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length ? (
-                  rows.map((row) => (
-                    <tr
-                      key={row._id}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatStoredLocalDateTime(row.obsTimeLocal)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.reportType === "SPECI"
-                              ? "bg-red-50 text-red-800"
-                              : "bg-sky-50 text-sky-800"
-                          }`}
-                        >
-                          {row.reportType}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {displayUnit === "C"
-                          ? formatTemp(row.tempC, "C")
-                          : formatTemp(row.tempF, "F")}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.preflightFirstSeenAt
-                          ? formatAucklandDateTimeSeconds(row.preflightFirstSeenAt)
-                          : "—"}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.source}
-                      </td>
-                      <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-black/55">
-                      No stored rows for this date.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <footer className="mt-4 flex flex-col gap-4 rounded-[1.6rem] border border-white/10 bg-black/10 px-5 py-4 text-xs text-white/50 sm:flex-row sm:items-center sm:justify-between">
+          <form onSubmit={handleDateSubmit} className="flex flex-wrap items-center gap-2">
+            <Link
+              href={`/nzwn/day/${previousDate}`}
+              className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-2 font-semibold text-white/55 transition hover:text-white"
+            >
+              <ArrowIcon direction="left" /> Previous
+            </Link>
+            <input
+              type="date"
+              value={inputDate}
+              max={today}
+              onChange={(event) => setInputDate(event.target.value)}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 font-mono text-[11px] text-white/65 outline-none [color-scheme:dark] focus:border-teal-200/35"
+              aria-label="Select Wellington date"
+            />
+            <button
+              type="submit"
+              className="rounded-full border border-white/10 px-3 py-2 font-semibold text-white/55 transition hover:text-white"
+            >
+              Go
+            </button>
+            {date < today && nextDate ? (
+              <Link
+                href={`/nzwn/day/${nextDate}`}
+                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-2 font-semibold text-white/55 transition hover:text-white"
+              >
+                Next <ArrowIcon />
+              </Link>
+            ) : (
+              <Link
+                href="/nzwn/today"
+                className="inline-flex items-center gap-1 rounded-full border border-teal-200/20 bg-teal-200/[0.07] px-3 py-2 font-semibold text-teal-100/75"
+              >
+                Today <ArrowIcon />
+              </Link>
+            )}
+          </form>
+          <p aria-live="polite">{syncMessage || status.detail}</p>
+        </footer>
       </div>
     </main>
   );

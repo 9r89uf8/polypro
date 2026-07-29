@@ -17,73 +17,33 @@ What this route does:
 
 Example route: `/nzwn/day/2026-03-13`
 
-Purpose: simple official NZWN METAR day chart.
+Purpose: focused Wellington Airport surface-temperature monitor.
 
 What this page displays:
 
-- Header with date navigation:
-  - `Home`
-  - `Current Date YYYY-MM-DD` for the current Wellington local date
-  - two quick previous-day links
-  - date picker + `Go`
-- Unit toggle (`C` / `F`)
-- `Forecast Accuracy` button linking to `/nzwn/forecast-accuracy`
-- `Refresh Current Data` button
-- Live badge when viewing the current Wellington local date
-- live `Wellington Time` clock in the header so Chicago-side viewing does not
-  require a separate timezone lookup
-- Summary cards:
-  - `Latest`
-  - `Day Range`
-  - `Messages`
-  - `Near-Live Now`
-- `NZWN Notes` section:
-  - collapsed behind a button by default
-  - loads only notes tagged with `stationIcao=NZWN`
-  - links to the shared `/notes` workspace with `stationIcao=NZWN` prefilled
-  - displayed NZWN notes can be deleted from the page
-- `MetService + Google` panel:
-  - unofficial MetService airport current for `NZWN`
-  - current-condition details such as humidity, wind, gust, and pressure when
-    present
-  - selected-date MetService forecast summary
-  - Google hourly forecast-derived peak time window
-- `MetService 10-Day Forecast` table:
-  - `Date`
-  - `Min`
-  - `Max`
-  - `Peak Window`
-  - `Day`
-  - `Night`
-- One line chart:
-  - official NZWN `METAR`
-  - off-hour `SPECI` points if the official feed exposes them
-  - blue points for `METAR`, red points for `SPECI`
-  - x-axis is `Pacific/Auckland` local time
-  - on mobile, the chart can be swiped horizontally; the plot area widens with
-    data density instead of shrinking down to the viewport
-- `Latest Raw METAR` panel
-- `Publish Race` table showing recent first-seen timing across official
-  PreFlight and NOAA `tgftp`
-  - publish-race timestamps are displayed in `America/Chicago`
-  - the UI shows PreFlight, `tgftp`, and `tgftp` `Last-Modified`
-- `Forecast History` section:
-  - summary cards for first prediction, latest prediction, net change, lowest
-    seen, highest seen, and official NZWN max
-  - stepped progression chart showing how the predicted high moved across stored
-    forecast captures
-  - capture table with lead day, predicted high, delta vs previous capture, and
-    error vs the official NZWN max
-  - errors are scored against the official NZWN day max from
-    `preflightDailySummaries`, not against the unofficial MetService AWS max
-  - links to the full `/nzwn/forecast-accuracy` page
-- Raw observations table:
-  - `Local Time`
-  - `Type`
-  - `Temp`
-  - `First Seen`
-  - `Source`
-  - `Raw METAR`
+- Compact navigation with Wellington date controls, live Auckland clock, and
+  `C` / `F` toggle.
+- A dominant station `93439` temperature hero with:
+  - explicit near-live, delayed, stale, archive, unavailable, or
+    approval-required state
+  - exact accepted observation time and relative age
+  - change over approximately 30 minutes
+  - manual refresh during the configured collection window
+- Signal summary:
+  - high and low from accepted near-live observations
+  - humidity and pressure
+  - latest official NZWN METAR temperature as a separately labelled comparator
+  - fast-feed difference from the METAR value
+- Responsive temperature trajectory:
+  - teal line for timestamped MetService station `93439` readings
+  - amber reference points for routine official NZWN METAR
+  - Wellington-local time axis and no horizontally oversized mobile plot
+- Wind panel with direction, average speed, gust, collection window, last
+  success, and collector state.
+- Recent accepted station readings, newest first.
+- Source-control panel with the approval flag, source identity, last collector
+  attempt/error, a link to MetService's station page, and a link to the
+  separate forecast archive.
 
 Behavior details:
 
@@ -94,47 +54,31 @@ Behavior details:
     still present in the current PreFlight rolling message window
 - If viewing today in `Pacific/Auckland`:
   - also runs `preflight:pollLatestStationMetar`
-  - the page shows the stored first-seen time for any row captured from the
-    latest official endpoint
-- Each page load also loads a live unofficial weather sidecar:
-  - MetService airport current for `NZWN`
-  - MetService daily forecast for Lyall Bay / Wellington
-  - Google hourly forecast used to derive peak-time windows
-- Manual refresh reruns the same rolling sync, reruns the latest poll when the
-  route date is today, reloads that weather sidecar, and stores a fresh
-  MetService daily-forecast snapshot so `Forecast History` can update without
-  waiting for the 6-hour cron.
+  - Convex query subscriptions update the page when the scheduled station
+    collector accepts a newer source timestamp
+- Manual refresh is available only for today, only when the approval flag is
+  enabled, and only inside the `09:00`-`19:00` Wellington collection window.
+  It polls both the approval-gated station current and the official METAR
+  reference.
+- The page reads its near-live state through
+  `nzwnWeather:getLiveTemperature`; it does not make a MetService request
+  merely because a browser opened the route.
+- If approval is absent, the current-day hero displays `LOCKED`, names the
+  required Convex flag, disables refresh, and does not substitute METAR or
+  another provider as the near-live temperature.
+- With approval enabled, historical routes display stored readings for the
+  selected local date and are labelled as archives. With approval absent,
+  historical protected readings are also withheld.
+- The newest accepted source timestamp drives the hero. Cached responses with
+  an older timestamp are rejected in Convex and cannot move the display
+  backward.
 - PreFlight station/status fetches retry transient transport failures and
   `5xx` responses a few times before surfacing an error, which reduces noisy
   NZWN refresh failures caused by short upstream hiccups.
-- The NZWN notes panel is lazy-loaded:
-  - it only queries station-tagged notes after `Show NZWN Notes` is clicked
-  - notes come from the shared `notes` table and must be saved with
-    `stationIcao=NZWN`
-  - the `Open Notes Workspace` link opens `/notes?stationIcao=NZWN`, which
-    prefills both the new-note station field and the note filter
-- The unofficial current card is independent of the selected historical date.
-- The 5-day forecast and hourly peak windows are limited to the current live
-  provider window, so older selected dates usually show no forecast row.
-- Forecast accuracy on the day page uses official NZWN daily summaries from
-  `preflightDailySummaries`.
-- The unofficial MetService AWS observations and `nzwnDailySummaries` remain a
-  sidecar data source for the near-live current panel and internal diagnostics;
-  they are not the benchmark for forecast accuracy.
 - Observations are deduped by `(stationIcao, date, obsTimeUtc)` in
   `preflightMetarObservations`.
-- Recent publish-race rows are loaded from `preflightPublishRaceReports`.
-- The publish-race logger is separate from the day chart ingest:
-  - official first-seen times are written by `preflight:pollLatestStationMetar`
-  - NOAA `tgftp` first-seen times are written by
-    `preflight:pollLatestNoaaPublishRace`
-  - winner/lead are computed from the earliest two sources seen for the same
-    `reportTsUtc`
-- During the 1-second publish-race watch window, a newly seen official
-  PreFlight report is also upserted immediately into
-  `preflightMetarObservations`, so the `Latest` card, chart, and raw METAR
-  panel can update as soon as PreFlight wins instead of waiting for the
-  separate minute poll.
+- Forecast history remains available at `/nzwn/forecast-accuracy`; the day page
+  no longer loads forecast, publish-race, notes, or forecast-history data.
 
 ## Official Source
 
@@ -146,11 +90,11 @@ Near-live unofficial NZWN airport current JSON:
 
 - `https://www.metservice.com/publicData/webdata/module/currentConditions/93439/93439?pagetype=48hr`
 
-Near-live unofficial NZWN/Wellington forecast JSON:
+Legacy NZWN/Wellington forecast JSON, currently disabled:
 
 - `https://www.metservice.com/publicData/localForecastlyall-bay`
 
-Google hourly forecast used for peak-window timing:
+Google hourly forecast retained only in the unused legacy page-weather action:
 
 - `https://weather.googleapis.com/v1/forecast/hours:lookup?key=...&location.latitude=-41.286&location.longitude=174.777`
 
@@ -166,9 +110,117 @@ Requirements:
 - Package entrypoint:
   - `npm run refresh:preflight-token -- --write-env-file .env.local`
   - add `--set-convex` or `--convex-prod` as needed
-- The unofficial MetService airport current and daily forecast endpoints are
-  public `metservice.com/publicData` JSON feeds.
+- The unofficial MetService airport-current endpoint is a keyless
+  `metservice.com/publicData` JSON feed, but keyless reachability does not grant
+  permission for automated production use. The station-current request and
+  persisted/read data are therefore protected by the dedicated Convex
+  approval flag described below.
+- The old MetService daily-forecast and 48-hour-graph integrations are disabled.
+  The station-current flag does not authorize either source.
 - The Google hourly endpoint uses `GOOGLE_WEATHER_API_KEY`.
+
+### MetService PublicData approval gate
+
+The production source of truth is the server-side Convex environment variable:
+
+```text
+METSERVICE_PUBLICDATA_ACCESS_APPROVED
+```
+
+Only the exact value `true` enables a request. Missing, empty, `false`, and
+other values fail closed. A reachable page or a valid response is not approval.
+The approving authority must be MetService, with scope covering automated
+production retrieval and display of the Wellington station `93439`
+`publicData` response.
+
+Protected entry points:
+
+- manual `nzwnWeather:pollMetServiceCurrentConditions`
+- scheduled internal
+  `nzwnWeather:pollScheduledMetServiceCurrentConditions`
+- the station-current fetch helper immediately before the network request
+- the internal `nzwnWeather:storeMetServiceObservation` mutation immediately
+  before a live row can be stored
+- `nzwnWeather:getLiveTemperature` and
+  `nzwnWeather:getMetServiceObservations` before protected rows are read
+
+The legacy `nzwnWeather:getDayPageWeather` MetService portions,
+`nzwnWeather:getMetServiceHourlyForecasts`, and
+`nzwnWeather:collectForecastSnapshot` return `status: "source_disabled"` and do
+not make a MetService request or expose stored forecast rows. There is no
+scheduled MetService forecast collector.
+
+While approval is absent:
+
+- manual and scheduled current-temperature polls return
+  `status: "approval_required"` before making an external request
+- `nzwnWeather:getLiveTemperature` returns
+  `approval.status: "approval_required"` with `latest`, `latestForDate`, and
+  `summary` set to `null` and `observations` set to `[]`
+- `nzwnWeather:getMetServiceObservations` returns
+  `status: "approval_required"` and `rows: []`
+- previously stored rows can remain in Convex, but are not returned while
+  approval is absent and collector state is not represented as live or
+  configured
+
+After written approval for the required scope:
+
+```text
+npx convex env set METSERVICE_PUBLICDATA_ACCESS_APPROVED true --prod
+```
+
+To disable future requests immediately:
+
+```text
+npx convex env remove METSERVICE_PUBLICDATA_ACCESS_APPROVED --prod
+```
+
+Do not store approval evidence or credentials in the repository. This endpoint
+does not require a credential; the approval flag is intentionally separate
+from technical reachability.
+
+### Near-live temperature collector contract
+
+The redesigned temperature surface reads:
+
+```text
+nzwnWeather:getLiveTemperature({ date: "YYYY-MM-DD" })
+```
+
+It returns:
+
+- station identity (`NZWN`, station `93439`)
+- approval state and the flag name
+- the `09:00`-`19:00` `Pacific/Auckland` collection window
+- collector status, last attempt, last success, and last ingest result
+- the collector's latest stored observation timestamp
+- latest stored station reading and its age
+- ordered readings and a min/max/latest summary for the requested local date
+
+The refresh action is:
+
+```text
+nzwnWeather:pollMetServiceCurrentConditions({ stationIcao: "NZWN" })
+```
+
+Both scheduled and manual polls enforce approval and the collection window
+server-side. The live collector only downloads the timestamped current
+conditions response; it no longer downloads the separate 48-hour graph on
+every poll.
+
+Only a valid source `asAt` value is accepted as the observation timestamp.
+`issuedAt` and collection time are never used as fallbacks. The action checks
+approval before the request, again after the response, and again immediately
+before calling storage. The storage mutation independently checks approval
+before any read or write, closing the revocation race between action and
+mutation. Writes are monotonic for source `metservice_93439`:
+
+- a newer timestamp is inserted
+- an identical timestamp is deduplicated
+- a response older than the latest stored timestamp is rejected
+
+This specifically protects the series from CDN responses that regress to an
+older cached observation.
 
 Known limitation:
 
@@ -224,8 +276,15 @@ Behavior details:
   - stores captured time, target date, lead days, min/max forecast temps, and
     forecast phrase
 - `nzwnMetServiceObservations`
-  - one row per unofficial MetService airport-current or 48h-graph observed
-    reading
+  - current production writes are station-current readings only
+  - legacy 48-hour-graph rows may remain stored but are neither newly collected
+    nor returned by the current-source queries
+  - near-live source rows use `source=metservice_93439`, source `asAt` as
+    `obsTimeUtc`, and monotonic source ordering
+- `nzwnMetServiceCollectorStatus`
+  - one row for `NZWN`
+  - stores last attempt/success, latest source time, last ingest outcome, and an
+    honest approval/window/error state
 - `nzwnDailySummaries`
   - one row per station/date derived from `nzwnMetServiceObservations`
   - used for unofficial sidecar diagnostics, not as the forecast-accuracy
@@ -252,13 +311,16 @@ Convex cron:
   - passes `durationMs=900000`, so each watch runs for 15 minutes
   - polls PreFlight and NOAA `tgftp` every `1s` through the usual late
     post-`:00` / post-`:30` release window
-- `nzwn_metservice_aws_every_10_min`
-  - calls `nzwnWeather:pollMetServiceCurrentConditions`
-  - stores the near-live airport-current reading plus 48h observed backfill
-  - recomputes `nzwnDailySummaries` for every touched local date
-- `nzwn_metservice_forecast_snapshot_6h`
-  - calls `nzwnWeather:collectForecastSnapshot`
-  - stores one immutable MetService daily-forecast snapshot every 6 hours
+- `nzwn_metservice_publicdata_every_2_min`
+  - calls internal
+    `nzwnWeather:pollScheduledMetServiceCurrentConditions`
+  - exits without a request unless approval is the exact string `true`
+  - exits without a request outside `09:00` through `18:59`
+    `Pacific/Auckland`
+  - stores only a newer timestamped station `93439` current reading
+  - deduplicates equal timestamps and rejects cached timestamp regressions
+- MetService daily-forecast snapshot collection is disabled and has no cron;
+  the current-conditions approval flag cannot activate it
 
 NZWN uses both:
 

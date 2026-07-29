@@ -1043,6 +1043,61 @@ Current practical reading:
   - `api.metservice.com`
   - `www.aip.net.nz`
 
+## MetService website temperature path (verified July 2026)
+
+The Wellington Airport weather-station page does not use the commercial
+one-minute API to render its current temperature. Its frontend configuration
+calls a keyless `publicData` module for station `93439`:
+
+- station-page module:
+  - `https://www.metservice.com/publicData/webdata/module/weatherStationCurrentConditions/93439`
+- timestamped module used by this repository:
+  - `https://www.metservice.com/publicData/webdata/module/currentConditions/93439/93439?pagetype=48hr`
+
+The timestamped response identifies Wellington Aero station `93439`, exposes a
+decimal current temperature, and includes the source observation time in
+`asAt`. Live checks found that this source can expose a new minute-resolution
+observation shortly after it is taken, despite CDN caching. Checks also caught
+a later response regressing to an older observation. The production collector
+therefore:
+
+- stores `asAt`, not download time, as `obsTimeUtc`
+- refuses a payload without a valid `asAt`; `issuedAt` is never a fallback
+- inserts only a timestamp newer than the latest stored
+  `metservice_93439` row
+- deduplicates equal timestamps
+- rejects older cached responses
+- fetches only the timestamped current-conditions module during the live poll;
+  it does not also download the 48-hour graph
+
+The route is technically keyless but is not treated as open production data.
+The payload and MetService website terms require permission for automated
+reuse. All production requests are disabled unless the server-side Convex
+value is exactly:
+
+```text
+METSERVICE_PUBLICDATA_ACCESS_APPROVED=true
+```
+
+The approval must come from MetService and cover automated production
+retrieval and display of station `93439`. The collector is deployed with the
+flag absent, checks the flag before the fetch, after the response, immediately
+before storage, and inside the storage mutation. Disabled queries return no
+stored protected observations. Collection is restricted to `09:00`-`19:00`
+`Pacific/Auckland`. The cron wakes every two minutes so it remains DST-safe;
+the action computes Wellington local time and exits without a request outside
+the window.
+
+This flag is scoped only to the timestamped station-current response. It does
+not authorize the MetService daily forecast or 48-hour graph. Those legacy
+fetch paths and the forecast cron are disabled; their old public actions and
+queries return an honest `source_disabled` response instead of making a
+request or exposing stored forecast rows.
+
+The historical `publicData/oneMinObs_wellington-city` route found in archived
+clients now returns `404`; it is not used as a fallback. The public 48-hour
+graph is not a substitute for the near-live timestamped response.
+
 ## Non-finding
 
 - `https://about.metservice.com/preflight` returned a 404 in the sampled run, so

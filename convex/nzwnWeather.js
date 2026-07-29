@@ -1,20 +1,31 @@
-import { actionGeneric, internalMutationGeneric, queryGeneric } from "convex/server";
+import {
+  actionGeneric,
+  internalActionGeneric,
+  internalMutationGeneric,
+  queryGeneric,
+} from "convex/server";
 import { v } from "convex/values";
 
 const AUCKLAND_TIMEZONE = "Pacific/Auckland";
+const METSERVICE_PUBLICDATA_APPROVAL_FLAG =
+  "METSERVICE_PUBLICDATA_ACCESS_APPROVED";
 const METSERVICE_BASE_URL = "https://www.metservice.com/publicData";
 const METSERVICE_CURRENT_CONDITIONS_URL =
   `${METSERVICE_BASE_URL}/webdata/module/currentConditions/93439/93439`;
-const METSERVICE_DAILY_FORECAST_URL =
-  `${METSERVICE_BASE_URL}/localForecastlyall-bay`;
-const METSERVICE_48HOUR_GRAPH_URL =
-  `${METSERVICE_BASE_URL}/webdata/module/48hourGraph/93439/93439`;
 const GOOGLE_WEATHER_BASE_URL = "https://weather.googleapis.com/v1";
 const GOOGLE_HOURLY_FORECAST_URL =
   `${GOOGLE_WEATHER_BASE_URL}/forecast/hours:lookup`;
 const DEFAULT_GOOGLE_LANGUAGE = "en";
 const GOOGLE_HOURLY_FORECAST_HOURS = 120;
 const GOOGLE_HOURLY_PAGE_SIZE = 24;
+const METSERVICE_LIVE_SOURCE = "metservice_93439";
+const METSERVICE_STATION_ID = "93439";
+const COLLECTION_WINDOW_START_MINUTES = 9 * 60;
+const COLLECTION_WINDOW_END_MINUTES = 19 * 60;
+const APPROVAL_REQUIRED_MESSAGE =
+  "MetService PublicData access approval is required before NZWN collection can run.";
+const LEGACY_METSERVICE_SOURCE_DISABLED_MESSAGE =
+  "Legacy MetService forecast and 48-hour graph collection is disabled and is not authorized by the station-current approval flag.";
 const WEATHER_STATUS = {
   OK: "ok",
   ERROR: "error",
@@ -87,6 +98,41 @@ function formatDateTimeInTimezone(epochMs, timeZone) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
+function minuteOfDayInTimezone(epochMs, timeZone) {
+  const parts = getDateParts(getDateTimeFormatter(timeZone), new Date(epochMs));
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
+function isWithinMetServiceCollectionWindow(epochMs) {
+  const minuteOfDay = minuteOfDayInTimezone(epochMs, AUCKLAND_TIMEZONE);
+  return (
+    minuteOfDay >= COLLECTION_WINDOW_START_MINUTES &&
+    minuteOfDay < COLLECTION_WINDOW_END_MINUTES
+  );
+}
+
+function hasApprovedMetServicePublicDataAccess() {
+  return (
+    process.env.METSERVICE_PUBLICDATA_ACCESS_APPROVED === "true"
+  );
+}
+
+function assertApprovedMetServicePublicDataAccess() {
+  if (!hasApprovedMetServicePublicDataAccess()) {
+    throw new Error(APPROVAL_REQUIRED_MESSAGE);
+  }
+}
+
+function normalizeNzwnStationIcao(value) {
+  const stationIcao = String(value ?? NZWN_STATION.stationIcao)
+    .trim()
+    .toUpperCase();
+  if (stationIcao !== NZWN_STATION.stationIcao) {
+    throw new Error("The MetService PublicData collector supports NZWN only.");
+  }
+  return stationIcao;
+}
+
 function roundToTenth(value) {
   return Math.round(value * 10) / 10;
 }
@@ -129,22 +175,6 @@ function parseValidUtcEpoch(value) {
   return Number.isFinite(epoch) ? epoch : null;
 }
 
-function extractIsoDate(rawValue) {
-  const rawString = String(rawValue ?? "");
-  if (/^\d{4}-\d{2}-\d{2}/.test(rawString)) {
-    return rawString.slice(0, 10);
-  }
-  const parsed = Date.parse(rawString);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  const d = new Date(parsed);
-  const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function celsiusTempPair(value) {
   const parsed = toFiniteNumber(value);
   if (parsed === null) {
@@ -169,32 +199,6 @@ function extractGoogleDescription(node) {
     toNonEmptyString(node?.weatherCondition?.type) ??
     null
   );
-}
-
-function normalizeMetServiceForecastDays(payload) {
-  const days = Array.isArray(payload?.days) ? payload.days : [];
-  const normalizedRows = [];
-
-  for (const day of days) {
-    const date = extractIsoDate(day.dateISO);
-    if (!date) {
-      continue;
-    }
-    const maximum = celsiusTempPair(day.max);
-    const minimum = celsiusTempPair(day.min);
-    const dayPhrase = toNonEmptyString(day.forecast);
-
-    normalizedRows.push({
-      date,
-      ...(minimum.tempC !== undefined ? { minTempC: minimum.tempC } : {}),
-      ...(minimum.tempF !== undefined ? { minTempF: minimum.tempF } : {}),
-      ...(maximum.tempC !== undefined ? { maxTempC: maximum.tempC } : {}),
-      ...(maximum.tempF !== undefined ? { maxTempF: maximum.tempF } : {}),
-      ...(dayPhrase ? { dayPhrase } : {}),
-    });
-  }
-
-  return normalizedRows;
 }
 
 function normalizeGoogleHourlyRows(payload, timeZone) {
@@ -262,6 +266,9 @@ function getGoogleWeatherApiKey() {
 }
 
 async function fetchMetServiceCurrentReading({ timeZone }) {
+  // This guard deliberately lives beside the network request as a second
+  // boundary in addition to the manual and scheduled action checks.
+  assertApprovedMetServicePublicDataAccess();
   const url = `${METSERVICE_CURRENT_CONDITIONS_URL}?pagetype=48hr`;
 
   const response = await fetch(url, {
@@ -287,10 +294,14 @@ async function fetchMetServiceCurrentReading({ timeZone }) {
     throw new Error("MetService current conditions response missing temperature.");
   }
 
-  const observedAtUtc =
-    parseValidUtcEpoch(payload?.issuedAt) ??
-    parseValidUtcEpoch(payload?.asAt) ??
-    Date.now();
+  // `asAt` is the source observation timestamp. Never substitute collection
+  // time: dedupe and stale-response rejection depend on the upstream time.
+  const observedAtUtc = parseValidUtcEpoch(payload?.asAt);
+  if (!Number.isFinite(observedAtUtc)) {
+    throw new Error(
+      "MetService current conditions response missing an observation timestamp.",
+    );
+  }
 
   const windNode = Array.isArray(payload?.observations?.wind)
     ? payload.observations.wind[0]
@@ -316,99 +327,6 @@ async function fetchMetServiceCurrentReading({ timeZone }) {
     windDirection: toNonEmptyString(windNode?.direction),
     pressureHpa: toFiniteNumber(pressureNode?.atSeaLevel),
   };
-}
-
-async function fetchMetServiceDailyForecast() {
-  const response = await fetch(METSERVICE_DAILY_FORECAST_URL, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-      "Cache-Control": "no-cache",
-    },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `MetService daily forecast failed (${response.status}): ${text.slice(0, 220)}`,
-    );
-  }
-
-  const payload = await response.json();
-  const forecastDays = normalizeMetServiceForecastDays(payload);
-  if (forecastDays.length === 0) {
-    throw new Error("MetService daily forecast returned no usable rows.");
-  }
-
-  return forecastDays;
-}
-
-async function fetchMetService48HourGraph({ timeZone }) {
-  const response = await fetch(METSERVICE_48HOUR_GRAPH_URL, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-      "Cache-Control": "no-cache",
-    },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `MetService 48h graph failed (${response.status}): ${text.slice(0, 220)}`,
-    );
-  }
-
-  const payload = await response.json();
-  const graphNode = payload?.graph ?? {};
-  const seriesArr = Array.isArray(graphNode?.series) ? graphNode.series : [];
-  const graphData = Array.isArray(graphNode?.columns) ? graphNode.columns : [];
-
-  // Build a set of indices that are "Observed" vs "Forecast".
-  const observedIndices = new Set();
-  const forecastIndices = new Set();
-  for (const s of seriesArr) {
-    const start = Number(s.start) || 0;
-    const count = Number(s.count) || 0;
-    const label = String(s.label || "").toLowerCase();
-    for (let i = start; i < start + count; i += 1) {
-      if (label === "observed") {
-        observedIndices.add(i);
-      } else {
-        forecastIndices.add(i);
-      }
-    }
-  }
-
-  const observed = [];
-  const forecast = [];
-
-  for (let i = 0; i < graphData.length; i += 1) {
-    const point = graphData[i];
-    const validTimeUtc = parseValidUtcEpoch(point?.date);
-    const temp = celsiusTempPair(point?.temperature);
-    if (!Number.isFinite(validTimeUtc) || !Number.isFinite(temp.tempC)) {
-      continue;
-    }
-
-    const windNode = point?.wind;
-    const row = {
-      date: formatDateInTimezone(validTimeUtc, timeZone),
-      validTimeUtc,
-      validTimeLocal: formatDateTimeInTimezone(validTimeUtc, timeZone),
-      tempC: temp.tempC,
-      tempF: temp.tempF,
-      windSpeedKph: toFiniteNumber(windNode?.speed),
-      windDirection: toNonEmptyString(windNode?.direction),
-      rainfall: toFiniteNumber(point?.rainfall),
-    };
-
-    if (observedIndices.has(i)) {
-      observed.push(row);
-    } else {
-      forecast.push(row);
-    }
-  }
-
-  return { observed, forecast };
 }
 
 async function fetchGoogleHourlyForecast({
@@ -474,66 +392,46 @@ export const getDayPageWeather = actionGeneric({
     const googleLanguage = normalizeGoogleLanguage(DEFAULT_GOOGLE_LANGUAGE);
     const todayDate = formatDateInTimezone(Date.now(), NZWN_STATION.timeZone);
     const googleApiKey = getGoogleWeatherApiKey();
-
-    const [currentReading, forecastResult, hourlyResult] = await Promise.all([
-      (async () => {
-        try {
-          return await fetchMetServiceCurrentReading({
-            timeZone: NZWN_STATION.timeZone,
-          });
-        } catch (error) {
-          return {
-            source: "metservice_93439",
-            status: WEATHER_STATUS.ERROR,
-            error: formatErrorMessage(error),
-          };
-        }
-      })(),
-      (async () => {
-        try {
-          const days = await fetchMetServiceDailyForecast();
-          return {
-            status: WEATHER_STATUS.OK,
-            days,
-          };
-        } catch (error) {
-          return {
-            status: WEATHER_STATUS.ERROR,
-            error: formatErrorMessage(error),
-            days: [],
-          };
-        }
-      })(),
-      (async () => {
-        if (!googleApiKey) {
-          return {
-            status: WEATHER_STATUS.ERROR,
-            error: "Missing GOOGLE_WEATHER_API_KEY.",
-            rows: [],
-          };
-        }
-        try {
-          const rows = await fetchGoogleHourlyForecast({
-            station: NZWN_STATION,
-            hours: GOOGLE_HOURLY_FORECAST_HOURS,
-            unit,
-            language: googleLanguage,
-            apiKey: googleApiKey,
-            timeZone: NZWN_STATION.timeZone,
-          });
-          return {
-            status: WEATHER_STATUS.OK,
-            rows,
-          };
-        } catch (error) {
-          return {
-            status: WEATHER_STATUS.ERROR,
-            error: formatErrorMessage(error),
-            rows: [],
-          };
-        }
-      })(),
-    ]);
+    const currentReading = {
+      source: METSERVICE_LIVE_SOURCE,
+      status: "source_disabled",
+      error:
+        "Legacy direct current-condition loading is disabled; use the gated stored live-temperature query.",
+    };
+    const forecastResult = {
+      status: "source_disabled",
+      error: LEGACY_METSERVICE_SOURCE_DISABLED_MESSAGE,
+      days: [],
+    };
+    const hourlyResult = await (async () => {
+      if (!googleApiKey) {
+        return {
+          status: WEATHER_STATUS.ERROR,
+          error: "Missing GOOGLE_WEATHER_API_KEY.",
+          rows: [],
+        };
+      }
+      try {
+        const rows = await fetchGoogleHourlyForecast({
+          station: NZWN_STATION,
+          hours: GOOGLE_HOURLY_FORECAST_HOURS,
+          unit,
+          language: googleLanguage,
+          apiKey: googleApiKey,
+          timeZone: NZWN_STATION.timeZone,
+        });
+        return {
+          status: WEATHER_STATUS.OK,
+          rows,
+        };
+      } catch (error) {
+        return {
+          status: WEATHER_STATUS.ERROR,
+          error: formatErrorMessage(error),
+          rows: [],
+        };
+      }
+    })();
 
     return {
       stationIcao: NZWN_STATION.stationIcao,
@@ -551,7 +449,7 @@ export const getDayPageWeather = actionGeneric({
 });
 
 // ---------------------------------------------------------------------------
-// MetService AWS 10-minute observation storage
+// Approval-gated MetService station 93439 near-live observation storage
 // ---------------------------------------------------------------------------
 
 const storeMetServiceObservation = internalMutationGeneric({
@@ -570,6 +468,38 @@ const storeMetServiceObservation = internalMutationGeneric({
     source: v.string(),
   },
   handler: async (ctx, args) => {
+    if (args.source !== METSERVICE_LIVE_SOURCE) {
+      throw new Error(LEGACY_METSERVICE_SOURCE_DISABLED_MESSAGE);
+    }
+    // Storage is a separate security boundary from the action. This closes
+    // the race where approval is revoked after the HTTP response arrives.
+    assertApprovedMetServicePublicDataAccess();
+    const latest = await ctx.db
+      .query("nzwnMetServiceObservations")
+      .withIndex("by_station_source_ts", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("source", args.source),
+      )
+      .order("desc")
+      .first();
+    if (latest && args.obsTimeUtc < latest.obsTimeUtc) {
+      return {
+        inserted: false,
+        outcome: "stale_rejected",
+        latestObsTimeUtc: latest.obsTimeUtc,
+        latestObsTimeLocal: latest.obsTimeLocal,
+      };
+    }
+    if (latest && args.obsTimeUtc === latest.obsTimeUtc) {
+      return {
+        inserted: false,
+        outcome: "duplicate",
+        latestObsTimeUtc: latest.obsTimeUtc,
+        latestObsTimeLocal: latest.obsTimeLocal,
+      };
+    }
+
     const existing = await ctx.db
       .query("nzwnMetServiceObservations")
       .withIndex("by_station_date_ts", (query) =>
@@ -580,160 +510,223 @@ const storeMetServiceObservation = internalMutationGeneric({
       )
       .first();
     if (existing) {
-      return { inserted: false };
+      return {
+        inserted: false,
+        outcome: "duplicate",
+        latestObsTimeUtc: existing.obsTimeUtc,
+        latestObsTimeLocal: existing.obsTimeLocal,
+      };
     }
     await ctx.db.insert("nzwnMetServiceObservations", {
       ...args,
       createdAt: Date.now(),
     });
-    return { inserted: true };
+    return {
+      inserted: true,
+      outcome: "inserted",
+      latestObsTimeUtc: args.obsTimeUtc,
+      latestObsTimeLocal: args.obsTimeLocal,
+    };
   },
 });
 
 export { storeMetServiceObservation };
 
-const storeMetServiceHourlyForecastBatch = internalMutationGeneric({
+const metServiceCollectorStatusValidator = v.union(
+  v.literal("ok"),
+  v.literal("no_data"),
+  v.literal("error"),
+  v.literal("approval_required"),
+  v.literal("outside_collection_window"),
+);
+
+const writeMetServiceCollectorStatus = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
-    rows: v.array(
-      v.object({
-        date: v.string(),
-        forecastTimeUtc: v.number(),
-        forecastTimeLocal: v.string(),
-        tempC: v.number(),
-        tempF: v.number(),
-        windSpeedKph: v.optional(v.number()),
-        windDirection: v.optional(v.string()),
-        rainfall: v.optional(v.number()),
-      }),
-    ),
-    capturedAt: v.number(),
+    status: metServiceCollectorStatusValidator,
+    configured: v.boolean(),
+    lastAttemptAt: v.number(),
+    lastAttemptAtLocal: v.string(),
+    lastSuccessAt: v.optional(v.number()),
+    lastSuccessAtLocal: v.optional(v.string()),
+    latestObsTimeUtc: v.optional(v.number()),
+    latestObsTimeLocal: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    lastIngestResult: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    let upserted = 0;
-    for (const row of args.rows) {
-      const existing = await ctx.db
-        .query("nzwnMetServiceHourlyForecasts")
-        .withIndex("by_station_date_ts", (query) =>
-          query
-            .eq("stationIcao", args.stationIcao)
-            .eq("date", row.date)
-            .eq("forecastTimeUtc", row.forecastTimeUtc),
-        )
-        .first();
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          tempC: row.tempC,
-          tempF: row.tempF,
-          windSpeedKph: row.windSpeedKph,
-          windDirection: row.windDirection,
-          rainfall: row.rainfall,
-          capturedAt: args.capturedAt,
-        });
-      } else {
-        await ctx.db.insert("nzwnMetServiceHourlyForecasts", {
-          stationIcao: args.stationIcao,
-          ...row,
-          capturedAt: args.capturedAt,
-        });
-      }
-      upserted += 1;
+    const existing = await ctx.db
+      .query("nzwnMetServiceCollectorStatus")
+      .withIndex("by_station", (query) =>
+        query.eq("stationIcao", args.stationIcao),
+      )
+      .first();
+    const patch = {
+      ...args,
+      updatedAt: Date.now(),
+    };
+    if (
+      !args.lastError &&
+      (args.status === "ok" ||
+        args.status === "no_data" ||
+        args.status === "outside_collection_window")
+    ) {
+      patch.lastError = undefined;
     }
-    return { upserted };
+    if (existing) {
+      await ctx.db.patch(existing._id, patch);
+      return { updated: true };
+    }
+    await ctx.db.insert("nzwnMetServiceCollectorStatus", patch);
+    return { updated: true };
   },
 });
 
-export { storeMetServiceHourlyForecastBatch };
+export { writeMetServiceCollectorStatus };
+
+async function runMetServiceCurrentConditionsPoll(ctx, args, mode) {
+  const stationIcao = normalizeNzwnStationIcao(args.stationIcao);
+  const timeZone = NZWN_STATION.timeZone;
+  const lastAttemptAt = Date.now();
+  const lastAttemptAtLocal = formatDateTimeInTimezone(
+    lastAttemptAt,
+    timeZone,
+  );
+
+  if (!hasApprovedMetServicePublicDataAccess()) {
+    await ctx.runMutation("nzwnWeather:writeMetServiceCollectorStatus", {
+      stationIcao,
+      status: "approval_required",
+      configured: false,
+      lastAttemptAt,
+      lastAttemptAtLocal,
+      lastError: APPROVAL_REQUIRED_MESSAGE,
+    });
+    return {
+      status: "approval_required",
+      mode,
+      stationIcao,
+      approvalFlag: METSERVICE_PUBLICDATA_APPROVAL_FLAG,
+      message: APPROVAL_REQUIRED_MESSAGE,
+    };
+  }
+
+  if (!isWithinMetServiceCollectionWindow(lastAttemptAt)) {
+    const message =
+      "NZWN near-live collection runs from 09:00 through 18:59 Pacific/Auckland.";
+    await ctx.runMutation("nzwnWeather:writeMetServiceCollectorStatus", {
+      stationIcao,
+      status: "outside_collection_window",
+      configured: true,
+      lastAttemptAt,
+      lastAttemptAtLocal,
+      lastError: message,
+    });
+    return {
+      status: "outside_collection_window",
+      mode,
+      stationIcao,
+      message,
+    };
+  }
+
+  try {
+    const reading = await fetchMetServiceCurrentReading({ timeZone });
+    // Recheck after the external request. A revoked flag must discard the
+    // response rather than allowing it to enter persistent storage.
+    assertApprovedMetServicePublicDataAccess();
+    const obsDate = formatDateInTimezone(reading.observedAtUtc, timeZone);
+    // Check once more immediately before crossing into the storage mutation;
+    // the mutation enforces the same gate atomically as well.
+    assertApprovedMetServicePublicDataAccess();
+    const storeResult = await ctx.runMutation(
+      "nzwnWeather:storeMetServiceObservation",
+      {
+        stationIcao,
+        date: obsDate,
+        obsTimeUtc: reading.observedAtUtc,
+        obsTimeLocal: reading.observedAtLocal,
+        tempC: reading.tempC,
+        tempF: reading.tempF,
+        relativeHumidity: reading.relativeHumidity ?? undefined,
+        windSpeedKph: reading.windSpeedKph ?? undefined,
+        windGustKph: reading.windGustKph ?? undefined,
+        windDirection: reading.windDirection ?? undefined,
+        pressureHpa: reading.pressureHpa ?? undefined,
+        source: METSERVICE_LIVE_SOURCE,
+      },
+    );
+
+    if (storeResult.inserted) {
+      await ctx.runMutation("nzwnWeather:recomputeDailySummary", {
+        stationIcao,
+        date: obsDate,
+      });
+    }
+
+    const completedAt = Date.now();
+    await ctx.runMutation("nzwnWeather:writeMetServiceCollectorStatus", {
+      stationIcao,
+      status: "ok",
+      configured: true,
+      lastAttemptAt,
+      lastAttemptAtLocal,
+      lastSuccessAt: completedAt,
+      lastSuccessAtLocal: formatDateTimeInTimezone(completedAt, timeZone),
+      latestObsTimeUtc: storeResult.latestObsTimeUtc,
+      latestObsTimeLocal: storeResult.latestObsTimeLocal,
+      lastIngestResult: storeResult.outcome,
+    });
+
+    return {
+      status: "ok",
+      mode,
+      stationIcao,
+      observedAtUtc: reading.observedAtUtc,
+      observedAtLocal: reading.observedAtLocal,
+      tempC: reading.tempC,
+      tempF: reading.tempF,
+      ingestResult: storeResult.outcome,
+      latestObsTimeUtc: storeResult.latestObsTimeUtc,
+      latestObsTimeLocal: storeResult.latestObsTimeLocal,
+    };
+  } catch (error) {
+    const message = formatErrorMessage(error);
+    const approvalRevoked = !hasApprovedMetServicePublicDataAccess();
+    await ctx.runMutation("nzwnWeather:writeMetServiceCollectorStatus", {
+      stationIcao,
+      status: approvalRevoked ? "approval_required" : "error",
+      configured: !approvalRevoked,
+      lastAttemptAt,
+      lastAttemptAtLocal,
+      lastError: approvalRevoked ? APPROVAL_REQUIRED_MESSAGE : message,
+    });
+    return {
+      status: approvalRevoked ? "approval_required" : "error",
+      mode,
+      stationIcao,
+      ...(approvalRevoked
+        ? { approvalFlag: METSERVICE_PUBLICDATA_APPROVAL_FLAG }
+        : {}),
+      message: approvalRevoked ? APPROVAL_REQUIRED_MESSAGE : message,
+    };
+  }
+}
 
 export const pollMetServiceCurrentConditions = actionGeneric({
   args: {
     stationIcao: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
-    const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
-    const timeZone = NZWN_STATION.timeZone;
+  handler: async (ctx, args) =>
+    await runMetServiceCurrentConditionsPoll(ctx, args, "manual"),
+});
 
-    const [reading, graph48h] = await Promise.all([
-      fetchMetServiceCurrentReading({ timeZone }),
-      fetchMetService48HourGraph({ timeZone }).catch((error) => ({
-        observed: [],
-        forecast: [],
-        error: formatErrorMessage(error),
-      })),
-    ]);
-
-    const touchedDates = new Set();
-    const obsDate = formatDateInTimezone(reading.observedAtUtc, timeZone);
-    touchedDates.add(obsDate);
-
-    // Store the live 10-minute current reading.
-    await ctx.runMutation("nzwnWeather:storeMetServiceObservation", {
-      stationIcao,
-      date: obsDate,
-      obsTimeUtc: reading.observedAtUtc,
-      obsTimeLocal: reading.observedAtLocal,
-      tempC: reading.tempC,
-      tempF: reading.tempF,
-      relativeHumidity: reading.relativeHumidity ?? undefined,
-      windSpeedKph: reading.windSpeedKph ?? undefined,
-      windGustKph: reading.windGustKph ?? undefined,
-      windDirection: reading.windDirection ?? undefined,
-      pressureHpa: reading.pressureHpa ?? undefined,
-      source: "metservice_93439",
-    });
-
-    // Store hourly observed points from the 48h graph (backfills gaps).
-    for (const obs of graph48h.observed) {
-      touchedDates.add(obs.date);
-      await ctx.runMutation("nzwnWeather:storeMetServiceObservation", {
-        stationIcao,
-        date: obs.date,
-        obsTimeUtc: obs.validTimeUtc,
-        obsTimeLocal: obs.validTimeLocal,
-        tempC: obs.tempC,
-        tempF: obs.tempF,
-        windSpeedKph: obs.windSpeedKph ?? undefined,
-        windDirection: obs.windDirection ?? undefined,
-        source: "metservice_48h_observed",
-      });
-    }
-
-    // Store hourly forecast points (upsert — forecast values change each poll).
-    if (graph48h.forecast.length > 0) {
-      await ctx.runMutation("nzwnWeather:storeMetServiceHourlyForecastBatch", {
-        stationIcao,
-        rows: graph48h.forecast.map((row) => ({
-          date: row.date,
-          forecastTimeUtc: row.validTimeUtc,
-          forecastTimeLocal: row.validTimeLocal,
-          tempC: row.tempC,
-          tempF: row.tempF,
-          windSpeedKph: row.windSpeedKph ?? undefined,
-          windDirection: row.windDirection ?? undefined,
-          rainfall: row.rainfall ?? undefined,
-        })),
-        capturedAt: Date.now(),
-      });
-    }
-
-    // Recompute every local date touched by the live reading or 48h backfill.
-    for (const date of Array.from(touchedDates).sort()) {
-      await ctx.runMutation("nzwnWeather:recomputeDailySummary", {
-        stationIcao,
-        date,
-      });
-    }
-
-    return {
-      status: "ok",
-      observedAtUtc: reading.observedAtUtc,
-      observedAtLocal: reading.observedAtLocal,
-      tempC: reading.tempC,
-      tempF: reading.tempF,
-      graph48hObserved: graph48h.observed.length,
-      graph48hForecast: graph48h.forecast.length,
-    };
+export const pollScheduledMetServiceCurrentConditions = internalActionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
   },
+  handler: async (ctx, args) =>
+    await runMetServiceCurrentConditionsPoll(ctx, args, "scheduled"),
 });
 
 export const getMetServiceHourlyForecasts = queryGeneric({
@@ -745,14 +738,12 @@ export const getMetServiceHourlyForecasts = queryGeneric({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
       throw new Error("Date must be in YYYY-MM-DD format.");
     }
-    const rows = await ctx.db
-      .query("nzwnMetServiceHourlyForecasts")
-      .withIndex("by_station_date_ts", (query) =>
-        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
-      )
-      .collect();
-    rows.sort((a, b) => a.forecastTimeUtc - b.forecastTimeUtc);
-    return { rows };
+    normalizeNzwnStationIcao(args.stationIcao);
+    return {
+      status: "source_disabled",
+      message: LEGACY_METSERVICE_SOURCE_DISABLED_MESSAGE,
+      rows: [],
+    };
   },
 });
 
@@ -765,126 +756,211 @@ export const getMetServiceObservations = queryGeneric({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
       throw new Error("Date must be in YYYY-MM-DD format.");
     }
+    const stationIcao = normalizeNzwnStationIcao(args.stationIcao);
+    if (!hasApprovedMetServicePublicDataAccess()) {
+      return {
+        status: "approval_required",
+        approval: {
+          approved: false,
+          status: "approval_required",
+          flagName: METSERVICE_PUBLICDATA_APPROVAL_FLAG,
+        },
+        rows: [],
+      };
+    }
     const rows = await ctx.db
       .query("nzwnMetServiceObservations")
       .withIndex("by_station_date_ts", (query) =>
-        query.eq("stationIcao", args.stationIcao).eq("date", args.date),
+        query.eq("stationIcao", stationIcao).eq("date", args.date),
       )
       .collect();
-    rows.sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
-    return { rows };
+    const currentRows = rows
+      .filter((row) => row.source === METSERVICE_LIVE_SOURCE)
+      .sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
+    return {
+      status: "ok",
+      approval: {
+        approved: true,
+        status: "approved",
+        flagName: METSERVICE_PUBLICDATA_APPROVAL_FLAG,
+      },
+      rows: currentRows,
+    };
   },
 });
 
-// ---------------------------------------------------------------------------
-// Forecast prediction snapshot storage
-// ---------------------------------------------------------------------------
-
-const storeForecastPredictionBatch = internalMutationGeneric({
+export const getLiveTemperature = queryGeneric({
   args: {
-    rows: v.array(
-      v.object({
-        stationIcao: v.string(),
-        provider: v.literal("metservice"),
-        targetDate: v.string(),
-        capturedAt: v.number(),
-        capturedAtLocal: v.string(),
-        captureDate: v.string(),
-        leadDays: v.number(),
-        minTempC: v.optional(v.number()),
-        minTempF: v.optional(v.number()),
-        maxTempC: v.optional(v.number()),
-        maxTempF: v.optional(v.number()),
-        dayPhrase: v.optional(v.string()),
-      }),
-    ),
+    date: v.string(),
   },
   handler: async (ctx, args) => {
-    let inserted = 0;
-    let skipped = 0;
-    const now = Date.now();
-    for (const row of args.rows) {
-      const existing = await ctx.db
-        .query("nzwnForecastPredictions")
-        .withIndex("by_station_provider_target_capturedAt", (query) =>
-          query
-            .eq("stationIcao", row.stationIcao)
-            .eq("provider", row.provider)
-            .eq("targetDate", row.targetDate)
-            .eq("capturedAt", row.capturedAt),
-        )
-        .first();
-      if (existing) {
-        skipped += 1;
-        continue;
-      }
-      await ctx.db.insert("nzwnForecastPredictions", {
-        ...row,
-        createdAt: now,
-        updatedAt: now,
-      });
-      inserted += 1;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
+      throw new Error("Date must be in YYYY-MM-DD format.");
     }
-    return { inserted, skipped };
+
+    const now = Date.now();
+    const approved = hasApprovedMetServicePublicDataAccess();
+    const activeNow = isWithinMetServiceCollectionWindow(now);
+    if (!approved) {
+      return {
+        stationIcao: NZWN_STATION.stationIcao,
+        stationName: NZWN_STATION.stationName,
+        stationId: METSERVICE_STATION_ID,
+        sourceLabel: "MetService Wellington Aero (93439)",
+        approval: {
+          approved: false,
+          status: "approval_required",
+          flagName: METSERVICE_PUBLICDATA_APPROVAL_FLAG,
+        },
+        collectionWindow: {
+          timeZone: AUCKLAND_TIMEZONE,
+          startLocal: "09:00",
+          endLocal: "19:00",
+          activeNow,
+        },
+        collector: {
+          status: "approval_required",
+          configured: false,
+          lastError: APPROVAL_REQUIRED_MESSAGE,
+        },
+        latest: null,
+        latestAgeMinutes: null,
+        latestForDate: null,
+        observations: [],
+        summary: null,
+      };
+    }
+
+    const allDateRows = await ctx.db
+      .query("nzwnMetServiceObservations")
+      .withIndex("by_station_date_ts", (query) =>
+        query
+          .eq("stationIcao", NZWN_STATION.stationIcao)
+          .eq("date", args.date),
+      )
+      .collect();
+    const observations = allDateRows
+      .filter((row) => row.source === METSERVICE_LIVE_SOURCE)
+      .sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
+    const [latest, storedCollector] = await Promise.all([
+      ctx.db
+        .query("nzwnMetServiceObservations")
+        .withIndex("by_station_source_ts", (query) =>
+          query
+            .eq("stationIcao", NZWN_STATION.stationIcao)
+            .eq("source", METSERVICE_LIVE_SOURCE),
+        )
+        .order("desc")
+        .first(),
+      ctx.db
+        .query("nzwnMetServiceCollectorStatus")
+        .withIndex("by_station", (query) =>
+          query.eq("stationIcao", NZWN_STATION.stationIcao),
+        )
+        .first(),
+    ]);
+
+    let maxRow = null;
+    let minRow = null;
+    for (const row of observations) {
+      if (!maxRow || row.tempC > maxRow.tempC) {
+        maxRow = row;
+      }
+      if (!minRow || row.tempC < minRow.tempC) {
+        minRow = row;
+      }
+    }
+    const latestForDate =
+      observations.length > 0 ? observations[observations.length - 1] : null;
+    const summary =
+      observations.length > 0
+        ? {
+            obsCount: observations.length,
+            maxTempC: maxRow.tempC,
+            maxTempF: maxRow.tempF,
+            maxTempAtUtc: maxRow.obsTimeUtc,
+            maxTempAtLocal: maxRow.obsTimeLocal,
+            minTempC: minRow.tempC,
+            minTempF: minRow.tempF,
+            minTempAtUtc: minRow.obsTimeUtc,
+            minTempAtLocal: minRow.obsTimeLocal,
+            latestObsTimeUtc: latestForDate.obsTimeUtc,
+            latestObsTimeLocal: latestForDate.obsTimeLocal,
+          }
+        : null;
+    const collectorStatus = !activeNow
+      ? "outside_collection_window"
+      : storedCollector?.status ?? "no_data";
+    const collectorError =
+      collectorStatus === "outside_collection_window"
+        ? "NZWN near-live collection runs from 09:00 through 18:59 Pacific/Auckland."
+        : collectorStatus === "error"
+          ? storedCollector?.lastError
+          : null;
+
+    return {
+      stationIcao: NZWN_STATION.stationIcao,
+      stationName: NZWN_STATION.stationName,
+      stationId: METSERVICE_STATION_ID,
+      sourceLabel: "MetService Wellington Aero (93439)",
+      approval: {
+        approved,
+        status: approved ? "approved" : "approval_required",
+        flagName: METSERVICE_PUBLICDATA_APPROVAL_FLAG,
+      },
+      collectionWindow: {
+        timeZone: AUCKLAND_TIMEZONE,
+        startLocal: "09:00",
+        endLocal: "19:00",
+        activeNow,
+      },
+      collector: {
+        status: collectorStatus,
+        configured: approved,
+        ...(storedCollector?.lastAttemptAt !== undefined
+          ? { lastAttemptAt: storedCollector.lastAttemptAt }
+          : {}),
+        ...(storedCollector?.lastAttemptAtLocal
+          ? { lastAttemptAtLocal: storedCollector.lastAttemptAtLocal }
+          : {}),
+        ...(storedCollector?.lastSuccessAt !== undefined
+          ? { lastSuccessAt: storedCollector.lastSuccessAt }
+          : {}),
+        ...(storedCollector?.lastSuccessAtLocal
+          ? { lastSuccessAtLocal: storedCollector.lastSuccessAtLocal }
+          : {}),
+        ...(storedCollector?.latestObsTimeUtc !== undefined
+          ? { latestObsTimeUtc: storedCollector.latestObsTimeUtc }
+          : {}),
+        ...(storedCollector?.latestObsTimeLocal
+          ? { latestObsTimeLocal: storedCollector.latestObsTimeLocal }
+          : {}),
+        ...(storedCollector?.lastIngestResult
+          ? { lastIngestResult: storedCollector.lastIngestResult }
+          : {}),
+        ...(collectorError ? { lastError: collectorError } : {}),
+      },
+      latest,
+      latestAgeMinutes: latest
+        ? Math.max(0, Math.round(((now - latest.obsTimeUtc) / 60_000) * 10) / 10)
+        : null,
+      latestForDate,
+      observations,
+      summary,
+    };
   },
 });
-
-export { storeForecastPredictionBatch };
 
 export const collectForecastSnapshot = actionGeneric({
   args: {
     stationIcao: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
-    const stationIcao = args.stationIcao ?? NZWN_STATION.stationIcao;
-    const timeZone = AUCKLAND_TIMEZONE;
-    const now = Date.now();
-    const capturedAtLocal = formatDateTimeInTimezone(now, timeZone);
-    const captureDate = formatDateInTimezone(now, timeZone);
-
-    const forecastDays = await fetchMetServiceDailyForecast();
-
-    const rows = [];
-    for (const day of forecastDays) {
-      const targetDate = day.date;
-      if (!targetDate) continue;
-      // Compute leadDays as difference between targetDate and captureDate
-      const targetEpoch = Date.parse(targetDate + "T00:00:00Z");
-      const captureEpoch = Date.parse(captureDate + "T00:00:00Z");
-      const leadDays = Math.round((targetEpoch - captureEpoch) / (24 * 60 * 60 * 1000));
-
-      rows.push({
-        stationIcao,
-        provider: "metservice",
-        targetDate,
-        capturedAt: now,
-        capturedAtLocal,
-        captureDate,
-        leadDays,
-        ...(day.minTempC !== undefined ? { minTempC: day.minTempC } : {}),
-        ...(day.minTempF !== undefined ? { minTempF: day.minTempF } : {}),
-        ...(day.maxTempC !== undefined ? { maxTempC: day.maxTempC } : {}),
-        ...(day.maxTempF !== undefined ? { maxTempF: day.maxTempF } : {}),
-        ...(day.dayPhrase ? { dayPhrase: day.dayPhrase } : {}),
-      });
-    }
-
-    if (rows.length === 0) {
-      return { status: "error", error: "No forecast days to store." };
-    }
-
-    const result = await ctx.runMutation(
-      "nzwnWeather:storeForecastPredictionBatch",
-      { rows },
-    );
-
+  handler: async (_ctx, args) => {
+    const stationIcao = normalizeNzwnStationIcao(args.stationIcao);
     return {
-      status: "ok",
-      capturedAt: now,
-      capturedAtLocal,
-      captureDate,
-      forecastDayCount: forecastDays.length,
-      ...result,
+      status: "source_disabled",
+      stationIcao,
+      message: LEGACY_METSERVICE_SOURCE_DISABLED_MESSAGE,
     };
   },
 });

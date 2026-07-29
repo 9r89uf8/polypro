@@ -808,7 +808,30 @@ export default defineSchema({
     pressureHpa: v.optional(v.number()),
     source: v.string(),
     createdAt: v.number(),
-  }).index("by_station_date_ts", ["stationIcao", "date", "obsTimeUtc"]),
+  })
+    .index("by_station_date_ts", ["stationIcao", "date", "obsTimeUtc"])
+    .index("by_station_source_ts", ["stationIcao", "source", "obsTimeUtc"]),
+
+  nzwnMetServiceCollectorStatus: defineTable({
+    stationIcao: v.string(),
+    status: v.union(
+      v.literal("ok"),
+      v.literal("no_data"),
+      v.literal("error"),
+      v.literal("approval_required"),
+      v.literal("outside_collection_window"),
+    ),
+    configured: v.boolean(),
+    lastAttemptAt: v.number(),
+    lastAttemptAtLocal: v.string(),
+    lastSuccessAt: v.optional(v.number()),
+    lastSuccessAtLocal: v.optional(v.string()),
+    latestObsTimeUtc: v.optional(v.number()),
+    latestObsTimeLocal: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    lastIngestResult: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_station", ["stationIcao"]),
 
   nzwnMetServiceHourlyForecasts: defineTable({
     stationIcao: v.string(),

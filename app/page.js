@@ -47,7 +47,7 @@ export default function Home() {
             href="/nzwn/today"
             className="inline-flex items-center rounded-full border border-teal-200 bg-teal-50 px-5 py-2.5 text-sm font-semibold text-teal-900 transition hover:-translate-y-0.5 hover:border-teal-400"
           >
-            Open NZWN Official Day Chart
+            Open NZWN Surface Monitor
           </Link>
           <Link
             href="/paris/today"
