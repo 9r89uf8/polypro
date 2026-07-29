@@ -258,9 +258,19 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
-// Captures immutable Weather.com RKSI airport daily and hourly forecasts. The
-// daily calendar high supplies the chart value; hourly values supply its time
-// estimate, revision history, and observed-versus-forecast diagnostics.
+// Captures the canonical KMA/AMO RKSI airport forecast twice per hour. The
+// scheduled action fails closed before the external request unless the
+// dedicated server-side approval flag is exactly true.
+crons.cron(
+  "seoul_kma_amo_airport_forecast_every_30_min",
+  "5,35 * * * *",
+  internal.seoulKmaForecast.collectScheduledAirportForecast,
+  { stationIcao: "RKSI" },
+);
+
+// Retains Weather.com daily/hourly guidance only as a separately labeled
+// secondary comparison. It never supplies or replaces the canonical KMA high,
+// hourly curve, or peak time.
 crons.cron(
   "seoul_weathercom_forecast_every_15_min",
   "2,17,32,47 * * * *",

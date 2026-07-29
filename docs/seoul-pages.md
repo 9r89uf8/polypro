@@ -1,7 +1,8 @@
 # Seoul RKSI live-temperature page
 
-This document describes the focused RKSI 15L temperature, cloud-cover, and
-GK2A solar-heating timeline, plus the collectors that feed it.
+This document describes the focused RKSI 15L temperature timeline, observed
+cloud-cover estimates, KMA forecast conditions/ceilings, and GK2A solar-heating
+panel, plus the collectors that feed them.
 
 ## Routes
 
@@ -19,39 +20,36 @@ live-source status cards, a compact maximum outlook, and one horizontally
 scrollable full-day chart. Large provider-card and high-prediction revision
 panels are not rendered.
 
-Forecast-capture machinery remains connected because it supplies the
-Weather.com raw daily-high marker, its hourly peak-time estimate, coming-hour
-cloud cover, and the compact outlook. The backend still stores internal
-prediction revisions for historical retention and evaluation, but the route
-does not plot a separate tracker temperature curve.
+Forecast-capture machinery remains connected because it supplies KMA/AMO's
+official RKSI daily high, hourly temperatures and peak-time estimate, exact
+condition phrases, ceilings, and the compact outlook. Weather.com history
+remains visible only as an explicitly secondary comparison. The backend still
+stores internal prediction revisions for historical retention and evaluation,
+but the route derives its displayed expected maximum directly from the KMA
+capture plus the observed floor and does not plot a tracker curve.
 
 The maximum outlook has six concise readings:
 
 - the freshest displayed representative AMOS temperature;
 - the observed AMOS maximum and its first occurrence;
-- an expected maximum using the stored prediction, never lower than the
+- an expected maximum using KMA's published daily high, never lower than the
   observed maximum;
-- the stored heuristic guidance range, with both its lower bound and high end
-  protected from contradicting the observed/predicted maximum;
-- the stored likely peak window, with the observed-maximum time as an explicit
-  fallback;
+- KMA's published daily high as a separate raw official reading;
+- KMA's hottest hourly temperature and its first-to-last tied-hour window;
 - a robust 60-minute AMOS trend in degrees per hour.
 
-Only current Weather.com-only model version `rksi15l-weathercom-v4` is usable by
-this panel; an older multi-provider revision cannot be relabeled as Weather.com
-guidance. For the current or a future date, that stored prediction must also be
-no more than 45 minutes old, and its underlying Weather.com capture must be no
-more than 90 minutes old. A fresh recomputation therefore cannot make stale
-provider input look fresh. Otherwise the panel says it is using an observed-only
-fallback. Historical dates can use their retained final current-model
-prediction; when none exists, the final observed maximum and occurrence time
-remain available. The guidance interval is labeled a heuristic range rather
-than a statistically calibrated confidence interval. The trend uses the median
+The panel accepts only an approved KMA capture as forecast guidance; an older
+Weather.com-only or multi-provider prediction revision cannot be relabeled as
+official KMA guidance. A fresh query cannot make stale provider input look
+fresh. When KMA collection is approval-gated or no stored KMA daily maximum is
+available, the expected maximum falls back to the observed maximum and
+Weather.com never fills the gap. A stale stored KMA daily maximum may remain
+visible only with the stale label described below. The trend uses the median
 of pairwise slopes separated by at least ten minutes and requires at least 45
 minutes of coverage in the trailing hour, which reduces sensitivity to one
 quantized or anomalous minute. On today's page the trend is suppressed whenever
-the newest AMOS row is delayed or stale; an old trailing hour is never presented
-as current warming or cooling.
+the newest AMOS row is delayed or stale; an old trailing hour is never
+presented as current warming or cooling.
 
 The primary visualization has two observed series:
 
@@ -68,11 +66,12 @@ The primary visualization has two observed series:
 
 The chart does not add a five-minute AMOS series or a separate live-tracker
 temperature curve. A green diamond and horizontal dashed line mark the first
-occurrence of the displayed representative AMOS maximum. Its Weather.com raw
-daily-high marker remains as described below. Hourly revision diagnostics add a
-blue dashed latest-stored temperature curve and a faint,
-capture-time-labeled morning-baseline curve; these raw-provider curves do not
-restore a separate tracker or blended prediction series.
+occurrence of the displayed representative AMOS maximum. A violet dashed
+`KMA/AMO · official RKSI airport forecast` curve is the primary temperature
+guidance, and its published daily-high marker remains as described below.
+Secondary Weather.com revision diagnostics add a thinner blue latest-stored
+curve and a faint, capture-time-labeled morning-baseline curve. The secondary
+curves do not restore a tracker, blend into KMA, or fill a missing KMA value.
 
 The x-axis is a complete `00:00–23:59` Seoul local day. The current Seoul minute
 is marked when the selected date is today. A date-specific orange sunset line
@@ -82,45 +81,48 @@ on a forecast-provider response.
 
 Peak timing has two deliberately separate visual references:
 
-- a rose circle marks Weather.com's raw RKSI airport calendar-day high at the
-  first tied maximum in its returned hourly values; it deliberately has no
-  vertical guide, in-plot label, or legend entry, while its exact provider,
-  temperature, and forecast hour remain available in the tooltip and
+- a rose circle marks KMA/AMO's published RKSI daily high at the first tied
+  maximum in its hourly airport forecast; it deliberately has no vertical
+  guide, in-plot label, or legend entry, while its exact provider, temperature,
+  forecast hour, condition, and ceiling remain available in the tooltip and
   screen-reader description;
 - a violet historical reference shows the median first occurrence of the daily
   15L maximum at `13:44 KST`, with a low-opacity middle-50% band from
   `12:20–14:39 KST`, only for March-through-July dates.
 
-The marker is Weather.com-only. Its vertical value is
-`calendarDayTemperatureMax` from Weather.com's RKSI airport daily forecast.
-Its horizontal position is the earliest tied maximum among Weather.com's
-hourly temperatures for the same date. The latter is a discrete peak-time
-estimate, not an exact instant. Weather.com's daily and hourly products can
-disagree, so the UI does not claim that the daily maximum literally occurs at
-that hourly value.
+The marker is KMA-only. Its vertical value is KMA/AMO's published daily maximum
+for RKSI, floored by the observed AMOS maximum only in the separate expected-max
+reading. Its horizontal position is the earliest tied maximum among KMA's
+hourly temperatures for the same date. That hour is a discrete peak-time
+estimate, not an exact instant; if the daily and hourly values disagree, the UI
+does not claim that the published daily maximum literally occurs at the
+selected hourly value.
 
-Both calls select Incheon International Airport explicitly with
-`icaoCode=RKSI`, rather than Weather.com's canonical Seoul-city place ID or a
-coordinate-to-locality lookup. This is why the marker is labeled
-`Weather.com · RKSI`. Live Weather.com location verification on 2026-07-29 KST
-returned `airportName=Incheon Intl Airport` and `icaoCode=RKSI`; the former
-coordinate lookup resolved to the `Unseo-dong` neighborhood without an airport
-identifier.
+The source URL selects Incheon International Airport explicitly with
+`icaoCode=RKSI`:
 
-For today and future dates, the chart can read a fresh Weather.com capture
-directly so provider revisions appear after the next scheduled capture. The
-backend also merges recent Weather.com hourly captures by timestamp: newest
-still-returned values win, while elapsed hours remain available from the last
-capture that contained them. The 112-capture window covers 28 hours at the
-15-minute cadence. A newer direct capture wins over an older stored revision.
-The hourly revision/departure diagnostics use the immutable child-row history
-rather than being limited to that recent merge window.
-For a past date, the chart uses the Weather.com high/time pair retained in that
-date's immutable prediction revision. Older revisions without a Weather.com
-peak-time estimate are not backfilled and render no marker. The scroller has no
-dedicated Weather.com peak label or capture sublabel; only the rose circle is
-drawn, with its exact high and hourly time estimate available on hover and in
-the screen-reader description.
+```text
+https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI
+```
+
+It does not use a Seoul-city place ID or coordinate-to-locality lookup. For
+today and future dates, the chart reads the latest successful immutable KMA
+capture and marks it stale when appropriate. Historical pages use
+already-stored KMA captures and do not fetch a backfill. A date without an
+approved KMA daily/hourly pair renders no KMA marker; a secondary Weather.com
+high or hour is never substituted. The KMA daily row, hourly curve, conditions,
+ceilings, peak time, and source timestamp all come from that same capture;
+hours from older revisions are not carried into it.
+Successful collection also requires the returned page's
+`span.airport_spl` element to display `RKSI`; a missing or different ICAO is a
+provenance mismatch, so a redirect or default-airport page cannot be stored as
+the RKSI forecast.
+
+The existing Weather.com child-row history still supports its secondary
+latest, morning-baseline, revision, and AMOS-departure diagnostics. Its
+provider completion times remain intact, but all visible Weather.com labels
+say `Secondary Weather.com` and those rows have no authority over the primary
+marker or curve.
 
 The historical reference is a fixed, versioned snapshot of 130 complete 15L
 days from `2026-03-20` through `2026-07-27`. Its circular clock-time average was
@@ -136,14 +138,15 @@ labels retain one decimal place, matching the AMOS sensor resolution instead of
 rounding several fractional ticks to the same whole degree.
 
 The chart reserves a 24-cell `HOURLY SKY COVER` strip immediately above the
-temperature plot. Meter height is the primary visual encoding, so a user can
-compare past and coming hours without decoding aviation abbreviations:
+temperature plot. Past and future cells intentionally use different kinds of
+evidence:
 
 - solid slate cells summarize completed-hour METAR observations;
 - the current hour is clipped at the live `NOW` boundary: its elapsed observed
   portion uses an amber top edge and its not-yet-observed remainder stays
   hatched;
-- diagonally patterned cyan cells show upcoming model cloud-cover percentages;
+- violet forecast cells show KMA/AMO's exact upcoming categorical condition
+  and, when published, its separate ceiling in feet;
 - missing or non-quantifiable hours stay hatched and explicitly say `NO DATA`,
   `NO LOW CLOUD`, `SKY HIDDEN`, `VARIABLE`, or `PARTIAL` rather than looking
   like clear sky.
@@ -171,43 +174,39 @@ cover, while `VV` means the sky is obscured rather than a known percentage.
 Those states therefore remain textual. AMOS `cld1`, `cld2`, and `cld3` are
 detected layer bases without coverage amount and are not used.
 
-For each completed hour with a numeric METAR-sample estimate, the route also
-compares the latest Weather.com `cloudCoverPct` capture completed strictly
-before that hour. The signed value is **forecast minus observed**: `+10%` means
-the forecast was 10 percentage points cloudier than the METAR sample, while
-`-20%` means it was 20 percentage points clearer. This delta appears in the
-hourly strip, latest completed comparison, and semantic detail table. A
-forecast captured at or after the valid hour is never scored against that hour.
-The live partial hour, non-quantifiable observations, and hours without a
-strictly pre-hour forecast show no delta.
+KMA's phrases are not percentages. The route preserves values such as
+`Clear`, `Partly cloudy`, `Mostly cloudy`, and `Haze` verbatim and never maps
+them to a numeric amount. A KMA ceiling is shown beside the condition but is
+not treated as cloud amount. If a future KMA row has neither a condition nor a
+ceiling, the cell says `KMA condition unavailable`; Weather.com is not used to
+fill it.
 
-Upcoming full-hour cells use the exact stored `cloudCoverPct` from the latest
-successful Weather.com hourly response rather than rounding it to a five-point
-increment. No provider blending or stored legacy prediction curve is used.
-Weather.com is identified directly in the cloud detail text, and the header and
-detail rows show source response-completion time. Each merged hour retains its
-own source-capture time, so an elapsed value carried from an older response is
-not mislabeled with the newest response's timestamp. The header reports the
-next displayed forecast hour's vintage. On today/future pages, a capture older
-than 90 minutes is retained as last-successful guidance but is marked stale in
-amber; values older than the existing 12-hour hard limit are not shown. The
-current hour's hourly guidance is not relabeled as a forecast for only the
-remaining minutes.
+Weather.com's numeric cloud field survives only as a clearly labeled secondary
+completed-hour diagnostic. For each completed hour with a numeric
+METAR-sample estimate, the route can compare the latest Weather.com
+`cloudCoverPct` captured strictly before that hour. The signed value is
+**secondary Weather.com forecast minus observed**: `+10%` means the secondary
+forecast was 10 percentage points cloudier than the METAR sample, while `-20%`
+means it was 20 percentage points clearer. A forecast captured at or after the
+valid hour is never scored against that hour. The live partial hour,
+non-quantifiable observations, and hours without a strictly pre-hour secondary
+forecast show no delta. This score does not alter KMA's primary condition or
+the high prediction.
 
-The header repeats the latest observed-hour summary, latest completed
-forecast-versus-observed cloud comparison, and next available full forecast-hour
-percentage. `Jump to now` and a one-time initial scroll position keep the
+The header repeats the latest observed-hour summary and the next available KMA
+condition/ceiling. `Jump to now` and a one-time initial scroll position keep the
 observed/forecast boundary visible on the 2,400-pixel chart. A collapsible
-semantic table lists all 24 hours, sources, values, ranges, data coverage,
-strictly pre-hour forecast values, capture times, and signed cloud differences;
-the same information is attached to the chart for screen readers. METAR
-temperature tooltips retain the original sky/ceiling detail, while the
-provider-peak tooltip identifies its provider, temperature, and forecast hour.
-Weather.com hourly-point tooltips show the selected morning baseline, latest and
-previous-distinct forecasts, capture/detection times, latest strictly pre-hour
-forecast, matched AMOS reading, and available departures. A separate
-collapsible semantic table exposes the same hourly revision and departure
-details without requiring pointer access to the canvas.
+semantic table lists all 24 hours, sources, observed ranges, KMA conditions and
+ceilings, capture times, and any secondary Weather.com comparison; the same
+information is attached to the chart for screen readers. METAR temperature
+tooltips retain the original observed sky/ceiling detail, while the KMA
+forecast and provider-peak tooltips identify the official source, temperature,
+forecast hour, condition, and ceiling. Weather.com hourly-point tooltips show
+the selected secondary morning baseline, latest and previous-distinct
+forecasts, capture/detection times, latest strictly pre-hour forecast, matched
+AMOS reading, and available departures. A separate collapsible semantic table
+exposes the same secondary revision and departure details without requiring
+pointer access to the canvas.
 
 The rest of the interface is deliberately compact:
 
@@ -289,17 +288,17 @@ the raw file. Dashboard queries hide numerical observations at 48 hours, and a
 database-only cleanup runs every 30 minutes. Historical routes never trigger a
 satellite backfill.
 
-## Weather.com hourly revision diagnostics
+## Secondary Weather.com hourly revision diagnostics
 
-Weather.com's daily maximum and hourly forecast remain separate products with
-separate status and error fields. A successful daily response does not hide a
-failed hourly response, and an hourly success does not change daily-product
-health. The hourly product stores its own response-completion timestamp instead
-of borrowing the timestamp from before the request began. That provider-specific
-time is the forecast vintage used for revision and no-lookahead comparisons.
-Every saved hourly value retains both its forecast-valid time and capture time,
-so a later response appends history rather than overwriting the preceding
-prediction.
+This entire section is secondary. Weather.com's daily maximum and hourly
+forecast remain separate products with separate status and error fields, but
+neither is a KMA fallback or an input to the canonical maximum, primary curve,
+peak time, condition, or ceiling. The hourly product stores its own
+response-completion timestamp instead of borrowing the timestamp from before
+the request began. That provider-specific time is the forecast vintage used
+for secondary revision and no-lookahead comparisons. Every saved hourly value
+retains both its forecast-valid time and capture time, so a later response
+appends history rather than overwriting the preceding prediction.
 
 For a selected Seoul-local date, the morning baseline is the first successful
 Weather.com hourly capture from `05:00–07:00 KST`. If none exists, the latest
@@ -333,14 +332,15 @@ thresholds are `on_track`. The summary states when fewer than two matches make
 the result tentative and distinguishes the latest-three sample from the total
 matched-hour count.
 
-The chart displays `Weather.com · latest stored` as a blue dashed curve and the
-selected morning baseline as a faint blue dotted curve. A signed badge marks
-every forecast-valid hour whose latest distinct change is at least `1.0 °C`; a
-`31 °C` to `28 °C` change therefore remains visible as `↓ -3.0 °C` after later
-captures repeat `28 °C`. Smaller changes remain available in the tooltip and
-semantic table. The compact summary reports actuals versus the morning
-baseline, actuals versus latest strictly pre-hour guidance, matched-hour
-counts, and the latest stored Weather.com forecast peak.
+The chart displays `Secondary Weather.com · latest stored` as a thin blue
+dashed curve and the selected secondary morning baseline as a faint blue
+dotted curve. A signed badge marks every forecast-valid hour whose latest
+distinct change is at least `1.0 °C`; a `31 °C` to `28 °C` change therefore
+remains visible as `↓ -3.0 °C` after later captures repeat `28 °C`. Smaller
+changes remain available in the tooltip and semantic table. The compact
+secondary summary reports actuals versus the morning baseline, actuals versus
+latest strictly pre-hour guidance, matched-hour counts, and the latest stored
+Weather.com forecast peak.
 
 For today, `Live vs latest pre-observation curve` chooses the newest successful
 Weather.com capture that completed strictly before the freshest usable AMOS
@@ -358,11 +358,9 @@ mark it stale and expose the latest attempt error/time. Historical pages do not
 become stale merely because the current collector is old. Missing baseline,
 forecast, or AMOS data stays unavailable rather than being fabricated.
 
-Weather.com hourly rows already power the existing Weather.com-only model,
-daily-high marker timing, and coming-hour cloud cover. The new
-revision/departure layer is diagnostic-only: it does not change those inputs,
-model calculations, predicted values, immutable high revisions, or evaluation
-behavior.
+Weather.com hourly history is diagnostic-only. It does not change KMA inputs,
+model calculations, predicted values, immutable high revisions, primary cloud
+guidance, or evaluation behavior.
 
 ## Forecast-capture data dependency
 
@@ -370,27 +368,116 @@ The page subscribes to
 `seoulWeather:getHighPredictionDashboard({ stationIcao: "RKSI", date })`. The
 route consumes:
 
-- `latestPrediction.providerDetails`, filtered to `provider="weathercom"`, for
-  a retained daily high, hourly time estimate, and capture age
-- `latestPrediction.predictedHigh*`, `confidenceLow/High*`, and `peakWindow*`
-  for the compact maximum outlook
-- `latestForecastCapture.weathercomForecastDays` for the newest Weather.com
-  calendar-day high
-- `latestForecastCapture.weathercomHourlyRows` for the newest hourly time
-  estimate and coming-hour cloud guidance
+- `kmaAccess` for approval, flag, and source-URL state
+- `kmaForecast.latestCapture`, `selectedDateForecast`, `hourlyRows`,
+  `latestSuccessAgeMinutes`, `latestAttemptStatus`,
+  `latestAttemptError`, and `sourceUrl` for the latest successful stored
+  capture, official daily high, temperature curve, peak timing, exact
+  condition phrase, ceiling, source vintage, and health; this stored capture
+  can be present while `kmaForecast.isStale` is true
+- `kmaHourlyDiagnostics`, a KMA-only diagnostic/safety alias over the same
+  hourly guidance
 - `weathercomHourlyDiagnostics` for immutable latest/baseline curves,
-  per-hour revisions, matched AMOS departures, the latest strictly pre-hour
-  cloud-cover forecast for completed-hour comparison, running states, stale
-  health, and the live pre-observation comparison
+  per-hour revisions, matched AMOS departures, the secondary strictly pre-hour
+  cloud-cover comparison for completed hours, running states, stale health,
+  and the live pre-observation comparison
+
+`latestKmaForecastCapture` and the compatibility alias
+`latestForecastCapture` both refer to KMA. Weather.com's latest capture is
+separately named `secondaryWeathercomForecastCapture`; consumers must not
+reinterpret the compatibility alias as Weather.com.
+
+The compatibility action `seoulWeather:getDayPageWeather` delegates to that
+dashboard and returns stored KMA data; it no longer makes a Weather.com request.
 
 All of those inputs are optional. Observed temperatures and observed cloud
-cover still render when forecast data are unavailable, and missing future
-guidance remains explicit. The route renders the prediction only as compact
-expected-maximum, heuristic-range, and peak-window readings; it still does not
-render a tracker curve, provider-card grid, evaluation panel, or revision
-history. The dashboard query filters prediction provider details to
-Weather.com, omits old blended hourly curves, and returns only Weather.com
-fields from a forecast capture.
+cover still render when KMA is unavailable, and missing future guidance remains
+explicit. Revoking approval also causes the dashboard/query boundary to hide
+previously stored protected KMA rows. The route renders the prediction only as
+the compact expected maximum, KMA published high, and KMA hourly peak; it does
+not render a tracker, provider-card grid, evaluation panel, or high-prediction
+revision history. Weather.com fields are returned only for the separately
+labeled secondary diagnostic layer.
+
+## KMA/AMO forecast approval and disabled state
+
+The official forecast is parsed server-side from:
+
+```text
+https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI
+```
+
+The page is reachable without a credential, but KMA's policy requires prior
+consultation for material without an applicable public-use mark. Automated
+production retrieval, parsing, storage, and display therefore remain disabled
+unless the server-side Convex value is exactly:
+
+```text
+KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED=true
+```
+
+Approval must come from KMA, AMO, or the relevant KMA data/content owner and
+cover that exact RKSI airport-forecast use. It is not implied by a successful
+request, public HTML, or an unrelated KMA/NMSC approval.
+
+KMA's [copyright-policy page](https://www.kma.go.kr/kmadev/guide/copyright.jsp)
+lists the **Information and Communications Technology Division,
+02-2181-0432** as its copyright contact. Recheck the official page for the
+current office and number immediately before requesting approval because
+contact details can change.
+
+The gate is checked when the scheduled/manual action begins, immediately before
+the request, after the response, immediately before storage, and inside the
+storage mutation. The dashboard/query boundary checks it too and hides stored
+protected KMA rows after revocation. With the flag absent, collection returns
+and records a metadata-only `approval_required` attempt without contacting AMO
+or storing forecast rows. The page shows a
+visible `Official KMA forecast unavailable` banner, names
+`KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED`, keeps actual AMOS and METAR
+observations available, and marks the KMA maximum, curve, peak, condition, and
+ceiling unavailable. It does not promote Weather.com to primary or use it as a
+fallback.
+
+Both collector actions are internal-only. Approval covers the provider use; it
+does not let an anonymous browser trigger upstream requests. The fetch rejects
+redirects, requires the response URL to remain the HTTPS AMO airport page, and
+requires an HTML content type before parsing.
+
+The forecast status badge is one of `Current KMA forecast`,
+`Stored KMA forecast`, `Stored KMA forecast · stale`,
+`KMA approval required`, `KMA setup required`, or
+`KMA forecast unavailable`. Primary metric labels are `Expected max`,
+`KMA published high`, and `KMA hourly peak`. The future sky-strip legend says
+`KMA condition + ceiling`, its source is `KMA forecast`, and the table column
+is `Condition / ceiling`. The Weather.com diagnostic opens with
+`Secondary comparison only · not used for the expected maximum, KMA curve,
+peak timing, or cloud guidance`; its cloud-score column is
+`Secondary Weather.com − observed`.
+
+KMA guidance becomes stale after `360` minutes. The page may retain and
+visibly label stale stored KMA values, while the backend KMA-primary prediction
+requires a capture no more than six hours old. Weather.com does not replace it.
+
+The protected entry points are:
+
+- collection: `seoulKmaForecast:collectAirportForecast`,
+  `seoulKmaForecast:collectScheduledAirportForecast`, and
+  `seoulKmaForecast:storeForecastCapture`
+- prediction/finalization:
+  `seoulWeather:recomputeTodayHighPrediction`,
+  `seoulWeather:recomputeHighPredictionInternal`,
+  `seoulWeather:finalizeCompletedDay`, and
+  `seoulWeather:finalizeHighPredictionInternal`
+- reads: `seoulWeather:getHighPredictionDashboard`,
+  `seoulWeather:getDayPageWeather`, and
+  `seoulWeather:getHighPredictionAccuracy`
+
+Activation and removal are separate production operations:
+
+```text
+npx convex env set KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED true --prod
+npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
+```
 
 ## Client behavior
 
@@ -408,7 +495,10 @@ For the current Seoul date, the first page load and `Sync now` request:
 The page no longer calls `seoulWeather:recomputeTodayHighPrediction` from this
 manual path. The status message reports partial observation-source failures.
 The manual AMOS request is a single immediate fetch, while the scheduled
-rollover watch remains the lowest-latency path. The current-day solar panel
+rollover watch remains the lowest-latency path. Initial load and `Sync now` do
+not invoke the KMA forecast collector; the page reacts to scheduled or
+server-side manual KMA capture output returned by the dashboard query. The
+current-day solar panel
 provides a separate `Refresh GK2A` button that calls
 `seoulGk2aCollector:requestSolarHeatingRefresh` during the same daytime window
 and shows its own queued/in-flight/final state. The server enforces a ten-minute
@@ -417,15 +507,16 @@ with a run-owned lock. The button is the only client-triggered GK2A collection
 path; the initial load and combined `Sync now` do not download the SWRAD
 NetCDF. It is disabled outside `11:00–16:00 KST` and until NMSC access is
 approved. A GK2A failure therefore does not make the METAR or AMOS refresh look
-failed, and there is no alternate numerical solar source. Provider captures
-continue on their 15-minute schedule and update the Weather.com high/time
-marker reactively.
+failed, and there is no alternate numerical solar source. Forecast collectors
+continue on their independent schedules. An approved KMA capture updates the
+primary high, curve, timing, condition, and ceiling reactively; Weather.com
+updates only its secondary diagnostic history.
 
 Historical routes only display already-captured rows. There is no historical
 backfill from these latest-value endpoints, and the historical page does not
 trigger recomputation.
 
-## Backend prediction collectors
+## Backend forecast and prediction collectors
 
 - After NMSC access is approved, the GK2A solar collector runs at
   `11:16`, `11:36`, ... `15:56 KST`, accounting for the observed product
@@ -435,27 +526,40 @@ trigger recomputation.
   idempotently skips a frame already resolved. `Refresh GK2A` provides an
   explicit on-demand run inside the same window. A separate database-only
   cleanup runs every 30 minutes; it does not contact NMSC.
+- `seoul_kma_amo_airport_forecast_every_30_min` runs at minutes `:05` and
+  `:35` and invokes
+  `seoulKmaForecast:collectScheduledAirportForecast`. The internal-only manual
+  equivalent is `seoulKmaForecast:collectAirportForecast`; both parse the same
+  server-rendered RKSI page and store immutable attempts through
+  `seoulKmaForecast:storeForecastCapture`. The parser requires the page itself
+  to display `RKSI` before an attempt can succeed. Successful KMA guidance is
+  usable for at most six hours and must include both a daily maximum and
+  hourly temperature for the selected date. Its daily high, primary hourly
+  curve, conditions, ceilings, peak, and source time all come from one capture;
+  hours are not merged across KMA revisions.
 - `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
   `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
   and errors together. Both requests use the explicit `icaoCode=RKSI`
   selector. Daily and hourly status/error fields remain independent. The
   hourly response has its own completion timestamp, and each successful hourly
   value is also appended to query-friendly immutable history. A usable latest
-  capture can remain an explicit fallback for at most twelve hours.
+  capture can remain visible in the secondary diagnostic for at most twelve
+  hours; it is not a KMA fallback.
 - `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
-  date. Material changes create immutable revisions; no-op runs retain the
-  preceding revision, with a 30-minute heartbeat.
+  date with model version `rksi15l-kma-amo-v1`. KMA has weight `1`,
+  Weather.com has weight `0`, and missing KMA guidance creates no prediction.
+  Material changes create immutable revisions; no-op runs retain the preceding
+  revision, with a 30-minute heartbeat.
 - `seoul_15l_high_finalize_after_midnight` runs at `00:10 KST` and freezes the
   previous day's canonical truth, closing tracker result, and fixed-cutoff
   scores.
 
-These scheduled jobs remain for immutable historical Weather.com high/hour
-retention and backend evaluation. Their predicted high and tracker window feed
-the compact outlook, while the stored Weather.com temperature curve remains a
-raw provider diagnostic rather than a separate tracker curve. The observed
-maximum remains valid even when the newest AMOS observation is stale, and both
-the backend evaluation value and the displayed expected maximum are never
-allowed below that known maximum.
+These scheduled jobs retain immutable KMA official captures, secondary
+Weather.com history, and backend evaluations. The displayed outlook reads KMA
+directly; Weather.com's stored curve remains diagnostic rather than a tracker
+or model input. The observed maximum remains valid even when the newest AMOS
+observation is stale, and both the backend evaluation value and the displayed
+expected maximum are never allowed below that known maximum.
 
 ## Truthful cadence separation
 
@@ -595,23 +699,45 @@ lock, and the wind used for the most recent collection. The approval gate is
 separate from API-key configuration because the viewer requests themselves are
 anonymous.
 
+### `seoulKmaForecastCaptures`
+
+Immutable attempts to retrieve the server-rendered KMA/AMO RKSI airport page.
+Each capture records its trigger, canonical source URL, status (`ok`, `error`,
+or `approval_required`), capture/creation times, and, when available,
+HTTP/response metadata, the page/current-conditions reported time, parsed daily
+minimum/maximum rows, parsed hourly KST rows, or a bounded error. Hourly rows
+preserve temperature, KMA condition phrase/icon, ceiling, wind, visibility,
+and crosswind when present. The 15-second request timeout is enforced with an
+abort signal. The raw HTML is parsed in memory and is not stored.
+
+The source identity is capture-level: daily and hourly array entries do not
+have independent row-level source tags. Consumers must keep rows attached to
+the parent capture's KMA provenance. The query boundary returns no protected
+capture content while
+`KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED` is not exactly `true`, including
+after approval is revoked.
+
+The table indexes `(stationIcao, capturedAt)` and
+`(stationIcao, status, capturedAt)`. Daily rows identify `short_term` or
+`midterm`; hourly timestamps store both UTC and Seoul-local representations.
+
 ### `seoulForecastCaptures`
 
-Immutable Weather.com RKSI airport forecast captures. Daily rows hold the
-calendar-day high; hourly rows hold temperature, time, phrase, and cloud cover.
-Daily and hourly status/error fields are independent, so a partial provider
-response remains diagnosable. The hourly product's optional
+Immutable **secondary Weather.com** RKSI airport forecast captures. Daily rows
+hold the calendar-day high; hourly rows hold temperature, time, phrase, and
+cloud cover. Daily and hourly status/error fields are independent, so a partial
+provider response remains diagnosable. The hourly product's optional
 response-completion timestamp and Seoul-local capture-date fields keep new
 history rows from being backdated to the start of the collector run. They are
 optional so captures created before this history layer continue to validate.
-Optional legacy provider fields likewise remain only for backward
-compatibility; new Seoul captures and page selectors use Weather.com.
+Optional legacy fields remain for compatibility; current Seoul selectors use
+these captures only for the labeled Weather.com comparison.
 
 ### `seoulHourlyForecastPredictions`
 
-Immutable, query-friendly child rows for each Weather.com hourly value. Each
-row links to its parent `seoulForecastCaptures` document and stores the
-station/provider, Seoul target date, forecast-valid timestamp, provider
+Immutable, query-friendly child rows for each secondary Weather.com hourly
+value. Each row links to its parent `seoulForecastCaptures` document and stores
+the station/provider, Seoul target date, forecast-valid timestamp, provider
 completion timestamp, temperature, and available phrase/cloud metadata.
 Captures are appended rather than updated in place, preserving every detected
 value for a forecast-valid hour.
@@ -633,15 +759,18 @@ captures and prediction revisions remain valid without them.
 ### `seoulHighPredictions`
 
 Immutable, numbered prediction revisions containing the predicted high,
-confidence interval, peak window, warming rates, Weather.com provider detail,
-peak-hour source capture time, status/reason, and the stored Weather.com hourly
-curve.
+confidence interval, peak window, warming rates, primary KMA/AMO provider
+detail, peak-hour source capture time, status/reason, and the stored KMA hourly
+curve. Weather.com may remain in older revisions for schema compatibility but
+has zero weight in current KMA-primary revisions.
 
 ### `seoulHighEvaluations`
 
 Finalized actual high, peak time, revision count, lifecycle opening/closing
 tracker diagnostics, and honest 09:00/12:00/15:00 KST checkpoint temperature
-and peak-window scores.
+and peak-window scores. New rows store `modelVersion`; model-aware date and
+finalization-time indexes exclude legacy Weather.com evaluations from KMA
+accuracy/history while preserving those older rows for migration compatibility.
 
 ### `seoulPublishRaceReports`
 
@@ -659,6 +788,16 @@ though the redesigned page no longer renders the diagnostic table.
   described as proof that the physical thermometer is at the 15L threshold.
 - The old `http://amoapi.kma.go.kr/amoApi/metar` service was retired on
   2026-07-20 and is not used by the live chart collector.
+- KMA/AMO forecast collection is server-side HTML parsing of the exact RKSI
+  page, not a JSON API and not a Seoul-city forecast. Keyless reachability does
+  not establish authorization.
+  `KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED=true` must not be set until KMA,
+  AMO, or the relevant data/content owner approves automated production
+  retrieval, parsing, storage, and display. Revocation hides stored protected
+  rows and stops every protected entry point before another request or write.
+- KMA condition phrases and ceilings remain categorical/separate. Missing KMA
+  data stays missing; no percentage is fabricated and Weather.com remains only
+  a labeled secondary diagnostic.
 - GK2A numerical collection remains server-side. The viewer is anonymously
   reachable and requires no API key, but its NetCDF embeds a restricted-access
   license. `NMSC_GK2A_ACCESS_APPROVED=true` must not be set until NMSC confirms

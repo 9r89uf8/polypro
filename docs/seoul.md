@@ -201,84 +201,181 @@ Official references:
 - [KMA copyright and prior-consultation policy](https://www.kma.go.kr/kmadev/guide/copyright.jsp)
 - [KMA public GK2A image viewer](https://www.weather.go.kr/w/image/sat.do)
 
-## RKSI 15L forecast capture and backend evaluation
+## RKSI airport forecast capture and backend evaluation
 
-The Seoul page now has one active forecast source: **Weather.com**. It does not
-collect, select, blend, or display another provider for the Seoul high marker
-or forecast cloud guidance.
+### Canonical KMA/AMO source
 
-The Weather.com forecast is requested explicitly for Incheon International
-Airport with `icaoCode=RKSI`, not a Seoul city place ID or a
-coordinate-to-locality lookup. During live verification on 2026-07-29 KST,
-Weather.com's location service returned `airportName=Incheon Intl Airport` and
-`icaoCode=RKSI`; the former coordinate lookup resolved to the `Unseo-dong`
-neighborhood without an airport identifier. The rose marker therefore represents
-`Weather.com · RKSI`, matching its RKSI/Incheon AMOS and METAR observation
-lines. The chart draws only the circle for this marker; its provider details
-remain in the tooltip and screen-reader description rather than a chart-header,
-in-plot, or legend label.
+The sole primary forecast source for the Seoul routes is KMA Aviation
+Meteorological Office's RKSI airport page:
 
-The two Weather.com products have separate jobs:
+```text
+https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI
+```
 
-- Daily `/v3/wx/forecast/daily/5day`
-  `calendarDayTemperatureMax` supplies the displayed maximum. This field
-  covers the local midnight-to-midnight calendar day.
-- Hourly `/v3/wx/forecast/hourly/10day` temperature values supply the
-  horizontal time estimate. The earliest returned hour wins when the hottest
-  hourly value is tied. Captures retain the five calendar dates covered by the
-  daily product.
-- Hourly `cloudCover` supplies coming-hour cloud guidance.
+The response identifies `RKSI` as Incheon International Airport, so it is not
+the Seoul-city forecast that an address or coordinate lookup might return. It
+is a server-rendered HTML page rather than a documented JSON API. The collector
+parses the forecast values already present in that HTML: daily minimum and
+maximum, and hourly KST rows with temperature, condition phrase/icon, ceiling,
+wind, visibility, and crosswind fields when present. The page's
+`.tm_issue_date` belongs to the current aerodrome-conditions header, so any
+stored value from it is described only as the page/current-conditions reported
+time, not as a forecast issue timestamp.
 
-For completed hours, the page can also compare that cloud guidance with its
-quantifiable METAR-sample estimate. It selects the latest immutable
-`cloudCover` value captured strictly before the forecast-valid hour and displays
-**forecast minus observed** in percentage points. Positive values mean the
-forecast was cloudier and negative values mean it was clearer. The live partial
-hour and non-quantifiable METAR states are not scored.
+The parser reads the page's `ts-daily-item` and `ts-hourly-item` blocks. Daily
+rows are keyed by date with short-term data preferred where short-term and
+midterm overlap. Hourly `data-date`, `data-hour`, and `data-atemp` values are
+converted from KST to explicit local and UTC timestamps. A response without at
+least one usable daily min/max row and one usable hourly temperature row is a
+parse error rather than a partial success.
 
-The rose chart point consequently uses the Weather.com daily high as its
-vertical value and the first hottest Weather.com hourly value as its horizontal
-position. That hour is a discrete **peak-time estimate**, not an exact instant.
-The daily and hourly products can occasionally disagree, so the UI does not
-claim that the daily maximum literally occurs at that hourly value.
+The parser also reads the airport code displayed in the page's
+`span.airport_spl` element and is called with expected station `RKSI`. A
+missing or different displayed ICAO code is a provenance mismatch and fails
+the attempt before successful storage. This prevents a redirect, default
+airport, or changed page from being mislabeled as the requested RKSI forecast.
+The fetch itself rejects redirects, requires the final response to remain on
+HTTPS `amo.kma.go.kr/eng/airport.do`, and accepts only an HTML content type, so
+a different host cannot be followed and relabeled as AMO.
 
-Forecasts are captured immutably every 15 minutes and the UI repeats the
-capture time because the provider can revise both the high and hourly timing.
-Weather.com's today response begins at the current hour rather than replaying
-elapsed hours. The backend therefore merges recent immutable Weather.com
-captures by forecast timestamp: the newest value replaces each still-returned
-hour, while an elapsed hour remains available from the last response that
-contained it. Each merged hour keeps that source response's hourly-completion
-time rather than inheriting the newest capture's time. The merge reads 112
-captures, covering 28 hours at the current cadence. A fresh direct capture is
-the UI fallback before a new backend revision exists. When the selected hourly
-maximum came from an earlier capture, the UI shows that peak-hour source time
-separately from the latest provider capture.
+KMA/AMO controls all canonical forecast decisions:
 
-The backend still stores numbered evaluation revisions. The page exposes the
-current model only as compact expected-maximum, heuristic-range, and peak-window
-readings; it does not render a separate tracker temperature curve or revision
-panel. Model version `rksi15l-weathercom-v4` records only a Weather.com provider
-detail and a Weather.com hourly curve. Old stored provider fields and revisions
-remain in the database solely for schema compatibility; page selectors
-explicitly ignore them and do not backfill a marker when no Weather.com
-peak-time estimate exists.
+- KMA's published daily maximum supplies the expected maximum. The only
+  adjustment is an observed-data floor: once representative 15L AMOS has
+  already exceeded the forecast, the displayed and stored expected maximum
+  cannot be lower than reality.
+- KMA's hourly temperatures supply the primary forecast curve and peak timing.
+  The first KMA hour wins when the hottest hourly value is tied.
+- KMA's exact condition text, such as `Clear`, `Partly cloudy`,
+  `Mostly cloudy`, or `Haze`, supplies coming-hour sky guidance. The displayed
+  ceiling is a separate KMA value.
 
-At 00:10 KST the completed day is finalized against the canonical 15L series.
+The application never converts those categories into invented cloud-cover
+percentages. In particular, `Mostly cloudy` is not stored or displayed as an
+assumed percentage, `Haze` does not imply a cloud amount, and a ceiling height
+does not describe total cloud cover.
+
+Weather.com remains collected only as a conspicuously labeled **secondary
+comparison**. Its daily high, hourly temperatures, phrases, and cloud-cover
+percentages may support secondary history and diagnostics, but its prediction
+weight is zero. Weather.com never supplies or fills a missing KMA daily
+maximum, primary hourly curve, expected current temperature, peak time,
+condition, or ceiling, and it is never blended with KMA. This is the same
+source hierarchy used by the Wellington research: an official aviation source
+stays canonical while Weather.com remains an unofficial helper.
+
+### Approval gate
+
+The KMA/AMO page is technically reachable without a key, login, or credential.
+That reachability is not authorization for automated production reuse. KMA's
+copyright policy says material without an applicable public-use mark requires
+prior consultation, so production collection fails closed behind the
+server-side Convex value:
+
+```text
+KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED=true
+```
+
+Only the exact string `true` enables the protected work. Missing, empty,
+`false`, or any other value is not approval. The approving authority is KMA,
+AMO, or the relevant KMA data/content owner, and the approval must explicitly
+cover automated production retrieval, parsing, storage, and display of the
+English RKSI airport forecast page. The flag is deliberately separate from
+credentials and from the independent NMSC GK2A approval.
+
+KMA's [copyright-policy page](https://www.kma.go.kr/kmadev/guide/copyright.jsp)
+lists the **Information and Communications Technology Division,
+02-2181-0432** as its copyright contact. Recheck that official page for the
+current office and number immediately before requesting approval, since
+contact details can change.
+
+Code, schema, and schedule are deployed with this flag absent. After the
+appropriate authority grants that scope, activate production separately:
+
+```text
+npx convex env set KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED true --prod
+```
+
+Removing the flag disables new protected requests:
+
+```text
+npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
+```
+
+Every protected entry point uses the same current flag:
+
+- `seoulKmaForecast:collectAirportForecast` is the internal-only manual
+  collector. It is deliberately not client-callable, because source approval
+  does not authorize arbitrary browsers to create unbounded AMO requests.
+- `seoulKmaForecast:collectScheduledAirportForecast` is the internal action
+  invoked by cron `seoul_kma_amo_airport_forecast_every_30_min` at minutes
+  `:05` and `:35`.
+- `seoulKmaForecast:storeForecastCapture` is the internal storage mutation.
+- `seoulWeather:recomputeTodayHighPrediction` and
+  `seoulWeather:recomputeHighPredictionInternal` create current KMA-primary
+  prediction revisions.
+- `seoulWeather:finalizeCompletedDay` and
+  `seoulWeather:finalizeHighPredictionInternal` create completed-day
+  evaluations.
+- `seoulWeather:getHighPredictionDashboard`,
+  `seoulWeather:getDayPageWeather`, and
+  `seoulWeather:getHighPredictionAccuracy` are the protected read surfaces.
+
+Collection checks the flag when the manual/scheduled action begins,
+immediately before the outbound request, after the response, immediately
+before storage, and again inside the storage mutation. The prediction,
+finalization, dashboard, day-weather, and accuracy boundaries also check the
+current flag and do not expose or derive from stored protected KMA rows after
+revocation. While disabled, a collection attempt stores and returns
+the metadata-only status `approval_required`, makes no request to AMO, stores
+no daily or hourly forecast rows, and the UI says approval or setup is
+required. Observed AMOS and METAR values remain visible, but every KMA forecast
+field is unavailable; Weather.com does not silently replace it.
+
+### Capture and provenance
+
+Each attempt creates an immutable `seoulKmaForecastCaptures` document with its
+`manual` or `scheduled` trigger, source URL, status (`ok`, `error`, or
+`approval_required`), capture/creation times, and, when applicable, HTTP
+status, content type, response byte count, ETag, Last-Modified value, parsed
+daily rows, parsed hourly rows, or a bounded error. A
+page/current-conditions reported time may also be retained, but is not given
+forecast-issue semantics. Captures preserve provider revisions instead of
+updating one mutable forecast in place.
+
+The request uses a 15-second abort timeout. The parser reads the response in
+memory and stores only normalized fields; the raw HTML is not retained.
+
+The source URL and provider identity live on the enclosing capture. Daily and
+hourly array entries do not have independent row-level source tags. Consumers
+must therefore retain their parent-capture provenance and must not detach a row
+and relabel it as a mixed, Weather.com, or generic model forecast.
+The canonical daily maximum, hourly curve, conditions, ceiling values, peak
+time, and capture timestamp always come from one coherent successful page
+response. KMA hours are not reconstructed across revisions; a missing hour
+stays missing rather than being carried forward with a newer capture time.
+
+The backend still stores numbered high-prediction revisions for historical
+retention and evaluation. The KMA daily high and hourly curve are the forecast
+inputs for model version `rksi15l-kma-amo-v1`, with KMA weight `1`; Weather.com
+is retained in provider detail with weight `0`. A KMA capture is canonical only
+when approval is active, it is no more than six hours old, and it has both a
+daily maximum and hourly temperature for the target date. At `00:10 KST` the
+completed day is finalized against the canonical representative 15L series.
 One-minute rows win when duplicate timestamps also have five-minute or legacy
 captures, and the first occurrence wins when the maximum temperature is tied.
-The evaluator retains the backend-only closing tracker result, but the page does
-not present it. It is not independent forecast skill because by late day it has
-already absorbed live observations. Honest temperature-error and peak-window
-statistics are instead recorded at fixed 09:00, 12:00, and 15:00 KST cutoffs.
+Evaluations store the exact model version and model-aware indexes keep legacy
+Weather.com evaluations out of KMA accuracy/history.
+The closing tracker has already absorbed live observations and is not
+independent forecast skill; honest temperature-error and peak-window
+statistics remain the fixed `09:00`, `12:00`, and `15:00 KST` checkpoint
+scores.
 
-The AMOS 15L display record also exposes dew point, QNH, average/minimum/maximum
-wind direction and speed, crosswind/headwind-tailwind fields, visibility, RVR,
-precipitation, and cloud fields in the raw payload. These remain possible
-backend evaluation inputs, but model version `rksi15l-weathercom-v4` keeps the
-forecast side Weather.com-only. Its output is limited to the compact outlook
-rather than a separate tracker curve. Fixed-cutoff scores should accumulate
-before adding more features or claiming that a more complex model is better.
+Relevant policy and source pages:
+
+- [KMA/AMO RKSI airport forecast](https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI)
+- [KMA copyright and prior-consultation policy](https://www.kma.go.kr/kmadev/guide/copyright.jsp)
+- [Wellington official-versus-secondary source precedent](./nzwn-preflight-notes.md)
 
 ## Ranked findings
 

@@ -10,6 +10,12 @@ const seoulForecastStatus = v.union(
 
 const seoulProviderStatus = v.union(v.literal("ok"), v.literal("error"));
 
+const seoulKmaForecastCaptureStatus = v.union(
+  v.literal("ok"),
+  v.literal("error"),
+  v.literal("approval_required"),
+);
+
 const seoulGk2aCollectorStatus = v.union(
   v.literal("ok"),
   v.literal("partial"),
@@ -37,11 +43,14 @@ const seoulHourlyForecastRow = v.object({
 
 const seoulProviderDetail = v.object({
   provider: v.union(
+    v.literal("kma_amo"),
     v.literal("weathercom"),
     v.literal("google"),
     v.literal("open_meteo"),
   ),
   label: v.string(),
+  role: v.optional(v.union(v.literal("primary"), v.literal("secondary"))),
+  sourceUrl: v.optional(v.string()),
   status: seoulProviderStatus,
   error: v.optional(v.string()),
   weight: v.number(),
@@ -1144,6 +1153,73 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_station", ["stationIcao"]),
 
+  seoulKmaForecastCaptures: defineTable({
+    stationIcao: v.string(),
+    stationName: v.string(),
+    source: v.literal("kma_amo_airport"),
+    sourceUrl: v.string(),
+    collectionTrigger: v.union(
+      v.literal("manual"),
+      v.literal("scheduled"),
+    ),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    captureDate: v.string(),
+    status: seoulKmaForecastCaptureStatus,
+    approvalFlagName: v.string(),
+    error: v.optional(v.string()),
+    httpStatus: v.optional(v.number()),
+    contentType: v.optional(v.string()),
+    responseBytes: v.optional(v.number()),
+    etag: v.optional(v.string()),
+    lastModified: v.optional(v.string()),
+    // This timestamp is displayed with the airport's current-condition
+    // header. It is not claimed to be a forecast issuance timestamp.
+    pageReportedAt: v.optional(v.number()),
+    pageReportedAtLocal: v.optional(v.string()),
+    dailyRows: v.array(
+      v.object({
+        date: v.string(),
+        forecastType: v.union(
+          v.literal("short_term"),
+          v.literal("midterm"),
+        ),
+        minTempC: v.optional(v.number()),
+        minTempF: v.optional(v.number()),
+        maxTempC: v.optional(v.number()),
+        maxTempF: v.optional(v.number()),
+        phrase: v.optional(v.string()),
+      }),
+    ),
+    hourlyRows: v.array(
+      v.object({
+        date: v.string(),
+        forecastTimeUtc: v.number(),
+        forecastTimeLocal: v.string(),
+        tempC: v.number(),
+        tempF: v.number(),
+        phrase: v.optional(v.string()),
+        conditionCode: v.optional(v.string()),
+        ceilingFt: v.optional(v.number()),
+        ceilingText: v.optional(v.string()),
+        windDirectionDeg: v.optional(v.number()),
+        windSpeedKt: v.optional(v.number()),
+        windGustKt: v.optional(v.number()),
+        windSpeedText: v.optional(v.string()),
+        visibilityM: v.optional(v.number()),
+        visibilityText: v.optional(v.string()),
+        crosswindText: v.optional(v.string()),
+      }),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_station_capturedAt", ["stationIcao", "capturedAt"])
+    .index("by_station_status_capturedAt", [
+      "stationIcao",
+      "status",
+      "capturedAt",
+    ]),
+
   seoulForecastCaptures: defineTable({
     stationIcao: v.string(),
     stationName: v.string(),
@@ -1171,7 +1247,7 @@ export default defineSchema({
     weathercomHourlyCaptureDate: v.optional(v.string()),
     weathercomHourlyRows: v.optional(v.array(seoulHourlyForecastRow)),
     // Legacy fields remain optional so existing captures continue to validate.
-    // New Seoul captures and all page selectors use Weather.com only.
+    // Weather.com captures are retained as explicitly secondary guidance.
     googleStatus: v.optional(seoulProviderStatus),
     googleError: v.optional(v.string()),
     googleHourlyRows: v.optional(v.array(seoulHourlyForecastRow)),
@@ -1244,7 +1320,12 @@ export default defineSchema({
     modelVersion: v.string(),
     generatedAt: v.number(),
     generatedAtLocal: v.string(),
-    forecastCaptureId: v.optional(v.id("seoulForecastCaptures")),
+    forecastCaptureId: v.optional(
+      v.union(
+        v.id("seoulForecastCaptures"),
+        v.id("seoulKmaForecastCaptures"),
+      ),
+    ),
     forecastCapturedAt: v.optional(v.number()),
     forecastAgeMinutes: v.optional(v.number()),
     previousPredictionId: v.optional(v.id("seoulHighPredictions")),
@@ -1285,6 +1366,17 @@ export default defineSchema({
         providerCount: v.number(),
         cloudCoverPct: v.optional(v.number()),
         cloudProviderCount: v.optional(v.number()),
+        phrase: v.optional(v.string()),
+        conditionCode: v.optional(v.string()),
+        ceilingFt: v.optional(v.number()),
+        ceilingText: v.optional(v.string()),
+        windDirectionDeg: v.optional(v.number()),
+        windSpeedKt: v.optional(v.number()),
+        windGustKt: v.optional(v.number()),
+        windSpeedText: v.optional(v.string()),
+        visibilityM: v.optional(v.number()),
+        visibilityText: v.optional(v.string()),
+        crosswindText: v.optional(v.string()),
       }),
     ),
     createdAt: v.number(),
@@ -1308,6 +1400,9 @@ export default defineSchema({
   seoulHighEvaluations: defineTable({
     stationIcao: v.string(),
     targetDate: v.string(),
+    // Optional so evaluations written by older forecast models continue to
+    // validate. Current readers select the exact active model version.
+    modelVersion: v.optional(v.string()),
     finalizedAt: v.number(),
     finalizedAtLocal: v.string(),
     actualHighC: v.number(),
@@ -1349,7 +1444,17 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_station_date", ["stationIcao", "targetDate"])
-    .index("by_station_finalizedAt", ["stationIcao", "finalizedAt"]),
+    .index("by_station_finalizedAt", ["stationIcao", "finalizedAt"])
+    .index("by_station_model_date", [
+      "stationIcao",
+      "modelVersion",
+      "targetDate",
+    ])
+    .index("by_station_model_finalizedAt", [
+      "stationIcao",
+      "modelVersion",
+      "finalizedAt",
+    ]),
 
   seoulPublishRaceReports: defineTable({
     stationIcao: v.string(),

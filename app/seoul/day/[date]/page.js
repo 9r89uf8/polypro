@@ -242,10 +242,10 @@ const hourlyCloudCoverPlugin = {
     }
 
     const { ctx, chartArea, scales } = chart;
-    const railHeight = 42;
-    const railTop = chartArea.top - 51;
-    const meterTop = railTop + 16;
-    const meterHeight = railHeight - 18;
+    const railHeight = 54;
+    const railTop = chartArea.top - 64;
+    const meterTop = railTop + 25;
+    const meterHeight = railHeight - 27;
 
     ctx.save();
     ctx.fillStyle = "rgba(8, 18, 33, 0.96)";
@@ -272,16 +272,35 @@ const hourlyCloudCoverPlugin = {
       const cellWidth = right - left;
       const isForecast = hour.phase === "forecast";
       const isLive = hour.phase === "live";
+      const isKmaForecast = isForecast && hour.forecastProvider === "kma";
       const accent =
         isForecast && hour.isStale
           ? "rgba(251, 191, 36, 0.72)"
-          : isForecast
-            ? "rgba(56, 189, 248, 0.72)"
-            : isLive
-              ? "rgba(251, 191, 36, 0.78)"
-              : "rgba(203, 213, 225, 0.72)";
+          : isKmaForecast
+            ? "rgba(196, 181, 253, 0.78)"
+            : isForecast
+              ? "rgba(56, 189, 248, 0.72)"
+              : isLive
+                ? "rgba(251, 191, 36, 0.78)"
+                : "rgba(203, 213, 225, 0.72)";
 
-      if (Number.isFinite(hour.coverPct)) {
+      if (isKmaForecast && hour.conditionLabel) {
+        ctx.fillStyle = hour.isStale
+          ? "rgba(251, 191, 36, 0.08)"
+          : "rgba(167, 139, 250, 0.08)";
+        ctx.fillRect(
+          left + 1,
+          meterTop,
+          Math.max(0, cellWidth - 2),
+          meterHeight,
+        );
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(left + 2, meterTop + meterHeight - 2);
+        ctx.lineTo(right - 2, meterTop + meterHeight - 2);
+        ctx.stroke();
+      } else if (Number.isFinite(hour.coverPct)) {
         const fillHeight = Math.max(
           hour.coverPct > 0 ? 2 : 1,
           (meterHeight * hour.coverPct) / 100,
@@ -329,17 +348,36 @@ const hourlyCloudCoverPlugin = {
         ctx.restore();
       }
 
-      ctx.fillStyle = Number.isFinite(hour.coverPct) ? "#f8fafc" : "#64748b";
-      ctx.font = "600 10px IBM Plex Mono, monospace";
+      ctx.fillStyle =
+        isKmaForecast && hour.conditionLabel
+          ? hour.isStale
+            ? "#fde68a"
+            : "#ddd6fe"
+          : Number.isFinite(hour.coverPct)
+            ? "#f8fafc"
+            : "#64748b";
+      ctx.font = `${
+        isKmaForecast ? "600 8px" : "600 10px"
+      } IBM Plex Mono, monospace`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       if (cellWidth >= 30) {
         ctx.fillText(
           hour.displayLabel,
           left + cellWidth / 2,
-          railTop + 8,
+          railTop + (isKmaForecast ? 8 : 12),
           Math.max(0, cellWidth - 5),
         );
+        if (isKmaForecast && hour.ceilingLabel) {
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "500 8px IBM Plex Mono, monospace";
+          ctx.fillText(
+            hour.ceilingLabel,
+            left + cellWidth / 2,
+            railTop + 18,
+            Math.max(0, cellWidth - 5),
+          );
+        }
       }
 
       if (isForecast) {
@@ -347,7 +385,9 @@ const hourlyCloudCoverPlugin = {
         ctx.setLineDash([3, 3]);
         ctx.strokeStyle = hour.isStale
           ? "rgba(251, 191, 36, 0.72)"
-          : "rgba(125, 211, 252, 0.62)";
+          : isKmaForecast
+            ? "rgba(196, 181, 253, 0.72)"
+            : "rgba(125, 211, 252, 0.62)";
         ctx.beginPath();
         ctx.moveTo(left + 1, railTop + 1);
         ctx.lineTo(right - 1, railTop + 1);
@@ -548,10 +588,7 @@ const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
-const MAX_PROVIDER_CAPTURE_AGE_MINUTES = 12 * 60;
-const WEATHERCOM_STALE_AGE_MINUTES = 90;
-const MAX_LIVE_PREDICTION_AGE_MINUTES = 45;
-const CURRENT_PREDICTION_MODEL_VERSION = "rksi15l-weathercom-v4";
+const KMA_STALE_AGE_MINUTES = 6 * 60;
 const AMOS_DELAYED_AGE_MINUTES = 2;
 const AMOS_STALE_AGE_MINUTES = 10;
 const METAR_DELAYED_AGE_MINUTES = 45;
@@ -1422,25 +1459,41 @@ function addCloudForecastComparison(observedHour, forecastPoint) {
     forecastDeltaLabel,
     forecastCapturedAt: forecastPoint.preHourCapturedAt,
     forecastCapturedAtLocal: forecastPoint.preHourCapturedAtLocal,
-    displayLabel: `${observedHour.displayLabel} · ${forecastDeltaLabel}`,
-    summaryLabel: `${observedHour.summaryLabel} · forecast − observed ${forecastDeltaLabel}`,
-    detail: `${observedHour.detail} Weather.com pre-hour forecast: ${forecastCoverLabel}%${
+    displayLabel: `${observedHour.displayLabel} · secondary ${forecastDeltaLabel}`,
+    summaryLabel: `${observedHour.summaryLabel} · secondary Weather.com − observed ${forecastDeltaLabel}`,
+    detail: `${observedHour.detail} Secondary Weather.com pre-hour comparison: ${forecastCoverLabel}%${
       forecastCapturedLabel !== "—"
         ? `, captured ${forecastCapturedLabel} KST`
         : ""
-    }; forecast minus observed METAR sample: ${forecastDeltaLabel} (${Math.abs(
+    }; secondary Weather.com percentage minus observed METAR sample: ${forecastDeltaLabel} (${Math.abs(
       forecastDeltaPct,
-    )} percentage points; ${forecastMeaning.toLowerCase()}).`,
+    )} percentage points; ${forecastMeaning.toLowerCase()}). It is not used as KMA forecast guidance.`,
   };
 }
 
-function forecastCloudHour(hour, forecast) {
+function kmaCeilingLabel(forecast) {
+  const ceilingText = String(forecast?.ceilingText ?? "").trim();
+  if (ceilingText) {
+    return /^ceiling\b/i.test(ceilingText)
+      ? ceilingText
+      : `Ceiling ${ceilingText}`;
+  }
+  const ceilingFeet = finiteNumber(
+    forecast?.ceilingFt ?? forecast?.ceilingFeet,
+  );
+  return Number.isFinite(ceilingFeet)
+    ? `Ceiling ${formatFeet(ceilingFeet)} ft`
+    : null;
+}
+
+function kmaForecastCloudHour(hour, forecast) {
   const startMinute = hour * 60;
   const endMinute = (hour + 1) * 60;
-  const rawCoverPct = forecast?.cloudCoverPct;
-  if (Number.isFinite(rawCoverPct)) {
-    const coverPct = Math.min(100, Math.max(0, rawCoverPct));
-    const coverLabel = formatCloudCoverPercentage(coverPct);
+  const conditionLabel = String(
+    forecast?.phrase ?? forecast?.conditionLabel ?? "",
+  ).trim();
+  const ceilingLabel = kmaCeilingLabel(forecast);
+  if (conditionLabel || ceilingLabel) {
     const captureTime = formatLocalTime(
       forecast.capturedAtLocal ?? forecast.capturedAt,
     );
@@ -1453,15 +1506,25 @@ function forecastCloudHour(hour, forecast) {
       startMinute,
       endMinute,
       phase: "forecast",
-      coverPct,
+      forecastProvider: "kma",
+      coverPct: null,
       lowerPct: null,
       upperPct: null,
-      displayLabel: `${coverLabel}%`,
-      valueLabel: `${coverLabel}%`,
-      summaryLabel: `${cloudCoverDescription(coverPct)} · ${coverLabel}%`,
-      detail: `${cloudCoverDescription(
-        coverPct,
-      )}; ${coverLabel}% Weather.com hourly forecast total cloud cover.${vintageDetail}`,
+      conditionLabel: conditionLabel || "Condition unavailable",
+      ceilingFeet: forecast?.ceilingFt,
+      ceilingLabel,
+      displayLabel: conditionLabel || "Condition n/a",
+      valueLabel: [conditionLabel || "Condition unavailable", ceilingLabel]
+        .filter(Boolean)
+        .join(" · "),
+      summaryLabel: [conditionLabel || "Condition unavailable", ceilingLabel]
+        .filter(Boolean)
+        .join(" · "),
+      detail: `KMA/AMO airport forecast condition: ${
+        conditionLabel || "not published"
+      }. ${
+        ceilingLabel ? `${ceilingLabel}.` : "Ceiling not published."
+      }${vintageDetail}`,
       capturedAt: forecast.capturedAt,
       capturedAtLocal: forecast.capturedAtLocal,
       captureAgeMinutes: forecast.captureAgeMinutes,
@@ -1474,13 +1537,15 @@ function forecastCloudHour(hour, forecast) {
     startMinute,
     endMinute,
     phase: "forecast",
+    forecastProvider: "kma",
     coverPct: null,
     lowerPct: null,
     upperPct: null,
     displayLabel: "—",
-    valueLabel: "Forecast unavailable",
-    summaryLabel: "Forecast unavailable",
-    detail: "No hourly cloud-cover forecast is stored for this hour.",
+    valueLabel: "KMA condition unavailable",
+    summaryLabel: "KMA condition unavailable",
+    detail:
+      "No KMA/AMO condition or ceiling is stored for this hour. Weather.com is not substituted.",
   };
 }
 
@@ -1494,10 +1559,11 @@ function buildHourlyCloudCover({
 }) {
   const forecastByHour = new Map();
   for (const row of forecastRows ?? []) {
-    const minute = parseMinute(
-      row.forecastTimeLocal ?? row.timeLocal ?? row.validTimeLocal,
+    const minute = firstFinite(
+      row.minute,
+      parseMinute(row.forecastTimeLocal ?? row.timeLocal ?? row.validTimeLocal),
     );
-    if (Number.isFinite(minute) && Number.isFinite(row.cloudCoverPct)) {
+    if (Number.isFinite(minute)) {
       forecastByHour.set(Math.floor(minute / 60), row);
     }
   }
@@ -1544,7 +1610,7 @@ function buildHourlyCloudCover({
     if (isLiveHour) {
       return observedCloudHour(hour, metarSkyRuns, currentMinute, "live");
     }
-    return forecastCloudHour(hour, forecastByHour.get(hour));
+    return kmaForecastCloudHour(hour, forecastByHour.get(hour));
   });
 }
 
@@ -1584,57 +1650,42 @@ function buildHourlyCloudSegments(hourlyCloudCover, currentMinute) {
   });
 }
 
-function buildForecastCloudRows({ forecastCapture, date, nowMs }) {
-  const capturedAt = Number(
-    forecastCapture?.weathercomHourlyCapturedAt ?? forecastCapture?.capturedAt,
-  );
-  const capturedAtLocal =
-    forecastCapture?.weathercomHourlyCapturedAtLocal ??
-    forecastCapture?.capturedAtLocal;
-  const captureAgeMinutes =
-    Number.isFinite(nowMs) && Number.isFinite(capturedAt)
-      ? Math.max(0, nowMs - capturedAt) / MINUTE_MS
-      : null;
-  if (
-    forecastCapture?.weathercomHourlyStatus !== "ok" ||
-    !Number.isFinite(capturedAt) ||
-    (Number.isFinite(nowMs) &&
-      (capturedAt > nowMs + 60 * 1000 ||
-        nowMs - capturedAt > MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000))
-  ) {
+function buildKmaForecastCloudRows({ kma, date, nowMs }) {
+  if (kma?.approvalRequired || kma?.setupRequired) {
     return [];
   }
 
-  return (forecastCapture.weathercomHourlyRows ?? [])
-    .filter((row) => row.date === date && Number.isFinite(row.cloudCoverPct))
-    .sort((left, right) => left.forecastTimeUtc - right.forecastTimeUtc)
+  return (kma?.hourlyRows ?? [])
+    .filter((row) => !row.date || row.date === date)
     .map((row) => {
-      const sourceCapturedAt = Number(row.peakSourceCapturedAt ?? capturedAt);
-      const sourceCapturedAtLocal =
-        row.peakSourceCapturedAtLocal ?? capturedAtLocal;
+      const sourceCapturedAt = firstFinite(row.capturedAt, kma?.capturedAt);
+      const sourceCapturedAtLocal = row.capturedAtLocal ?? kma?.capturedAtLocal;
       const sourceCaptureAgeMinutes =
         Number.isFinite(nowMs) && Number.isFinite(sourceCapturedAt)
           ? Math.max(0, nowMs - sourceCapturedAt) / MINUTE_MS
-          : captureAgeMinutes;
+          : kma?.captureAgeMinutes;
       if (
-        !Number.isFinite(sourceCapturedAt) ||
-        (Number.isFinite(nowMs) &&
-          (sourceCapturedAt > nowMs + MINUTE_MS ||
-            sourceCaptureAgeMinutes > MAX_PROVIDER_CAPTURE_AGE_MINUTES))
+        Number.isFinite(sourceCapturedAt) &&
+        Number.isFinite(nowMs) &&
+        sourceCapturedAt > nowMs + MINUTE_MS
       ) {
         return null;
       }
       return {
+        ...row,
         forecastTimeUtc: row.forecastTimeUtc,
         forecastTimeLocal: row.forecastTimeLocal,
-        cloudCoverPct: row.cloudCoverPct,
-        cloudProviderCount: 1,
+        phrase: row.phrase,
+        ceilingFt: row.ceilingFt,
+        ceilingText: row.ceilingText,
         capturedAt: sourceCapturedAt,
         capturedAtLocal: sourceCapturedAtLocal,
         captureAgeMinutes: sourceCaptureAgeMinutes,
         isStale:
-          Number.isFinite(sourceCaptureAgeMinutes) &&
-          sourceCaptureAgeMinutes > WEATHERCOM_STALE_AGE_MINUTES,
+          Boolean(kma?.isStale) ||
+          (Number.isFinite(sourceCaptureAgeMinutes) &&
+            sourceCaptureAgeMinutes >
+              (kma?.staleAfterMinutes ?? KMA_STALE_AGE_MINUTES)),
       };
     })
     .filter(Boolean);
@@ -1853,155 +1904,292 @@ function weathercomTooltipDetails(point, unit) {
   return lines;
 }
 
-function providerPeakLabel(signal) {
-  const knownLabels = {
-    weathercom: "Weather.com · RKSI",
-  };
-  const provider = String(signal?.provider ?? "");
-  return (
-    knownLabels[provider] ??
-    String(
-      signal?.label ??
-        signal?.providerName ??
-        signal?.provider ??
-        "Hourly forecast",
-    ).replace(/\s+hourly$/i, "")
-  );
+function finiteNumber(value) {
+  const numeric = typeof value === "string" ? Number(value) : value;
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
-function selectStoredHourlyProviderPeak(providerDetails, unit, nowMs = null) {
-  const temperatureField = unit === "C" ? "dailyHighC" : "dailyHighF";
-  return (
-    (Array.isArray(providerDetails) ? providerDetails : [])
-      .map((signal) => {
-        if (signal?.provider !== "weathercom") {
-          return null;
-        }
-        const minute = parseMinute(signal?.dailyPeakTimeLocal);
-        const temperature = signal?.[temperatureField];
-        const weight = Number(signal?.weight);
-        const capturedAt = Number(signal?.capturedAt);
-        const captureAgeMinutes = Number(signal?.captureAgeMinutes);
-        if (
-          signal?.status !== "ok" ||
-          !Number.isFinite(signal?.pointCount) ||
-          signal.pointCount <= 0 ||
-          !Number.isFinite(minute) ||
-          !Number.isFinite(signal?.dailyPeakTimeUtc) ||
-          !Number.isFinite(temperature) ||
-          !Number.isFinite(weight) ||
-          weight <= 0 ||
-          !Number.isFinite(capturedAt) ||
-          (Number.isFinite(nowMs) &&
-            (capturedAt > nowMs + 60 * 1000 ||
-              nowMs - capturedAt >
-                MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000)) ||
-          (Number.isFinite(captureAgeMinutes) &&
-            captureAgeMinutes > MAX_PROVIDER_CAPTURE_AGE_MINUTES)
-        ) {
-          return null;
-        }
-        return {
-          provider: String(signal.provider ?? ""),
-          providerLabel: providerPeakLabel(signal),
-          minute,
-          temperature,
-          peakTimeUtc: signal.dailyPeakTimeUtc,
-          peakTimeLocal: signal.dailyPeakTimeLocal,
-          peakSourceCapturedAt: signal.peakSourceCapturedAt,
-          peakSourceCapturedAtLocal: signal.peakSourceCapturedAtLocal,
-          weight,
-          capturedAt,
-          capturedAtLocal: signal.capturedAtLocal,
-          source: "prediction_revision",
-        };
-      })
-      .filter(Boolean)
-      .sort(
-        (left, right) =>
-          right.weight - left.weight ||
-          right.capturedAt - left.capturedAt ||
-          left.provider.localeCompare(right.provider),
-      )[0] ?? null
-  );
+function firstArray(...values) {
+  return values.find((value) => Array.isArray(value) && value.length) ?? [];
 }
 
-function selectLatestCaptureHourlyProviderPeak(
-  forecastCapture,
-  date,
-  unit,
-  nowMs,
-) {
-  const capturedAt = Number(forecastCapture?.capturedAt);
-  if (
-    !Number.isFinite(capturedAt) ||
-    (Number.isFinite(nowMs) &&
-      (capturedAt > nowMs + 60 * 1000 ||
-        nowMs - capturedAt > MAX_PROVIDER_CAPTURE_AGE_MINUTES * 60 * 1000))
-  ) {
-    return null;
+function kmaDateForRow(row) {
+  const explicitDate = row?.date ?? row?.forecastDate ?? row?.validDate;
+  if (isValidDate(explicitDate)) {
+    return explicitDate;
   }
+  const timestamp =
+    row?.forecastTimeLocal ??
+    row?.validTimeLocal ??
+    row?.timeLocal ??
+    row?.forecastAtLocal;
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(timestamp ?? ""));
+  return match?.[1] ?? null;
+}
 
-  if (
-    forecastCapture?.weathercomStatus !== "ok" ||
-    forecastCapture?.weathercomHourlyStatus !== "ok"
-  ) {
-    return null;
-  }
-  const dailyTemperatureField = unit === "C" ? "maxTempC" : "maxTempF";
-  const hourlyTemperatureField = unit === "C" ? "tempC" : "tempF";
-  const daily = (forecastCapture.weathercomForecastDays ?? []).find(
-    (row) =>
-      row?.date === date && Number.isFinite(row?.[dailyTemperatureField]),
+function normalizeKmaHourlyRows(rows, date, capture, diagnostics) {
+  const capturedAt = finiteNumber(
+    capture?.capturedAt ??
+      diagnostics?.capturedAt ??
+      diagnostics?.latestCapturedAt,
   );
-  const rows = (forecastCapture.weathercomHourlyRows ?? []).filter(
-    (row) =>
-      row?.date === date &&
-      Number.isFinite(row?.forecastTimeUtc) &&
-      Number.isFinite(row?.[hourlyTemperatureField]),
-  );
-  if (!daily || !rows.length) {
-    return null;
-  }
+  const capturedAtLocal =
+    capture?.capturedAtLocal ??
+    diagnostics?.capturedAtLocal ??
+    diagnostics?.latestCapturedAtLocal;
 
-  let peak = null;
-  for (const row of rows) {
-    if (
-      !peak ||
-      row[hourlyTemperatureField] > peak[hourlyTemperatureField] ||
-      (row[hourlyTemperatureField] === peak[hourlyTemperatureField] &&
-        row.forecastTimeUtc < peak.forecastTimeUtc)
-    ) {
-      peak = row;
-    }
-  }
-  const minute = parseMinute(peak?.forecastTimeLocal);
-  if (!peak || !Number.isFinite(minute)) {
-    return null;
-  }
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const forecastTimeUtc = finiteNumber(
+        row?.forecastTimeUtc ??
+          row?.validTimeUtc ??
+          row?.timeUtc ??
+          row?.forecastAtUtc,
+      );
+      const forecastTimeLocal =
+        row?.forecastTimeLocal ??
+        row?.validTimeLocal ??
+        row?.timeLocal ??
+        row?.forecastAtLocal;
+      const minute = firstFinite(
+        parseMinute(forecastTimeLocal),
+        Number.isFinite(forecastTimeUtc)
+          ? seoulMinuteForEpoch(forecastTimeUtc)
+          : null,
+      );
+      const tempC = finiteNumber(
+        row?.tempC ??
+          row?.temperatureC ??
+          row?.forecastTempC ??
+          row?.latestTempC,
+      );
+      const tempF = firstFinite(
+        finiteNumber(
+          row?.tempF ??
+            row?.temperatureF ??
+            row?.forecastTempF ??
+            row?.latestTempF,
+        ),
+        Number.isFinite(tempC) ? (tempC * 9) / 5 + 32 : null,
+      );
+      const phrase =
+        row?.phrase ??
+        row?.cloudPhrase ??
+        row?.conditionPhrase ??
+        row?.conditionLabel ??
+        row?.weatherCondition ??
+        row?.condition ??
+        null;
+      const ceilingFt = finiteNumber(
+        row?.ceilingFt ?? row?.ceilingFeet ?? row?.ceiling,
+      );
+      const rowDate = kmaDateForRow(row);
+      if (
+        (!Number.isFinite(minute) && !Number.isFinite(forecastTimeUtc)) ||
+        (rowDate && rowDate !== date)
+      ) {
+        return null;
+      }
+      return {
+        ...row,
+        date: rowDate ?? date,
+        forecastTimeUtc,
+        forecastTimeLocal,
+        minute,
+        tempC,
+        tempF,
+        phrase: phrase ? String(phrase).trim() : null,
+        conditionCode: row?.conditionCode ?? row?.code ?? null,
+        ceilingFt,
+        ceilingText: row?.ceilingText ?? null,
+        capturedAt: finiteNumber(row?.capturedAt) ?? capturedAt,
+        capturedAtLocal: row?.capturedAtLocal ?? capturedAtLocal,
+      };
+    })
+    .filter(Boolean)
+    .sort(
+      (left, right) =>
+        (left.forecastTimeUtc ?? Number.POSITIVE_INFINITY) -
+          (right.forecastTimeUtc ?? Number.POSITIVE_INFINITY) ||
+        (left.minute ?? Number.POSITIVE_INFINITY) -
+          (right.minute ?? Number.POSITIVE_INFINITY),
+    );
+}
+
+function normalizeKmaDashboard(dashboard, date, nowMs) {
+  const access = dashboard?.kmaAccess ?? dashboard?.kmaConfigStatus ?? null;
+  const forecast = dashboard?.kmaForecast ?? null;
+  const diagnostics = dashboard?.kmaHourlyDiagnostics ?? null;
+  const capture =
+    forecast?.latestCapture ??
+    dashboard?.latestKmaForecastCapture ??
+    dashboard?.latestForecastCapture ??
+    null;
+  const selectedDateForecast =
+    forecast?.selectedDateForecast ??
+    diagnostics?.selectedDateForecast ??
+    firstArray(
+      capture?.dailyRows,
+      capture?.forecastDays,
+      capture?.kmaForecastDays,
+    ).find((row) => row?.date === date) ??
+    null;
+  const rawHourlyRows = firstArray(
+    forecast?.hourlyRows,
+    diagnostics?.points,
+    diagnostics?.rows,
+    capture?.hourlyRows,
+    capture?.kmaHourlyRows,
+  );
+  const hourlyRows = normalizeKmaHourlyRows(
+    rawHourlyRows,
+    date,
+    capture,
+    diagnostics,
+  );
+  const dailyHighC = firstFinite(
+    finiteNumber(selectedDateForecast?.maxTempC),
+    finiteNumber(selectedDateForecast?.dailyMaxTempC),
+    finiteNumber(selectedDateForecast?.maxC),
+  );
+  const rawStatus = String(
+    access?.status ??
+      forecast?.status ??
+      capture?.status ??
+      diagnostics?.status ??
+      "",
+  ).toLowerCase();
+  const approvalRequired =
+    access?.approved === false ||
+    [
+      "approval_required",
+      "access_not_approved",
+      "not_approved",
+      "disabled",
+    ].includes(rawStatus) ||
+    capture?.status === "approval_required";
+  const setupRequired = [
+    "setup_required",
+    "not_configured",
+    "configuration_required",
+  ].includes(rawStatus);
+  const capturedAt = finiteNumber(
+    capture?.capturedAt ??
+      forecast?.latestCapturedAt ??
+      diagnostics?.latestCapturedAt,
+  );
+  const capturedAtLocal =
+    capture?.capturedAtLocal ??
+    forecast?.latestCapturedAtLocal ??
+    diagnostics?.latestCapturedAtLocal;
+  const captureAgeMinutes =
+    Number.isFinite(nowMs) && Number.isFinite(capturedAt)
+      ? Math.max(0, nowMs - capturedAt) / MINUTE_MS
+      : firstFinite(
+          finiteNumber(forecast?.latestSuccessAgeMinutes),
+          finiteNumber(diagnostics?.latestSuccessAgeMinutes),
+        );
+  const staleAfterMinutes = firstFinite(
+    finiteNumber(forecast?.staleAfterMinutes),
+    finiteNumber(diagnostics?.staleAfterMinutes),
+    KMA_STALE_AGE_MINUTES,
+  );
+  const isStale =
+    Boolean(forecast?.isStale ?? diagnostics?.isStale) ||
+    (Number.isFinite(captureAgeMinutes) &&
+      captureAgeMinutes > staleAfterMinutes);
+  const latestAttemptStatus =
+    forecast?.latestAttemptStatus ??
+    diagnostics?.latestAttemptStatus ??
+    (diagnostics?.status === "error" ? "error" : null) ??
+    (capture?.status === "error" ? "error" : null);
+  const latestAttemptError =
+    forecast?.latestAttemptError ??
+    diagnostics?.latestAttemptError ??
+    diagnostics?.error ??
+    capture?.error ??
+    null;
+  const available =
+    !approvalRequired &&
+    !setupRequired &&
+    (Number.isFinite(dailyHighC) || hourlyRows.length > 0);
+
   return {
-    provider: "weathercom",
-    providerLabel: "Weather.com · RKSI",
-    minute,
-    temperature: daily[dailyTemperatureField],
-    peakTimeUtc: peak.forecastTimeUtc,
-    peakTimeLocal: peak.forecastTimeLocal,
-    peakSourceCapturedAt: peak.peakSourceCapturedAt,
-    peakSourceCapturedAtLocal: peak.peakSourceCapturedAtLocal,
-    weight: 1,
+    loading: dashboard === undefined,
+    access,
+    forecast,
+    diagnostics,
+    capture,
+    selectedDateForecast,
+    hourlyRows,
+    dailyHighC,
     capturedAt,
-    capturedAtLocal: forecastCapture.capturedAtLocal,
-    source: "latest_capture",
+    capturedAtLocal,
+    captureAgeMinutes,
+    staleAfterMinutes,
+    isStale,
+    latestAttemptStatus,
+    latestAttemptError,
+    approvalRequired,
+    setupRequired,
+    available,
+    sourceUrl:
+      forecast?.sourceUrl ??
+      access?.sourceUrl ??
+      capture?.sourceUrl ??
+      "https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI",
   };
 }
 
-function normalizePrediction(prediction) {
-  if (!prediction) {
+function kmaHourlyPeak(rows) {
+  const usable = (rows ?? []).filter(
+    (row) => Number.isFinite(row?.tempC) && Number.isFinite(row?.minute),
+  );
+  if (!usable.length) {
+    return null;
+  }
+  const peakTempC = Math.max(...usable.map((row) => row.tempC));
+  const tied = usable.filter((row) => row.tempC === peakTempC);
+  return {
+    tempC: peakTempC,
+    firstMinute: tied[0].minute,
+    lastMinute: tied.at(-1).minute,
+    firstRow: tied[0],
+    lastRow: tied.at(-1),
+    tiedCount: tied.length,
+  };
+}
+
+function formatKmaPeakWindow(peak) {
+  if (!peak) {
+    return null;
+  }
+  if (peak.firstMinute === peak.lastMinute) {
+    return `${minuteLabel(peak.firstMinute)} KST`;
+  }
+  return `${minuteLabel(peak.firstMinute)}–${minuteLabel(peak.lastMinute)} KST`;
+}
+
+function selectKmaProviderPeak(kma, unit) {
+  if (!kma?.available) {
+    return null;
+  }
+  const hourlyPeak = kmaHourlyPeak(kma?.hourlyRows);
+  const temperatureC = kma?.dailyHighC;
+  const minute = hourlyPeak?.firstMinute;
+  if (!Number.isFinite(temperatureC) || !Number.isFinite(minute)) {
     return null;
   }
   return {
-    ...prediction,
-    hourlyCurve: prediction.hourlyCurve ?? prediction.hourlyEnsembleCurve ?? [],
+    provider: "kma_amo",
+    providerLabel: "KMA/AMO · RKSI",
+    minute,
+    temperature: toUnitTemperature(temperatureC, unit),
+    peakTimeUtc: hourlyPeak.firstRow?.forecastTimeUtc,
+    peakTimeLocal: hourlyPeak.firstRow?.forecastTimeLocal,
+    capturedAt: kma?.capturedAt,
+    capturedAtLocal: kma?.capturedAtLocal,
+    source: "kma_official_airport_forecast",
   };
 }
 
@@ -2149,11 +2337,38 @@ function toWeathercomHourlyPoints(diagnostics, unit, role) {
     .filter(Boolean);
 }
 
+function toKmaHourlyPoints(rows, unit) {
+  return (rows ?? [])
+    .map((row) => {
+      const x = firstFinite(
+        row?.minute,
+        parseMinute(row?.forecastTimeLocal),
+        Number.isFinite(row?.forecastTimeUtc)
+          ? seoulMinuteForEpoch(row.forecastTimeUtc)
+          : null,
+      );
+      const y = unit === "C" ? row?.tempC : row?.tempF;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      return {
+        ...row,
+        x,
+        y,
+        kmaForecastRole: "primary",
+        forecastCondition: row?.phrase ?? null,
+        forecastCeilingLabel: kmaCeilingLabel(row),
+      };
+    })
+    .filter(Boolean);
+}
+
 function buildChartData(
   metarRows,
   amosDisplayRows,
   observedMax,
   providerPeak,
+  kmaHourlyRows,
   weathercomHourlyDiagnostics,
   unit,
 ) {
@@ -2175,6 +2390,7 @@ function buildChartData(
     unit,
     "baseline",
   );
+  const kmaHourlyPoints = toKmaHourlyPoints(kmaHourlyRows, unit);
   const datasets = [
     {
       label: "Representative AMOS · 15L designation",
@@ -2230,18 +2446,39 @@ function buildChartData(
     });
   }
 
+  if (kmaHourlyPoints.length) {
+    datasets.unshift({
+      label: "KMA/AMO · official RKSI airport forecast",
+      data: kmaHourlyPoints,
+      kmaForecastRole: "primary",
+      borderColor: "#c4b5fd",
+      backgroundColor: "#c4b5fd",
+      borderWidth: 2.75,
+      borderDash: [8, 4],
+      pointRadius: 3,
+      pointHitRadius: 11,
+      pointHoverRadius: 6,
+      pointBorderColor: "#ede9fe",
+      pointBackgroundColor: "#1e1b4b",
+      pointBorderWidth: 1.25,
+      tension: 0.22,
+      spanGaps: false,
+      order: 3,
+    });
+  }
+
   if (weathercomBaselinePoints.length) {
     const baselineDescriptor = weathercomBaselineDescriptor(
       weathercomHourlyDiagnostics,
     );
     datasets.unshift({
-      label: `Weather.com · ${baselineDescriptor.label}`,
+      label: `Secondary Weather.com · ${baselineDescriptor.label}`,
       data: weathercomBaselinePoints,
       weathercomRole: "baseline",
-      borderColor: "rgba(147, 197, 253, 0.34)",
-      backgroundColor: "rgba(147, 197, 253, 0.34)",
-      borderWidth: 1.5,
-      borderDash: [2, 7],
+      borderColor: "rgba(147, 197, 253, 0.22)",
+      backgroundColor: "rgba(147, 197, 253, 0.22)",
+      borderWidth: 1.25,
+      borderDash: [2, 9],
       pointRadius: 0,
       pointHitRadius: 9,
       pointHoverRadius: 4,
@@ -2254,14 +2491,14 @@ function buildChartData(
 
   if (weathercomLatestPoints.length) {
     datasets.unshift({
-      label: "Weather.com · latest stored",
+      label: "Secondary Weather.com · latest stored",
       data: weathercomLatestPoints,
       weathercomRole: "latest",
       borderColor: "#60a5fa",
       backgroundColor: "#60a5fa",
-      borderWidth: 2.25,
-      borderDash: [7, 5],
-      pointRadius: 2.25,
+      borderWidth: 1.5,
+      borderDash: [3, 7],
+      pointRadius: 1.75,
       pointHitRadius: 11,
       pointHoverRadius: 5,
       pointBorderColor: "#bfdbfe",
@@ -2274,7 +2511,7 @@ function buildChartData(
 
   if (providerPeak) {
     datasets.unshift({
-      label: `${providerPeak.providerLabel} raw daily high · hourly time estimate`,
+      label: `${providerPeak.providerLabel} published daily high · hourly time estimate`,
       hideFromLegend: true,
       data: [
         {
@@ -2359,22 +2596,6 @@ function SourceCard({
       )}
     </div>
   );
-}
-
-function formatPredictionPeakWindow(prediction) {
-  const start = formatLocalTime(
-    prediction?.peakWindowStartLocal ?? prediction?.peakWindowStartUtc,
-  );
-  const end = formatLocalTime(
-    prediction?.peakWindowEndLocal ?? prediction?.peakWindowEndUtc,
-  );
-  if (start !== "—" && end !== "—") {
-    return `${start}–${end} KST`;
-  }
-  if (start !== "—" || end !== "—") {
-    return `${start !== "—" ? start : end} KST`;
-  }
-  return null;
 }
 
 function OutlookMetric({ label, value, detail, tone = "text-slate-100" }) {
@@ -2772,9 +2993,7 @@ function SolarHeatingPanel({
   const statusTone =
     status === "ok" || status === "current"
       ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-300"
-      : status === "loading" ||
-          status === "night" ||
-          status === "window_closed"
+      : status === "loading" || status === "night" || status === "window_closed"
         ? "border-slate-400/20 bg-slate-400/10 text-slate-400"
         : "border-amber-300/25 bg-amber-300/10 text-amber-300";
   const collectorRunning =
@@ -2810,15 +3029,13 @@ function SolarHeatingPanel({
             <button
               type="button"
               onClick={onRefresh}
-              disabled={
-                refreshActive || !collectionWindowOpen || !configured
-              }
+              disabled={refreshActive || !collectionWindowOpen || !configured}
               title={
                 !configured
                   ? "NMSC access approval is required before collection"
                   : collectionWindowOpen
-                  ? "Queue the newest GK2A SWRAD frame"
-                  : "GK2A downloads are limited to 11:00–16:00 KST"
+                    ? "Queue the newest GK2A SWRAD frame"
+                    : "GK2A downloads are limited to 11:00–16:00 KST"
               }
               className="border border-cyan-300/30 bg-cyan-300/10 px-3 py-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-cyan-200 transition hover:border-cyan-200/60 hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -2826,9 +3043,9 @@ function SolarHeatingPanel({
                 ? "GK2A queued"
                 : !configured
                   ? "Approval required"
-                : collectionWindowOpen
-                  ? "Refresh GK2A"
-                  : "11–16 KST only"}
+                  : collectionWindowOpen
+                    ? "Refresh GK2A"
+                    : "11–16 KST only"}
             </button>
           ) : null}
           <span
@@ -2923,93 +3140,101 @@ function MaxOutlookPanel({
   latestAmos,
   amosFreshness,
   observedMax,
-  prediction,
-  predictionUsable,
-  predictionAgeMinutes,
-  predictionForecastAgeMinutes,
+  kma,
+  kmaPeak,
   expectedHighC,
-  guidanceLowC,
-  guidanceHighC,
   trendCPerHour,
 }) {
   const isToday = date === today;
   const isArchive = date < today;
   const currentC = latestAmos?.tempC;
-  const peakWindow = predictionUsable
-    ? formatPredictionPeakWindow(prediction)
-    : null;
-  const predictionGeneratedAt = formatLocalTime(prediction?.generatedAt);
-  const predictionStatus = predictionUsable
-    ? isToday
-      ? "Current stored outlook"
-      : "Stored outlook"
-    : observedMax
-      ? "Observed-only fallback"
-      : "Awaiting data";
-  const expectedLabel = isArchive
-    ? predictionUsable
-      ? "Stored tracker max"
-      : "Final observed max"
-    : "Expected max";
-  const expectedDetail = predictionUsable
-    ? "Weather.com guidance with the AMOS observed floor"
-    : observedMax
-      ? "No usable stored forecast; using the observed maximum"
-      : "No usable observation or stored forecast";
-  const guidanceRange =
-    Number.isFinite(guidanceLowC) && Number.isFinite(guidanceHighC)
-      ? `${formatPredictionTemperature(
-          toUnitTemperature(guidanceLowC, unit),
-          unit,
-        )}–${formatPredictionTemperature(
-          toUnitTemperature(guidanceHighC, unit),
-          unit,
-        )}`
-      : "Unavailable";
+  const kmaDailyHighC = kma?.dailyHighC;
+  const peakWindow = formatKmaPeakWindow(kmaPeak);
+  const kmaCaptureTime = formatLocalTime(
+    kma?.capturedAtLocal ?? kma?.capturedAt,
+  );
+  const kmaPublishedHigh = formatPredictionTemperature(
+    toUnitTemperature(kmaDailyHighC, unit),
+    unit,
+  );
+  const kmaHourlyPeak = formatPredictionTemperature(
+    toUnitTemperature(kmaPeak?.tempC, unit),
+    unit,
+  );
+  const hasKmaMaximum = Boolean(
+    kma?.available && Number.isFinite(kmaDailyHighC),
+  );
+  const expectedLabel = kma?.loading
+    ? "Expected max"
+    : hasKmaMaximum
+      ? isArchive
+        ? "Stored KMA-based max"
+        : "Expected max"
+      : observedMax
+        ? "Observed max only"
+        : "Expected max";
+  const observedExceedsKma =
+    hasKmaMaximum &&
+    Number.isFinite(observedMax?.tempC) &&
+    observedMax.tempC > kmaDailyHighC;
+  const expectedDetail = kma?.loading
+    ? "Loading the official KMA/AMO airport forecast"
+    : hasKmaMaximum
+      ? observedExceedsKma
+        ? "Observed AMOS has exceeded KMA; actual observation sets the floor"
+        : "KMA/AMO published high; observed AMOS is the only floor"
+      : observedMax
+        ? "KMA forecast unavailable; no secondary forecast substituted"
+        : "KMA forecast and representative observation unavailable";
   const trendInUnit = toUnitTemperatureDelta(trendCPerHour, unit);
   const trendIsCurrent = !isToday || amosFreshness.status === "fresh";
   const displayedTrend = trendIsCurrent ? trendInUnit : null;
   const trendValue = Number.isFinite(displayedTrend)
     ? `${displayedTrend > 0 ? "+" : ""}${displayedTrend.toFixed(1)}°${unit}/h`
     : "Unavailable";
-  let predictionFallbackReason = null;
-  if (prediction && !predictionUsable) {
-    if (prediction.modelVersion !== CURRENT_PREDICTION_MODEL_VERSION) {
-      predictionFallbackReason = "stored outlook uses a retired model";
-    } else if (!Number.isFinite(prediction.predictedHighC)) {
-      predictionFallbackReason = "stored outlook has no maximum";
-    } else if (!isArchive && !Number.isFinite(predictionAgeMinutes)) {
-      predictionFallbackReason = "outlook generation time is unavailable";
-    } else if (
-      !isArchive &&
-      predictionAgeMinutes > MAX_LIVE_PREDICTION_AGE_MINUTES
-    ) {
-      predictionFallbackReason = `stored outlook is ${Math.round(
-        predictionAgeMinutes,
-      )}m old`;
-    } else if (!isArchive && !Number.isFinite(predictionForecastAgeMinutes)) {
-      predictionFallbackReason = "Weather.com input time is unavailable";
-    } else if (
-      !isArchive &&
-      predictionForecastAgeMinutes > WEATHERCOM_STALE_AGE_MINUTES
-    ) {
-      predictionFallbackReason = `Weather.com input is ${Math.round(
-        predictionForecastAgeMinutes,
-      )}m old`;
-    }
-  }
-  const predictionVintage = predictionUsable
-    ? [
-        predictionGeneratedAt !== "—"
-          ? `outlook generated ${predictionGeneratedAt} KST`
-          : null,
-        Number.isFinite(predictionForecastAgeMinutes)
-          ? `Weather.com input ${Math.round(predictionForecastAgeMinutes)}m old`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : predictionFallbackReason;
+  const forecastStatus = kma?.loading
+    ? "Loading KMA forecast"
+    : kma?.approvalRequired
+      ? "KMA approval required"
+      : kma?.setupRequired
+        ? "KMA setup required"
+        : kma?.available
+          ? isArchive
+            ? "Stored KMA forecast"
+            : kma.isStale
+              ? "Stored KMA forecast · stale"
+              : isToday
+                ? "Current KMA forecast"
+                : "Stored KMA forecast"
+          : "KMA forecast unavailable";
+  const forecastStatusTone =
+    kma?.approvalRequired || kma?.setupRequired
+      ? "border-amber-300/25 bg-amber-300/10 text-amber-300"
+      : kma?.available && (isArchive || !kma?.isStale)
+        ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-300"
+        : kma?.isStale
+          ? "border-amber-300/25 bg-amber-300/10 text-amber-300"
+          : "border-slate-500/20 bg-slate-500/10 text-slate-500";
+  const accessMessage = kma?.approvalRequired
+    ? `${kma?.access?.flagName ?? "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED"} is not approved. Official KMA forecast collection is disabled, and Weather.com is not used as a fallback.`
+    : kma?.setupRequired
+      ? "KMA/AMO collection needs server-side setup. Weather.com is not used as a primary substitute."
+      : null;
+  const attemptMessage =
+    kma?.latestAttemptStatus === "error"
+      ? kma?.latestAttemptError
+        ? `Latest KMA collection attempt failed: ${kma.latestAttemptError}`
+        : "Latest KMA collection attempt failed; stored KMA guidance may remain visible."
+      : null;
+  const vintage = [
+    kmaCaptureTime !== "—" ? `KMA captured ${kmaCaptureTime} KST` : null,
+    Number.isFinite(kma?.captureAgeMinutes)
+      ? `${Math.round(kma.captureAgeMinutes)}m old`
+      : null,
+    kma?.isStale && !isArchive ? "stale stored guidance" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <section
@@ -3029,22 +3254,35 @@ function MaxOutlookPanel({
                 : "Maximum outlook"}
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            Representative RKSI AMOS temperature, using the feed&apos;s 15L
-            designation.
+            KMA/AMO&apos;s official RKSI airport forecast, with representative
+            AMOS observations using the feed&apos;s 15L designation.
           </p>
         </div>
         <span
-          className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${
-            predictionUsable
-              ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-300"
-              : observedMax
-                ? "border-amber-300/25 bg-amber-300/10 text-amber-300"
-                : "border-slate-500/20 bg-slate-500/10 text-slate-500"
-          }`}
+          className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${forecastStatusTone}`}
         >
-          {predictionStatus}
+          {forecastStatus}
         </span>
       </div>
+
+      {(accessMessage || attemptMessage) && (
+        <div className="mb-3 border border-amber-300/20 bg-amber-300/[0.055] px-4 py-3">
+          {accessMessage && (
+            <p className="font-mono text-[10px] leading-4 text-amber-100/80">
+              <span className="uppercase tracking-[0.15em] text-amber-300">
+                Official KMA forecast unavailable
+              </span>
+              {" · "}
+              {accessMessage}
+            </p>
+          )}
+          {attemptMessage && (
+            <p className="font-mono text-[10px] leading-4 text-amber-100/70">
+              {attemptMessage}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-px border border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <OutlookMetric
@@ -3083,29 +3321,30 @@ function MaxOutlookPanel({
           tone="text-white"
         />
         <OutlookMetric
-          label="Guidance range"
-          value={guidanceRange}
+          label="KMA published high"
+          value={kmaPublishedHigh}
           detail={
-            Number.isFinite(guidanceLowC)
-              ? "Heuristic range, floored at the observed max"
-              : "Requires a usable stored outlook"
+            hasKmaMaximum
+              ? "Official RKSI daily maximum"
+              : kma?.loading
+                ? "Loading official KMA daily maximum"
+                : kma?.approvalRequired
+                  ? "Approval required; no secondary fallback"
+                  : "No KMA daily maximum stored"
           }
           tone="text-violet-200"
         />
         <OutlookMetric
-          label="Likely peak window"
-          value={
-            peakWindow ??
-            (observedMax
-              ? `${formatClock(observedMax.obsTimeUtc)} observed`
-              : "Unavailable")
-          }
+          label="KMA hourly peak"
+          value={kmaHourlyPeak}
           detail={
             peakWindow
-              ? "Stored hourly peak window"
-              : observedMax
-                ? "Falling back to the observed max time"
-                : "No observed max or usable forecast window"
+              ? `${peakWindow} · ${kmaPeak.tiedCount} tied hourly point${
+                  kmaPeak.tiedCount === 1 ? "" : "s"
+                }`
+              : kma?.loading
+                ? "Loading official KMA hourly curve"
+                : "No KMA hourly temperature curve stored"
           }
           tone="text-rose-200"
         />
@@ -3130,13 +3369,23 @@ function MaxOutlookPanel({
       <p className="mt-2 font-mono text-[9px] leading-4 text-slate-600">
         {[
           amosFreshness.timing,
-          predictionVintage,
-          predictionUsable
-            ? "expected max and range can never fall below the selected day’s observed AMOS maximum"
+          vintage,
+          hasKmaMaximum
+            ? "expected max can never fall below the selected day’s observed AMOS maximum"
             : null,
+          "Weather.com appears only as a labeled secondary comparison",
         ]
           .filter(Boolean)
           .join(" · ")}
+        {" · "}
+        <a
+          className="text-violet-300/75 underline decoration-violet-300/30 underline-offset-2 transition hover:text-violet-200"
+          href={kma?.sourceUrl}
+          rel="noreferrer"
+          target="_blank"
+        >
+          Official KMA/AMO RKSI page
+        </a>
       </p>
     </section>
   );
@@ -3242,7 +3491,7 @@ function WeathercomHourlySummary({ diagnostics, unit, loading }) {
     return (
       <div className="mb-3 border border-blue-300/15 bg-blue-300/[0.035] px-4 py-3">
         <p className="font-mono text-[10px] uppercase tracking-[0.17em] text-blue-300">
-          Weather.com hourly history
+          Secondary Weather.com hourly history
         </p>
         <p className="mt-1 text-xs text-slate-400">
           {diagnostics?.error
@@ -3291,14 +3540,20 @@ function WeathercomHourlySummary({ diagnostics, unit, loading }) {
 
   return (
     <div
-      aria-label="Weather.com hourly forecast comparison"
+      aria-label="Secondary Weather.com hourly forecast comparison"
       className="mb-3 grid gap-px border border-blue-300/15 bg-white/10 md:grid-cols-3"
     >
+      <div className="bg-blue-300/[0.035] px-4 py-2 md:col-span-3">
+        <p className="font-mono text-[9px] uppercase leading-4 tracking-[0.15em] text-blue-200/70">
+          Secondary comparison only · not used for the expected maximum, KMA
+          curve, peak timing, or cloud guidance
+        </p>
+      </div>
       {(latestAttemptFailed || isStale) && (
         <div className="border-b border-amber-300/15 bg-amber-300/[0.055] px-4 py-2.5 md:col-span-3">
           <p className="font-mono text-[10px] leading-4 text-amber-100/80">
             <span className="uppercase tracking-[0.15em] text-amber-300">
-              Weather.com hourly data is stale
+              Secondary Weather.com hourly data is stale
             </span>
             {diagnostics?.latestAttemptError
               ? ` · ${diagnostics.latestAttemptError}`
@@ -3314,7 +3569,7 @@ function WeathercomHourlySummary({ diagnostics, unit, loading }) {
       )}
       <div className="bg-[#081321] px-4 py-3">
         <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-blue-300">
-          Actuals vs {baselineDescriptor.label}
+          Secondary actuals vs {baselineDescriptor.label}
         </p>
         <p className="mt-1 text-sm font-medium text-slate-100">
           {weathercomRunningValue(runningBaseline, unit)}
@@ -3325,7 +3580,7 @@ function WeathercomHourlySummary({ diagnostics, unit, loading }) {
       </div>
       <div className="bg-[#081321] px-4 py-3">
         <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-blue-300">
-          Actuals vs latest pre-hour
+          Secondary actuals vs latest pre-hour
         </p>
         <p className="mt-1 text-sm font-medium text-slate-100">
           {weathercomRunningValue(runningPreHour, unit)}
@@ -3336,7 +3591,7 @@ function WeathercomHourlySummary({ diagnostics, unit, loading }) {
       </div>
       <div className="bg-[#081321] px-4 py-3">
         <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-blue-300">
-          Weather.com hourly curve peak
+          Secondary Weather.com curve peak
         </p>
         <p className="mt-1 text-sm font-medium text-slate-100">
           {Number.isFinite(peakLatest)
@@ -3355,7 +3610,7 @@ function WeathercomHourlySummary({ diagnostics, unit, loading }) {
         <div className="bg-[#081321] px-4 py-2.5 md:col-span-3">
           <p className="font-mono text-[10px] leading-4 text-slate-400">
             <span className="uppercase tracking-[0.15em] text-cyan-300">
-              Live vs latest pre-observation curve
+              Secondary live comparison
             </span>
             {" · "}
             <span className="text-slate-300">
@@ -3394,18 +3649,19 @@ function WeathercomHourlyDetails({ diagnostics, unit }) {
   return (
     <details className="mt-3 border border-blue-300/15 bg-blue-300/[0.025]">
       <summary className="cursor-pointer px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-blue-200/75 transition hover:text-blue-100">
-        View Weather.com hourly revisions and departures
+        View secondary Weather.com revisions and departures
       </summary>
       <div
-        aria-label="Scrollable Weather.com hourly revision details"
+        aria-label="Scrollable secondary Weather.com hourly revision details"
         className="overflow-x-auto border-t border-blue-300/10 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-300/50"
         role="region"
         tabIndex={0}
       >
         <table className="w-full min-w-[1540px] border-collapse text-left">
           <caption className="sr-only">
-            Weather.com hourly latest stored forecasts, morning baseline,
-            revisions, pre-hour forecasts, matched AMOS readings, and departures
+            Secondary Weather.com hourly latest stored forecasts, morning
+            baseline, revisions, pre-hour forecasts, matched AMOS readings, and
+            departures
           </caption>
           <thead>
             <tr className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
@@ -3650,54 +3906,30 @@ export default function SeoulDayPage() {
     () => buildMetarSkyRuns(metarRows, currentSeoulMinute),
     [currentSeoulMinute, metarRows],
   );
-  const latestPrediction = normalizePrediction(
-    predictionDashboard?.latestPrediction,
+  const providerFreshnessNow = Number.isFinite(clockNowMs)
+    ? Math.floor(clockNowMs / MINUTE_MS) * MINUTE_MS
+    : null;
+  const kma = useMemo(
+    () =>
+      normalizeKmaDashboard(
+        predictionDashboard,
+        date,
+        date >= today ? providerFreshnessNow : null,
+      ),
+    [date, predictionDashboard, providerFreshnessNow, today],
   );
-  const predictionAgeMinutes =
-    Number.isFinite(clockNowMs) &&
-    Number.isFinite(latestPrediction?.generatedAt)
-      ? Math.max(0, clockNowMs - latestPrediction.generatedAt) / MINUTE_MS
-      : null;
-  const predictionForecastCapturedAt =
-    latestPrediction?.forecastCapturedAt ??
-    latestPrediction?.providerDetails?.find(
-      (provider) => provider?.provider === "weathercom",
-    )?.capturedAt;
-  const predictionForecastAgeMinutes =
-    Number.isFinite(clockNowMs) && Number.isFinite(predictionForecastCapturedAt)
-      ? Math.max(0, clockNowMs - predictionForecastCapturedAt) / MINUTE_MS
-      : null;
-  const predictionUsable =
-    latestPrediction?.modelVersion === CURRENT_PREDICTION_MODEL_VERSION &&
-    Number.isFinite(latestPrediction?.predictedHighC) &&
-    (date < today ||
-      (Number.isFinite(predictionAgeMinutes) &&
-        latestPrediction.generatedAt <= clockNowMs + MINUTE_MS &&
-        predictionAgeMinutes <= MAX_LIVE_PREDICTION_AGE_MINUTES &&
-        Number.isFinite(predictionForecastAgeMinutes) &&
-        predictionForecastCapturedAt <= clockNowMs + MINUTE_MS &&
-        predictionForecastAgeMinutes <= WEATHERCOM_STALE_AGE_MINUTES));
-  const expectedHighC = predictionUsable
-    ? Math.max(
-        latestPrediction.predictedHighC,
-        observedMax?.tempC ?? Number.NEGATIVE_INFINITY,
-      )
-    : (observedMax?.tempC ?? null);
-  const guidanceLowC =
-    predictionUsable && Number.isFinite(latestPrediction?.confidenceLowC)
-      ? Math.max(
-          latestPrediction.confidenceLowC,
-          observedMax?.tempC ?? Number.NEGATIVE_INFINITY,
-        )
-      : null;
-  const guidanceHighC =
-    predictionUsable && Number.isFinite(latestPrediction?.confidenceHighC)
-      ? Math.max(
-          latestPrediction.confidenceHighC,
-          guidanceLowC ?? Number.NEGATIVE_INFINITY,
-          expectedHighC ?? Number.NEGATIVE_INFINITY,
-        )
-      : null;
+  const kmaPrimaryHourlyRows = useMemo(
+    () => (kma.available ? kma.hourlyRows : []),
+    [kma.available, kma.hourlyRows],
+  );
+  const kmaPeak = useMemo(
+    () => (kma.available ? kmaHourlyPeak(kma.hourlyRows) : null),
+    [kma.available, kma.hourlyRows],
+  );
+  const expectedHighC =
+    kma.available && Number.isFinite(kma.dailyHighC)
+      ? Math.max(kma.dailyHighC, observedMax?.tempC ?? Number.NEGATIVE_INFINITY)
+      : (observedMax?.tempC ?? null);
   const observedMaxMarker = useMemo(() => {
     const minute = parseMinute(observedMax?.obsTimeLocal);
     const temperature = toUnitTemperature(observedMax?.tempC, unit);
@@ -3718,63 +3950,18 @@ export default function SeoulDayPage() {
   )
     ? weathercomHourlyDiagnostics.points.length
     : 0;
-  const providerFreshnessNow = Number.isFinite(clockNowMs)
-    ? Math.floor(clockNowMs / (60 * 1000)) * 60 * 1000
-    : null;
-  const storedProviderPeak = useMemo(
-    () =>
-      selectStoredHourlyProviderPeak(
-        latestPrediction?.providerDetails ??
-          latestPrediction?.providerPredictions,
-        unit,
-        date >= today ? providerFreshnessNow : null,
-      ),
-    [
-      date,
-      latestPrediction?.providerDetails,
-      latestPrediction?.providerPredictions,
-      providerFreshnessNow,
-      today,
-      unit,
-    ],
+  const preferredProviderPeak = useMemo(
+    () => selectKmaProviderPeak(kma, unit),
+    [kma, unit],
   );
-  const latestCaptureProviderPeak = useMemo(
-    () =>
-      selectLatestCaptureHourlyProviderPeak(
-        predictionDashboard?.latestForecastCapture,
-        date,
-        unit,
-        providerFreshnessNow,
-      ),
-    [
-      date,
-      predictionDashboard?.latestForecastCapture,
-      providerFreshnessNow,
-      unit,
-    ],
-  );
-  let preferredProviderPeak = storedProviderPeak;
-  if (
-    date >= today &&
-    latestCaptureProviderPeak &&
-    (!storedProviderPeak ||
-      latestCaptureProviderPeak.capturedAt > storedProviderPeak.capturedAt)
-  ) {
-    preferredProviderPeak = latestCaptureProviderPeak;
-  }
   const forecastCloudRows = useMemo(
     () =>
-      buildForecastCloudRows({
-        forecastCapture: predictionDashboard?.latestForecastCapture,
+      buildKmaForecastCloudRows({
+        kma,
         date,
         nowMs: date >= today ? providerFreshnessNow : null,
       }),
-    [
-      date,
-      predictionDashboard?.latestForecastCapture,
-      providerFreshnessNow,
-      today,
-    ],
+    [date, kma, providerFreshnessNow, today],
   );
   const hourlyCloudCover = useMemo(
     () =>
@@ -3823,7 +4010,10 @@ export default function SeoulDayPage() {
   const nextForecastCloudHour = useMemo(() => {
     return (
       hourlyCloudCover.find(
-        (hour) => hour.phase === "forecast" && Number.isFinite(hour.coverPct),
+        (hour) =>
+          hour.phase === "forecast" &&
+          hour.forecastProvider === "kma" &&
+          Boolean(hour.conditionLabel || hour.ceilingLabel),
       ) ?? null
     );
   }, [hourlyCloudCover]);
@@ -3833,11 +4023,14 @@ export default function SeoulDayPage() {
   const hasTemperatureChartData =
     metarRows.length +
       amosDisplayRows.length +
+      kmaPrimaryHourlyRows.length +
       (preferredProviderPeak ? 1 : 0) +
       weathercomHourlyPointCount >
     0;
-  const hasCloudGuidance = hourlyCloudCover.some((hour) =>
-    Number.isFinite(hour.coverPct),
+  const hasCloudGuidance = hourlyCloudCover.some(
+    (hour) =>
+      Number.isFinite(hour.coverPct) ||
+      Boolean(hour.conditionLabel || hour.ceilingLabel),
   );
 
   const chartData = useMemo(
@@ -3847,6 +4040,7 @@ export default function SeoulDayPage() {
         amosDisplayRows,
         observedMaxMarker,
         preferredProviderPeak,
+        kmaPrimaryHourlyRows,
         weathercomHourlyDiagnostics,
         unit,
       ),
@@ -3855,6 +4049,7 @@ export default function SeoulDayPage() {
       metarRows,
       observedMaxMarker,
       preferredProviderPeak,
+      kmaPrimaryHourlyRows,
       unit,
       weathercomHourlyDiagnostics,
     ],
@@ -3873,7 +4068,7 @@ export default function SeoulDayPage() {
         intersect: false,
       },
       layout: {
-        padding: { top: 70, right: 8, bottom: 2, left: 2 },
+        padding: { top: 82, right: 8, bottom: 2, left: 2 },
       },
       plugins: {
         legend: {
@@ -3924,11 +4119,17 @@ export default function SeoulDayPage() {
               )
                 ? ` · ${formatCloudCoverPercentage(
                     item.raw.cloudCoverPct,
-                  )}% cloud cover`
+                  )}% secondary Weather.com cloud cover`
+                : "";
+              const kmaCondition = item.raw?.forecastCondition
+                ? ` · ${item.raw.forecastCondition}`
+                : "";
+              const kmaCeiling = item.raw?.forecastCeilingLabel
+                ? ` · ${item.raw.forecastCeilingLabel}`
                 : "";
               return `${item.dataset.label}: ${item.parsed.y.toFixed(
                 1,
-              )}°${unit}${reportType}${auditFallback}${skyCondition}${forecastCloudCover}`;
+              )}°${unit}${reportType}${auditFallback}${skyCondition}${kmaCondition}${kmaCeiling}${forecastCloudCover}`;
             },
             afterLabel(item) {
               return weathercomTooltipDetails(item.raw, unit);
@@ -4152,21 +4353,20 @@ export default function SeoulDayPage() {
         result?.status === "access_not_approved"
           ? "NMSC access approval is required before GK2A collection can be enabled."
           : result?.status === "already_running"
-          ? "A GK2A download is already running."
-          : result?.status === "cooldown"
-            ? `GK2A refresh is cooling down; retry in about ${Math.max(
-                1,
-                Math.ceil((result.retryAfterSeconds ?? 60) / 60),
-              )} minute(s).`
-            : result?.status === "outside_collection_window"
-              ? "GK2A downloads are limited to 11:00–16:00 KST."
-              : "GK2A download queued; the panel will update when extraction finishes.";
+            ? "A GK2A download is already running."
+            : result?.status === "cooldown"
+              ? `GK2A refresh is cooling down; retry in about ${Math.max(
+                  1,
+                  Math.ceil((result.retryAfterSeconds ?? 60) / 60),
+                )} minute(s).`
+              : result?.status === "outside_collection_window"
+                ? "GK2A downloads are limited to 11:00–16:00 KST."
+                : "GK2A download queued; the panel will update when extraction finishes.";
       setSolarRefreshState({
         active: false,
         message,
         requestedAt:
-          result?.status === "queued" &&
-          Number.isFinite(result?.requestedAt)
+          result?.status === "queued" && Number.isFinite(result?.requestedAt)
             ? result.requestedAt
             : null,
       });
@@ -4438,13 +4638,9 @@ export default function SeoulDayPage() {
           latestAmos={latestAmos}
           amosFreshness={amosFreshness}
           observedMax={observedMax}
-          prediction={latestPrediction}
-          predictionUsable={predictionUsable}
-          predictionAgeMinutes={predictionAgeMinutes}
-          predictionForecastAgeMinutes={predictionForecastAgeMinutes}
+          kma={kma}
+          kmaPeak={kmaPeak}
           expectedHighC={expectedHighC}
-          guidanceLowC={guidanceLowC}
-          guidanceHighC={guidanceHighC}
           trendCPerHour={trend60mCPerHour}
         />
 
@@ -4475,18 +4671,22 @@ export default function SeoulDayPage() {
               </h2>
               <div className="mt-2 max-w-3xl font-mono text-[9px] uppercase leading-4 tracking-[0.14em]">
                 <p className="text-slate-300">
-                  Hourly sky cover ·{" "}
+                  Hourly airport conditions ·{" "}
                   {date < today ? (
                     <span className="text-slate-200">
                       ■ completed hours: observed
                     </span>
                   ) : date > today ? (
-                    <span className="text-sky-300">▧ forecast percentages</span>
+                    <span className="text-violet-300">
+                      ▧ KMA condition + ceiling
+                    </span>
                   ) : (
                     <>
                       <span className="text-slate-200">■ past: observed</span> ·{" "}
                       <span className="text-amber-300">▌ now: live</span> ·{" "}
-                      <span className="text-sky-300">▧ coming: forecast</span>
+                      <span className="text-violet-300">
+                        ▧ coming: KMA condition + ceiling
+                      </span>
                     </>
                   )}
                 </p>
@@ -4501,9 +4701,9 @@ export default function SeoulDayPage() {
                 )}
                 {latestComparedCloudHour && (
                   <p className="text-violet-300/80">
-                    Latest completed cloud check ·{" "}
+                    Secondary Weather.com cloud check ·{" "}
                     {cloudHourWindowLabel(latestComparedCloudHour.hour)} ·
-                    forecast − observed{" "}
+                    secondary forecast − observed{" "}
                     {latestComparedCloudHour.forecastDeltaLabel} ·{" "}
                     {cloudForecastDeltaMeaning(
                       latestComparedCloudHour.forecastDeltaPct,
@@ -4512,21 +4712,33 @@ export default function SeoulDayPage() {
                 )}
                 {latestComparedCloudHour && (
                   <p className="text-slate-500">
-                    Completed Δ = pre-hour forecast − observed METAR sample · +
-                    forecast cloudier · − forecast clearer
+                    Secondary Δ = pre-hour Weather.com percentage − observed
+                    METAR sample · + cloudier · − clearer
                   </p>
                 )}
-                <p className="text-sky-400/80">
+                <p className="text-violet-300/80">
                   {date < today
                     ? "Completed day · observed METAR hourly summary"
-                    : `${date > today ? "Forecast day" : "Coming hours"} · ${
+                    : `${
+                        date > today ? "KMA forecast day" : "Coming KMA hours"
+                      } · ${
                         nextForecastCloudHour
                           ? `${cloudHourWindowLabel(
                               nextForecastCloudHour.hour,
                             )} · ${nextForecastCloudHour.summaryLabel}`
-                          : "no stored forecast hour remains on this date"
+                          : "no stored KMA condition remains on this date"
                       }`}
                 </p>
+                {(kma.approvalRequired || kma.setupRequired) &&
+                  date >= today && (
+                    <p className="text-amber-300/80">
+                      KMA forecast unavailable ·{" "}
+                      {kma.approvalRequired
+                        ? "server-side approval required"
+                        : "server-side setup required"}{" "}
+                      · no Weather.com fallback
+                    </p>
+                  )}
                 {forecastCloudVintage && date >= today && (
                   <p
                     className={
@@ -4535,7 +4747,7 @@ export default function SeoulDayPage() {
                         : "text-slate-500"
                     }
                   >
-                    Weather.com cloud forecast captured ·{" "}
+                    KMA condition forecast captured ·{" "}
                     {formatLocalTime(
                       forecastCloudVintage.capturedAtLocal ??
                         forecastCloudVintage.capturedAt,
@@ -4592,30 +4804,29 @@ export default function SeoulDayPage() {
 
           <div id="seoul-hourly-cloud-description" className="sr-only">
             <p>
-              The hourly sky-cover strip uses meter height to show how much of
-              the sky is covered. Solid cells are past METAR observations. Their
-              percentages are approximate ranges derived only from explicit
-              cloud-amount reports. Diagonally patterned cells are upcoming
-              Weather.com hourly forecasts at their stored source percentage.
-              Amber forecast cells are stale values retained from the last
-              successful capture. Hatched cells without a percentage mean total
-              cloud cover is unavailable, not clear sky. The current hour ends
-              at the NOW line; its remaining time stays hatched until observed.
-              For completed hours with both values, the signed delta is the
-              latest Weather.com cloud forecast captured strictly before the
-              hour minus the observed METAR-sample estimate. Positive means the
-              forecast was cloudier, negative means it was clearer, and the
-              difference is measured in percentage points. The live partial hour
-              is not scored.
+              The hourly conditions strip shows past coded METAR observations
+              and upcoming KMA/AMO airport forecast phrases. Past percentages
+              are approximate ranges derived only from explicit METAR
+              cloud-amount reports. Upcoming KMA cells preserve the exact
+              categorical condition phrase and published ceiling; the interface
+              does not convert either into a cloud-cover percentage. Amber KMA
+              cells are stale values retained from the last successful capture.
+              Hatched cells mean the value is unavailable, not clear sky. The
+              current hour ends at the NOW line; its remaining time stays
+              hatched until observed. A completed-hour percentage delta, when
+              present, is a labeled secondary Weather.com comparison captured
+              before the hour minus the observed METAR-sample estimate. It never
+              drives upcoming cloud guidance, and the live partial hour is not
+              scored.
             </p>
             {preferredProviderPeak && (
               <p>
-                A rose circle marks the raw provider daily high from the latest
-                stored Weather.com Seoul calendar-day forecast:{" "}
+                A rose circle marks the official KMA/AMO RKSI published daily
+                high from the latest stored airport forecast:{" "}
                 {preferredProviderPeak.temperature.toFixed(1)} degrees{" "}
                 {unit === "C" ? "Celsius" : "Fahrenheit"}. Its horizontal
-                position is the first tied maximum among the Weather.com hourly
-                values returned for that date, beginning at{" "}
+                position is the first tied maximum among the KMA hourly values
+                returned for that date, beginning at{" "}
                 {minuteLabel(preferredProviderPeak.minute)} Korea Standard Time.
                 It is separate from the expected maximum in the outlook, which
                 is floored at the observed AMOS maximum.
@@ -4633,18 +4844,19 @@ export default function SeoulDayPage() {
           </div>
 
           <div id="seoul-weathercom-hourly-description" className="sr-only">
-            Weather.com hourly forecast history is drawn as a blue latest-stored
-            curve and a faint dotted morning-baseline curve. Revision badges
-            mark every change of at least one degree Celsius from the previous
-            distinct stored value. Their timestamps show when this system first
-            detected a change, not when Weather.com published it. The expandable
-            table after the chart lists each stored forecast value and matched
-            AMOS departure.
+            Weather.com hourly history is secondary comparison data only. It is
+            drawn as a thin blue latest-stored curve and a faint dotted
+            morning-baseline curve. It is not used for the expected maximum,
+            official forecast curve, peak timing, or upcoming condition and
+            ceiling guidance. Revision badges mark every change of at least one
+            degree Celsius from the previous distinct stored value. Their
+            timestamps show when this system first detected a change, not when
+            Weather.com published it.
           </div>
 
           <div
             ref={chartScrollRef}
-            aria-label="Scrollable 24-hour temperature and hourly sky-cover chart"
+            aria-label="Scrollable 24-hour temperature and KMA airport condition chart"
             aria-describedby="seoul-hourly-cloud-description seoul-weathercom-hourly-description"
             className="relative min-h-[560px] flex-1 overflow-x-auto overscroll-x-contain border border-white/10 bg-[#07111f]/85 shadow-[0_30px_100px_rgba(0,0,0,0.38)]"
             role="region"
@@ -4678,21 +4890,25 @@ export default function SeoulDayPage() {
 
           <details className="mt-3 border border-white/10 bg-white/[0.02]">
             <summary className="cursor-pointer px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-slate-400 transition hover:text-slate-200">
-              View all 24 hourly cloud details
+              View all 24 hourly condition details
             </summary>
             <div className="overflow-x-auto border-t border-white/10">
               <table className="w-full min-w-[980px] border-collapse text-left">
                 <caption className="sr-only">
-                  Hour-by-hour observed and forecast Seoul sky cover with
-                  pre-hour forecast versus observed differences
+                  Hour-by-hour observed RKSI sky conditions and primary KMA
+                  forecast condition phrases and ceilings, with optional
+                  secondary Weather.com percentage comparisons for completed
+                  observed hours
                 </caption>
                 <thead>
                   <tr className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
                     <th className="px-4 py-2 font-normal">Hour</th>
                     <th className="px-4 py-2 font-normal">Source</th>
-                    <th className="px-4 py-2 font-normal">Sky cover</th>
                     <th className="px-4 py-2 font-normal">
-                      Forecast − observed
+                      Condition / ceiling
+                    </th>
+                    <th className="px-4 py-2 font-normal">
+                      Secondary Weather.com − observed
                     </th>
                     <th className="px-4 py-2 font-normal">What it means</th>
                   </tr>
@@ -4709,8 +4925,8 @@ export default function SeoulDayPage() {
                       <td className="whitespace-nowrap px-4 py-2 font-mono text-[10px] uppercase tracking-[0.12em]">
                         {hour.phase === "forecast"
                           ? hour.isStale
-                            ? "Forecast · stale"
-                            : "Forecast"
+                            ? "KMA forecast · stale"
+                            : "KMA forecast"
                           : hour.phase === "live"
                             ? "Live observation"
                             : "Observed"}
@@ -4736,7 +4952,7 @@ export default function SeoulDayPage() {
                               {formatCloudCoverPercentage(
                                 hour.forecastCoverPct,
                               )}
-                              % forecast ·{" "}
+                              % Weather.com secondary ·{" "}
                               {formatLocalTime(
                                 hour.forecastCapturedAtLocal ??
                                   hour.forecastCapturedAt,
@@ -4768,12 +4984,13 @@ export default function SeoulDayPage() {
             designation does not claim a thermometer at the runway threshold.
             Five-minute snapshots remain available only as an audit fallback for
             missed minute captures. Past sky cover comes from coded METAR
-            ranges; coming hours use timestamped Weather.com cloud-cover
-            percentages.
+            ranges; coming hours preserve KMA/AMO&apos;s categorical condition
+            phrase and ceiling without inventing a percentage. Weather.com is a
+            labeled secondary comparison only.
           </p>
           <p>
-            NOAA TGFTP METAR · KMA AMOS MOBILE FEED · WEATHER.COM RKSI AIRPORT
-            FORECAST
+            NOAA TGFTP METAR · KMA AMOS MOBILE FEED · KMA/AMO RKSI AIRPORT
+            FORECAST · SECONDARY WEATHER.COM COMPARISON
           </p>
         </footer>
       </div>

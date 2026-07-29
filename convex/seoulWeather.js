@@ -7,6 +7,10 @@ import {
 import { v } from "convex/values";
 
 const SEOUL_TIMEZONE = "Asia/Seoul";
+const KMA_AMO_APPROVAL_FLAG =
+  "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED";
+const KMA_AMO_AIRPORT_FORECAST_URL =
+  "https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI";
 const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
 const WEATHERCOM_DAILY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/daily/5day`;
 const WEATHERCOM_HOURLY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/hourly/10day`;
@@ -19,10 +23,11 @@ const MILLIS_PER_HOUR = 60 * MILLIS_PER_MINUTE;
 const PREDICTION_INTERVAL_MS = 5 * MILLIS_PER_MINUTE;
 const MAX_LIVE_OBSERVATION_AGE_MS = 10 * MILLIS_PER_MINUTE;
 const MAX_PROVIDER_CAPTURE_AGE_MS = 12 * MILLIS_PER_HOUR;
+const MAX_KMA_CAPTURE_AGE_MS = 6 * MILLIS_PER_HOUR;
 const WEATHERCOM_BASELINE_WINDOW_MS = 2 * MILLIS_PER_HOUR;
 const WEATHERCOM_HISTORY_STALE_MS = 90 * MILLIS_PER_MINUTE;
 const PREDICTION_HEARTBEAT_MS = 30 * MILLIS_PER_MINUTE;
-const PREDICTION_MODEL_VERSION = "rksi15l-weathercom-v4";
+const PREDICTION_MODEL_VERSION = "rksi15l-kma-amo-v1";
 const MAX_DASHBOARD_REVISIONS = 288;
 const MAX_FORECAST_CAPTURES_FOR_DAY = 112;
 const WEATHER_STATUS = {
@@ -128,6 +133,10 @@ function formatErrorMessage(error) {
         ? error
         : "Unknown error";
   return message.slice(0, 280);
+}
+
+function hasApprovedKmaAmoAccess() {
+  return process.env.KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED === "true";
 }
 
 function addUtcDays(dateIso, days) {
@@ -458,53 +467,38 @@ export const getDayPageWeather = actionGeneric({
   args: {
     date: v.string(),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) {
       throw new Error("Date must be in YYYY-MM-DD format.");
     }
-
-    const apiKey = getWeatherComApiKey();
-    const unit = "metric";
-    const language = DEFAULT_WEATHERCOM_LANGUAGE;
-    const todayDate = formatDateInTimezone(Date.now(), SEOUL_STATION.timeZone);
-
-    const forecast = await (async () => {
-      if (!apiKey) {
-        return {
-          status: WEATHER_STATUS.ERROR,
-          error: "Missing WEATHERCOM_API_KEY.",
-          days: [],
-        };
-      }
-      try {
-        const days = await fetchWeatherComDailyForecast({
-          icaoCode: SEOUL_STATION.stationIcao,
-          durationDays: 5,
-          unit,
-          language,
-          apiKey,
-          timeZone: SEOUL_STATION.timeZone,
-        });
-        return {
-          status: WEATHER_STATUS.OK,
-          days,
-        };
-      } catch (error) {
-        return {
-          status: WEATHER_STATUS.ERROR,
-          error: formatErrorMessage(error),
-          days: [],
-        };
-      }
-    })();
+    const dashboard = await ctx.runQuery(
+      "seoulWeather:getHighPredictionDashboard",
+      {
+        stationIcao: SEOUL_STATION.stationIcao,
+        date: args.date,
+      },
+    );
+    const days = dashboard.kmaForecast?.latestCapture?.dailyRows ?? [];
+    const forecast = {
+      provider: "kma_amo",
+      label: "KMA/AMO · RKSI",
+      role: "primary",
+      sourceUrl: KMA_AMO_AIRPORT_FORECAST_URL,
+      status: dashboard.kmaForecast?.status ?? "no_data",
+      ...(dashboard.kmaForecast?.latestAttemptError
+        ? { error: dashboard.kmaForecast.latestAttemptError }
+        : {}),
+      days,
+    };
 
     return {
       stationIcao: SEOUL_STATION.stationIcao,
       stationName: SEOUL_STATION.stationName,
-      todayDate,
+      todayDate: dashboard.todayDate,
+      approval: dashboard.kmaAccess,
       forecast,
       selectedDateForecast:
-        forecast.days.find((day) => day.date === args.date) ?? null,
+        dashboard.kmaForecast?.selectedDateForecast ?? null,
     };
   },
 });
@@ -896,6 +890,120 @@ function findHighestForecastRow(rows, generatedAt, targetIsToday) {
   return selected;
 }
 
+function selectLatestUsableKmaCapture({
+  captures,
+  targetDate,
+  generatedAt,
+}) {
+  if (!hasApprovedKmaAmoAccess()) {
+    return null;
+  }
+  return (
+    captures.find((capture) => {
+      if (
+        capture.status !== WEATHER_STATUS.OK ||
+        generatedAt - capture.capturedAt > MAX_KMA_CAPTURE_AGE_MS ||
+        capture.capturedAt > generatedAt + MILLIS_PER_MINUTE
+      ) {
+        return false;
+      }
+      return (
+        (capture.dailyRows ?? []).some(
+          (row) => row.date === targetDate && Number.isFinite(row.maxTempC),
+        ) &&
+        (capture.hourlyRows ?? []).some(
+          (row) => row.date === targetDate && Number.isFinite(row.tempC),
+        )
+      );
+    }) ?? null
+  );
+}
+
+function buildKmaProvider({
+  capture,
+  targetDate,
+  targetIsToday,
+  generatedAt,
+}) {
+  const day = capture?.dailyRows?.find((row) => row.date === targetDate);
+  const dailyUsable =
+    capture?.status === WEATHER_STATUS.OK && Number.isFinite(day?.maxTempC);
+  // Keep the daily maximum, hourly curve, condition metadata, peak time, and
+  // capture vintage on one coherent KMA page response. Unlike Weather.com,
+  // elapsed KMA hours are not reconstructed across provider revisions.
+  const dateRows = (capture?.hourlyRows ?? [])
+    .filter((row) => row.date === targetDate && Number.isFinite(row.tempC))
+    .map((row) => ({
+      ...row,
+      capturedAt: capture.capturedAt,
+      capturedAtLocal: capture.capturedAtLocal,
+    }));
+  const hourlyPeak = findHighestForecastRow(
+    dateRows,
+    generatedAt,
+    false,
+  );
+  const usable = dailyUsable && Boolean(hourlyPeak);
+  const dailyHighC = dailyUsable ? roundToTenth(day.maxTempC) : null;
+  const dailyHighF = dailyUsable
+    ? (day.maxTempF ?? toFahrenheit(dailyHighC))
+    : null;
+  const expectedCurrentC =
+    targetIsToday && dateRows.length
+      ? interpolateHourlyTemperature(dateRows, generatedAt)
+      : null;
+  const detail = {
+    provider: "kma_amo",
+    label: "KMA/AMO · RKSI",
+    role: "primary",
+    sourceUrl: KMA_AMO_AIRPORT_FORECAST_URL,
+    status: usable ? WEATHER_STATUS.OK : WEATHER_STATUS.ERROR,
+    ...(!usable
+      ? {
+          error: !hasApprovedKmaAmoAccess()
+            ? "KMA/AMO airport forecast access approval is required."
+            : !dailyUsable
+              ? `No fresh KMA/AMO daily maximum for ${targetDate}.`
+              : `No fresh KMA/AMO hourly peak-time estimate for ${targetDate}.`,
+        }
+      : {}),
+    weight: usable ? 1 : 0,
+    ...(dailyUsable
+      ? {
+          rawHighC: dailyHighC,
+          rawHighF: dailyHighF,
+          adjustedHighC: dailyHighC,
+          adjustedHighF: dailyHighF,
+        }
+      : {}),
+    ...(usable
+      ? {
+          dailyHighC,
+          dailyHighF,
+          dailyPeakTimeUtc: hourlyPeak.forecastTimeUtc,
+          dailyPeakTimeLocal: hourlyPeak.forecastTimeLocal,
+          peakTimeUtc: hourlyPeak.forecastTimeUtc,
+          peakTimeLocal: hourlyPeak.forecastTimeLocal,
+          peakSourceCapturedAt: capture.capturedAt,
+          peakSourceCapturedAtLocal: capture.capturedAtLocal,
+          capturedAt: capture.capturedAt,
+          capturedAtLocal: capture.capturedAtLocal,
+          captureAgeMinutes: roundToTenth(
+            Math.max(0, generatedAt - capture.capturedAt) / MILLIS_PER_MINUTE,
+          ),
+        }
+      : {}),
+    pointCount: dateRows.length,
+  };
+  return {
+    detail,
+    rows: dateRows,
+    expectedCurrentC,
+    adjustedHighC: dailyHighC,
+    hourlyPeak,
+  };
+}
+
 function selectLatestUsableWeatherComCapture({
   captures,
   targetDate,
@@ -984,7 +1092,8 @@ function buildWeatherComProvider({
       : null;
   const detail = {
     provider: "weathercom",
-    label: "Weather.com · RKSI",
+    label: "Weather.com · RKSI (secondary)",
+    role: "secondary",
     status: usable ? WEATHER_STATUS.OK : WEATHER_STATUS.ERROR,
     ...(!usable
       ? {
@@ -995,7 +1104,9 @@ function buildWeatherComProvider({
               `No Weather.com hourly peak-time estimate for ${targetDate}.`),
         }
       : {}),
-    weight: usable ? 1 : 0,
+    // Weather.com remains visible as a secondary comparison, but a zero
+    // canonical weight prevents it from entering the KMA prediction or curve.
+    weight: 0,
     ...(dailyUsable
       ? {
           rawHighC: dailyHighC,
@@ -1043,10 +1154,12 @@ function buildHourlyEnsembleCurve(providerCurves) {
           forecastTimeLocal: row.forecastTimeLocal,
           values: [],
           cloudValues: [],
+          metadataRows: [],
         };
         points.set(row.forecastTimeUtc, point);
       }
       point.values.push({ value: row.tempC, weight: provider.weight });
+      point.metadataRows.push({ row, weight: provider.weight });
       if (Number.isFinite(row.cloudCoverPct)) {
         point.cloudValues.push({
           value: row.cloudCoverPct,
@@ -1063,6 +1176,10 @@ function buildHourlyEnsembleCurve(providerCurves) {
       const cloudCoverPct = point.cloudValues.length
         ? Math.round(clamp(weightedMean(point.cloudValues), 0, 100))
         : null;
+      const metadata =
+        [...point.metadataRows].sort(
+          (left, right) => right.weight - left.weight,
+        )[0]?.row ?? null;
       return {
         forecastTimeUtc: point.forecastTimeUtc,
         forecastTimeLocal: point.forecastTimeLocal,
@@ -1074,6 +1191,37 @@ function buildHourlyEnsembleCurve(providerCurves) {
               cloudCoverPct,
               cloudProviderCount: point.cloudValues.length,
             }
+          : {}),
+        ...(metadata?.phrase ? { phrase: metadata.phrase } : {}),
+        ...(metadata?.conditionCode
+          ? { conditionCode: metadata.conditionCode }
+          : {}),
+        ...(Number.isFinite(metadata?.ceilingFt)
+          ? { ceilingFt: metadata.ceilingFt }
+          : {}),
+        ...(metadata?.ceilingText
+          ? { ceilingText: metadata.ceilingText }
+          : {}),
+        ...(Number.isFinite(metadata?.windDirectionDeg)
+          ? { windDirectionDeg: metadata.windDirectionDeg }
+          : {}),
+        ...(Number.isFinite(metadata?.windSpeedKt)
+          ? { windSpeedKt: metadata.windSpeedKt }
+          : {}),
+        ...(Number.isFinite(metadata?.windGustKt)
+          ? { windGustKt: metadata.windGustKt }
+          : {}),
+        ...(metadata?.windSpeedText
+          ? { windSpeedText: metadata.windSpeedText }
+          : {}),
+        ...(Number.isFinite(metadata?.visibilityM)
+          ? { visibilityM: metadata.visibilityM }
+          : {}),
+        ...(metadata?.visibilityText
+          ? { visibilityText: metadata.visibilityText }
+          : {}),
+        ...(metadata?.crosswindText
+          ? { crosswindText: metadata.crosswindText }
           : {}),
       };
     });
@@ -1113,7 +1261,7 @@ function predictionState({
     return {
       status: "awaiting_observations",
       reason:
-        "Forecast providers are available, but no canonical RKSI 15L AMOS temperature has been observed yet.",
+        "The KMA/AMO airport forecast is available, but no canonical RKSI 15L AMOS temperature has been observed yet.",
     };
   }
 
@@ -1123,13 +1271,13 @@ function predictionState({
   if (previousPrediction && predictionDeltaC >= 0.2) {
     return {
       status: "revised_up",
-      reason: `Revised up ${predictionDeltaC.toFixed(1)}°C as the live 15L observations and latest provider curve run warmer.`,
+      reason: `Revised up ${predictionDeltaC.toFixed(1)}°C as the live 15L observations and latest KMA/AMO curve run warmer.`,
     };
   }
   if (previousPrediction && predictionDeltaC <= -0.2) {
     return {
       status: "revised_down",
-      reason: `Revised down ${Math.abs(predictionDeltaC).toFixed(1)}°C as the live 15L observations and latest provider curve run cooler.`,
+      reason: `Revised down ${Math.abs(predictionDeltaC).toFixed(1)}°C as the live 15L observations and latest KMA/AMO curve run cooler.`,
     };
   }
 
@@ -1169,13 +1317,13 @@ function predictionState({
     return {
       status: "limited_guidance",
       reason:
-        "A live 15L observation is available, but no fresh hourly ensemble exists for an on-track comparison.",
+        "A live 15L observation is available, but no fresh KMA/AMO hourly curve exists for an on-track comparison.",
     };
   }
   return {
     status: "on_track",
     reason:
-      "The live RKSI 15L temperature remains within 0.5°C of the current Weather.com hourly curve.",
+      "The live RKSI 15L temperature remains within 0.5°C of the current KMA/AMO hourly curve.",
   };
 }
 
@@ -1269,20 +1417,38 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
     }
     const summary = await ctx.db.get(summaryId);
 
-    const captures = await ctx.db
+    const kmaAccessApproved = hasApprovedKmaAmoAccess();
+    const kmaCaptures = kmaAccessApproved
+      ? await ctx.db
+          .query("seoulKmaForecastCaptures")
+          .withIndex("by_station_capturedAt", (query) =>
+            query.eq("stationIcao", args.stationIcao),
+          )
+          .order("desc")
+          .take(MAX_FORECAST_CAPTURES_FOR_DAY)
+      : [];
+    const weathercomCaptures = await ctx.db
       .query("seoulForecastCaptures")
       .withIndex("by_station_capturedAt", (query) =>
         query.eq("stationIcao", args.stationIcao),
       )
       .order("desc")
       .take(MAX_FORECAST_CAPTURES_FOR_DAY);
-    const weathercomCapture = selectLatestUsableWeatherComCapture({
-      captures,
+    const kmaCapture = selectLatestUsableKmaCapture({
+      captures: kmaCaptures,
       targetDate: args.date,
       generatedAt,
     });
-    const weathercomHourlyRows = mergeWeatherComHourlyRows(captures, args.date);
-    const primaryCapture = weathercomCapture;
+    const weathercomCapture = selectLatestUsableWeatherComCapture({
+      captures: weathercomCaptures,
+      targetDate: args.date,
+      generatedAt,
+    });
+    const weathercomHourlyRows = mergeWeatherComHourlyRows(
+      weathercomCaptures,
+      args.date,
+    );
+    const primaryCapture = kmaCapture;
     const previousPrediction = await ctx.db
       .query("seoulHighPredictions")
       .withIndex("by_station_date_revision", (query) =>
@@ -1290,6 +1456,10 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
       )
       .order("desc")
       .first();
+    const previousCanonicalPrediction =
+      previousPrediction?.modelVersion === PREDICTION_MODEL_VERSION
+        ? previousPrediction
+        : null;
     const observationAgeMinutes = latestRow
       ? roundToTenth(
           Math.max(0, generatedAt - latestRow.obsTimeUtc) / MILLIS_PER_MINUTE,
@@ -1303,6 +1473,12 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
         ? latestRow
         : null;
 
+    const kma = buildKmaProvider({
+      capture: kmaCapture,
+      targetDate: args.date,
+      targetIsToday,
+      generatedAt,
+    });
     const weathercom = buildWeatherComProvider({
       capture: weathercomCapture,
       hourlyRows: weathercomHourlyRows,
@@ -1310,42 +1486,40 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
       targetIsToday,
       generatedAt,
     });
-    const providerDetails = [weathercom.detail];
+    const providerDetails = [kma.detail, weathercom.detail];
     const preferredDailyPeakProvider =
       selectPreferredDailyPeakProvider(providerDetails);
     const previousPreferredDailyPeakProvider = selectPreferredDailyPeakProvider(
-      previousPrediction?.providerDetails ?? [],
+      previousCanonicalPrediction?.providerDetails ?? [],
     );
     const hourlyEnsembleCurve =
-      weathercom.detail.weight > 0
+      kma.detail.weight > 0
         ? buildHourlyEnsembleCurve([
             {
-              rows: weathercom.rows,
-              weight: weathercom.detail.weight,
+              rows: kma.rows,
+              weight: kma.detail.weight,
             },
           ])
         : [];
 
-    const expectedCurrentC = weathercom.expectedCurrentC;
+    const expectedCurrentC = kma.expectedCurrentC;
     const ensemblePeak = findHighestForecastRow(
       hourlyEnsembleCurve,
       generatedAt,
       targetIsToday,
     );
-    let forecastHighC = weathercom.adjustedHighC;
-    if (
-      !Number.isFinite(forecastHighC) &&
-      previousPrediction?.modelVersion === PREDICTION_MODEL_VERSION
-    ) {
-      forecastHighC = previousPrediction.predictedHighC;
-    }
-    if (!Number.isFinite(forecastHighC) && maxRow) {
-      forecastHighC = maxRow.tempC;
-    }
+    const forecastHighC = kma.adjustedHighC;
     if (!Number.isFinite(forecastHighC)) {
-      throw new Error(
-        `No provider forecast or RKSI 15L observation is available for ${args.date}.`,
-      );
+      return {
+        prediction: null,
+        summary,
+        unavailable: {
+          status: kmaAccessApproved ? "no_data" : "approval_required",
+          reason: kmaAccessApproved
+            ? `No fresh KMA/AMO airport forecast is available for ${args.date}.`
+            : "KMA/AMO airport forecast access approval is required.",
+        },
+      };
     }
 
     const predictedHighC = roundToTenth(
@@ -1353,6 +1527,7 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
     );
     const predictedHighF = toFahrenheit(predictedHighC);
     const providerHighs = providerDetails
+      .filter((provider) => provider.weight > 0)
       .map((provider) => provider.adjustedHighC)
       .filter(Number.isFinite);
     const uncertaintyC = clamp(
@@ -1374,11 +1549,11 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
     const futureForecastHighC = ensemblePeak?.tempC ?? null;
     const observedSetsPeak =
       maxRow &&
-      (!ensemblePeak || maxRow.tempC >= ensemblePeak.tempC) &&
+      (!kma.hourlyPeak || maxRow.tempC >= kma.hourlyPeak.tempC) &&
       predictedHighC === maxRow.tempC;
     const peakWindowStartUtc = observedSetsPeak
       ? Math.floor(maxRow.obsTimeUtc / MILLIS_PER_HOUR) * MILLIS_PER_HOUR
-      : (ensemblePeak?.forecastTimeUtc ??
+      : (kma.hourlyPeak?.forecastTimeUtc ??
         Date.parse(`${args.date}T14:00:00+09:00`));
     const peakWindowEndUtc = Number.isFinite(peakWindowStartUtc)
       ? peakWindowStartUtc + MILLIS_PER_HOUR
@@ -1388,7 +1563,7 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
     const slope30mCPerHour = calculateSlopeCPerHour(observations, 30);
     const slope60mCPerHour = calculateSlopeCPerHour(observations, 60);
     const state = predictionState({
-      previousPrediction,
+      previousPrediction: previousCanonicalPrediction,
       predictedHighC,
       observedHighC: maxRow?.tempC,
       observedCurrentC: liveLatestRow?.tempC,
@@ -1399,34 +1574,50 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
       futureForecastHighC,
     });
     const materialChange =
-      !previousPrediction ||
-      previousPrediction.modelVersion !== PREDICTION_MODEL_VERSION ||
+      !previousCanonicalPrediction ||
       Math.abs(
-        roundToTenth(previousPrediction.predictedHighC - predictedHighC),
+        roundToTenth(
+          previousCanonicalPrediction.predictedHighC - predictedHighC,
+        ),
       ) >= 0.1 ||
-      previousPrediction.status !== state.status ||
-      previousPrediction.peakWindowStartUtc !== peakWindowStartUtc ||
-      previousPrediction.peakWindowEndUtc !== peakWindowEndUtc ||
+      previousCanonicalPrediction.status !== state.status ||
+      previousCanonicalPrediction.peakWindowStartUtc !== peakWindowStartUtc ||
+      previousCanonicalPrediction.peakWindowEndUtc !== peakWindowEndUtc ||
       previousPreferredDailyPeakProvider?.provider !==
         preferredDailyPeakProvider?.provider ||
       previousPreferredDailyPeakProvider?.dailyHighC !==
         preferredDailyPeakProvider?.dailyHighC ||
       previousPreferredDailyPeakProvider?.dailyPeakTimeUtc !==
         preferredDailyPeakProvider?.dailyPeakTimeUtc ||
-      previousPrediction.observedHighC !== maxRow?.tempC ||
-      (Number.isFinite(previousPrediction.observedCurrentC) &&
+      previousCanonicalPrediction.observedHighC !== maxRow?.tempC ||
+      (Number.isFinite(previousCanonicalPrediction.observedCurrentC) &&
       Number.isFinite(latestRow?.tempC)
         ? Math.abs(
-            roundToTenth(previousPrediction.observedCurrentC - latestRow.tempC),
+            roundToTenth(
+              previousCanonicalPrediction.observedCurrentC - latestRow.tempC,
+            ),
           ) >= 0.2
-        : previousPrediction.observedCurrentC !== latestRow?.tempC) ||
-      String(previousPrediction.forecastCaptureId ?? "") !==
+        : previousCanonicalPrediction.observedCurrentC !== latestRow?.tempC) ||
+      String(previousCanonicalPrediction.forecastCaptureId ?? "") !==
         String(primaryCapture?._id ?? "") ||
-      generatedAt - previousPrediction.generatedAt >= PREDICTION_HEARTBEAT_MS;
+      generatedAt - previousCanonicalPrediction.generatedAt >=
+        PREDICTION_HEARTBEAT_MS;
     if (!materialChange) {
-      return { prediction: previousPrediction, summary };
+      return { prediction: previousCanonicalPrediction, summary };
     }
 
+    // Recheck immediately before the KMA-derived write so revocation during a
+    // longer recomputation cannot create another protected prediction row.
+    if (!hasApprovedKmaAmoAccess()) {
+      return {
+        prediction: null,
+        summary,
+        unavailable: {
+          status: "approval_required",
+          reason: "KMA/AMO airport forecast access approval is required.",
+        },
+      };
+    }
     const revision = (previousPrediction?.revision ?? 0) + 1;
     const predictionId = await ctx.db.insert("seoulHighPredictions", {
       stationIcao: args.stationIcao,
@@ -1626,6 +1817,9 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
   },
   handler: async (ctx, args) => {
     assertDateKey(args.date);
+    if (!hasApprovedKmaAmoAccess()) {
+      return null;
+    }
     const todayDate = formatDateInTimezone(Date.now(), SEOUL_TIMEZONE);
     if (args.date >= todayDate) {
       throw new Error("Only completed Seoul-local dates can be finalized.");
@@ -1633,8 +1827,11 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
 
     const existingEvaluation = await ctx.db
       .query("seoulHighEvaluations")
-      .withIndex("by_station_date", (query) =>
-        query.eq("stationIcao", args.stationIcao).eq("targetDate", args.date),
+      .withIndex("by_station_model_date", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("modelVersion", PREDICTION_MODEL_VERSION)
+          .eq("targetDate", args.date),
       )
       .first();
     if (existingEvaluation) {
@@ -1700,12 +1897,21 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
       await ctx.db.insert("seoulAmosDailySummaries", summaryFields);
     }
 
-    const predictions = await ctx.db
-      .query("seoulHighPredictions")
-      .withIndex("by_station_date_revision", (query) =>
-        query.eq("stationIcao", args.stationIcao).eq("targetDate", args.date),
-      )
-      .collect();
+    const predictions = hasApprovedKmaAmoAccess()
+      ? (
+          await ctx.db
+            .query("seoulHighPredictions")
+            .withIndex("by_station_date_revision", (query) =>
+              query
+                .eq("stationIcao", args.stationIcao)
+                .eq("targetDate", args.date),
+            )
+            .collect()
+        ).filter(
+          (prediction) =>
+            prediction.modelVersion === PREDICTION_MODEL_VERSION,
+        )
+      : [];
     predictions.sort((a, b) => a.revision - b.revision);
     const initialPrediction = predictions[0] ?? null;
     const finalPrediction = predictions[predictions.length - 1] ?? null;
@@ -1764,9 +1970,13 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
           maxRow.obsTimeUtc < finalPrediction.peakWindowEndUtc
         : null;
     const finalizedAt = Date.now();
+    if (!hasApprovedKmaAmoAccess()) {
+      return null;
+    }
     const evaluationId = await ctx.db.insert("seoulHighEvaluations", {
       stationIcao: args.stationIcao,
       targetDate: args.date,
+      modelVersion: PREDICTION_MODEL_VERSION,
       finalizedAt,
       finalizedAtLocal: formatDateTimeInTimezone(finalizedAt, SEOUL_TIMEZONE),
       actualHighC: maxRow.tempC,
@@ -1842,13 +2052,34 @@ export const getHighPredictionAccuracy = queryGeneric({
     const stationIcao = String(
       args.stationIcao ?? SEOUL_STATION.stationIcao,
     ).toUpperCase();
+    if (stationIcao !== SEOUL_STATION.stationIcao) {
+      throw new Error("The Seoul high accuracy query supports RKSI only.");
+    }
     const trailingDays = clamp(Math.trunc(args.trailingDays ?? 30), 1, 365);
     const todayDate = formatDateInTimezone(Date.now(), SEOUL_TIMEZONE);
     const earliestDate = addUtcDays(todayDate, -trailingDays);
+    if (!hasApprovedKmaAmoAccess()) {
+      return {
+        status: "approval_required",
+        approval: {
+          approved: false,
+          status: "approval_required",
+          flagName: KMA_AMO_APPROVAL_FLAG,
+        },
+        stationIcao,
+        trailingDays,
+        earliestDate,
+        todayDate,
+        ...summarizeEvaluations([]),
+        evaluations: [],
+      };
+    }
     const rows = await ctx.db
       .query("seoulHighEvaluations")
-      .withIndex("by_station_finalizedAt", (query) =>
-        query.eq("stationIcao", stationIcao),
+      .withIndex("by_station_model_finalizedAt", (query) =>
+        query
+          .eq("stationIcao", stationIcao)
+          .eq("modelVersion", PREDICTION_MODEL_VERSION),
       )
       .order("desc")
       .take(365);
@@ -1866,19 +2097,22 @@ export const getHighPredictionAccuracy = queryGeneric({
   },
 });
 
-function toWeatherComOnlyPagePrediction(prediction) {
-  if (!prediction) {
+function toCanonicalPagePrediction(prediction) {
+  if (
+    !prediction ||
+    prediction.modelVersion !== PREDICTION_MODEL_VERSION ||
+    !hasApprovedKmaAmoAccess()
+  ) {
     return null;
   }
   return {
     ...prediction,
     providerDetails: (prediction.providerDetails ?? []).filter(
-      (provider) => provider.provider === "weathercom",
+      (provider) =>
+        provider.provider === "kma_amo" ||
+        provider.provider === "weathercom",
     ),
-    hourlyEnsembleCurve:
-      prediction.modelVersion === PREDICTION_MODEL_VERSION
-        ? prediction.hourlyEnsembleCurve
-        : [],
+    hourlyEnsembleCurve: prediction.hourlyEnsembleCurve,
   };
 }
 
@@ -2382,6 +2616,101 @@ function buildWeatherComHourlyDiagnostics({
   };
 }
 
+function buildKmaForecastView({
+  approved,
+  captures,
+  targetDate,
+  now,
+}) {
+  const base = {
+    provider: "kma_amo",
+    label: "KMA/AMO · RKSI",
+    role: "primary",
+    sourceUrl: KMA_AMO_AIRPORT_FORECAST_URL,
+    staleAfterMinutes: MAX_KMA_CAPTURE_AGE_MS / MILLIS_PER_MINUTE,
+  };
+  if (!approved) {
+    return {
+      ...base,
+      status: "approval_required",
+      latestAttemptStatus: "approval_required",
+      latestAttempt: null,
+      latestCapture: null,
+      selectedDateForecast: null,
+      hourlyRows: [],
+      isStale: true,
+    };
+  }
+
+  const latestAttempt = captures[0] ?? null;
+  const latestSuccessfulCapture =
+    captures.find(
+      (capture) =>
+        capture.status === WEATHER_STATUS.OK &&
+        (capture.dailyRows ?? []).some((row) => row.date === targetDate),
+    ) ?? null;
+  const canonicalCapture = selectLatestUsableKmaCapture({
+    captures,
+    targetDate,
+    generatedAt: now,
+  });
+  const latestSuccessAgeMinutes = latestSuccessfulCapture
+    ? roundToTenth(
+        Math.max(0, now - latestSuccessfulCapture.capturedAt) /
+          MILLIS_PER_MINUTE,
+      )
+    : null;
+  const isStale =
+    !canonicalCapture ||
+    !Number.isFinite(latestSuccessAgeMinutes) ||
+    latestSuccessAgeMinutes >
+      MAX_KMA_CAPTURE_AGE_MS / MILLIS_PER_MINUTE;
+  const latestAttemptStatus = latestAttempt?.status ?? "no_data";
+  const status =
+    latestAttemptStatus === WEATHER_STATUS.ERROR
+      ? WEATHER_STATUS.ERROR
+      : !latestSuccessfulCapture
+        ? "no_data"
+        : isStale
+          ? "stale"
+          : WEATHER_STATUS.OK;
+  const selectedDateForecast =
+    latestSuccessfulCapture?.dailyRows?.find(
+      (row) => row.date === targetDate,
+    ) ?? null;
+  const hourlyRows = (latestSuccessfulCapture?.hourlyRows ?? [])
+    .filter((row) => row.date === targetDate && Number.isFinite(row.tempC))
+    .map((row) => ({
+      ...row,
+      capturedAt: latestSuccessfulCapture.capturedAt,
+      capturedAtLocal: latestSuccessfulCapture.capturedAtLocal,
+    }));
+
+  return {
+    ...base,
+    status,
+    latestAttemptStatus,
+    ...(latestAttempt?.error
+      ? { latestAttemptError: latestAttempt.error }
+      : {}),
+    ...(Number.isFinite(latestAttempt?.capturedAt)
+      ? {
+          latestAttemptedAt: latestAttempt.capturedAt,
+          latestAttemptedAtLocal: latestAttempt.capturedAtLocal,
+        }
+      : {}),
+    ...(Number.isFinite(latestSuccessAgeMinutes)
+      ? { latestSuccessAgeMinutes }
+      : {}),
+    latestAttempt,
+    latestCapture: latestSuccessfulCapture,
+    canonicalCapture,
+    selectedDateForecast,
+    hourlyRows,
+    isStale,
+  };
+}
+
 export const getHighPredictionDashboard = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
@@ -2391,16 +2720,21 @@ export const getHighPredictionDashboard = queryGeneric({
     const stationIcao = String(
       args.stationIcao ?? SEOUL_STATION.stationIcao,
     ).toUpperCase();
+    if (stationIcao !== SEOUL_STATION.stationIcao) {
+      throw new Error("The Seoul forecast dashboard supports RKSI only.");
+    }
     const now = Date.now();
     const todayDate = formatDateInTimezone(now, SEOUL_TIMEZONE);
     const date = args.date ?? todayDate;
     assertDateKey(date);
     const nextDate = addUtcDays(date, 1);
     const nextMidnightUtc = Date.parse(`${nextDate}T00:00:00+09:00`);
+    const kmaAccessApproved = hasApprovedKmaAmoAccess();
 
     const [
       summary,
       revisionRows,
+      kmaForecastCaptureRows,
       forecastCaptureRows,
       evaluation,
       accuracyRows,
@@ -2414,13 +2748,24 @@ export const getHighPredictionDashboard = queryGeneric({
           query.eq("stationIcao", stationIcao).eq("date", date),
         )
         .first(),
-      ctx.db
-        .query("seoulHighPredictions")
-        .withIndex("by_station_date_revision", (query) =>
-          query.eq("stationIcao", stationIcao).eq("targetDate", date),
-        )
-        .order("desc")
-        .take(MAX_DASHBOARD_REVISIONS),
+      kmaAccessApproved
+        ? ctx.db
+            .query("seoulHighPredictions")
+            .withIndex("by_station_date_revision", (query) =>
+              query.eq("stationIcao", stationIcao).eq("targetDate", date),
+            )
+            .order("desc")
+            .take(MAX_DASHBOARD_REVISIONS)
+        : Promise.resolve([]),
+      kmaAccessApproved
+        ? ctx.db
+            .query("seoulKmaForecastCaptures")
+            .withIndex("by_station_capturedAt", (query) =>
+              query.eq("stationIcao", stationIcao),
+            )
+            .order("desc")
+            .take(MAX_FORECAST_CAPTURES_FOR_DAY)
+        : Promise.resolve([]),
       ctx.db
         .query("seoulForecastCaptures")
         .withIndex("by_station_capturedAt", (query) =>
@@ -2428,19 +2773,28 @@ export const getHighPredictionDashboard = queryGeneric({
         )
         .order("desc")
         .take(MAX_FORECAST_CAPTURES_FOR_DAY),
-      ctx.db
-        .query("seoulHighEvaluations")
-        .withIndex("by_station_date", (query) =>
-          query.eq("stationIcao", stationIcao).eq("targetDate", date),
-        )
-        .first(),
-      ctx.db
-        .query("seoulHighEvaluations")
-        .withIndex("by_station_finalizedAt", (query) =>
-          query.eq("stationIcao", stationIcao),
-        )
-        .order("desc")
-        .take(30),
+      kmaAccessApproved
+        ? ctx.db
+            .query("seoulHighEvaluations")
+            .withIndex("by_station_model_date", (query) =>
+              query
+                .eq("stationIcao", stationIcao)
+                .eq("modelVersion", PREDICTION_MODEL_VERSION)
+                .eq("targetDate", date),
+            )
+            .first()
+        : Promise.resolve(null),
+      kmaAccessApproved
+        ? ctx.db
+            .query("seoulHighEvaluations")
+            .withIndex("by_station_model_finalizedAt", (query) =>
+              query
+                .eq("stationIcao", stationIcao)
+                .eq("modelVersion", PREDICTION_MODEL_VERSION),
+            )
+            .order("desc")
+            .take(30)
+        : Promise.resolve([]),
       ctx.db
         .query("seoulHourlyForecastPredictions")
         .withIndex("by_station_provider_target_capturedAt", (query) =>
@@ -2499,12 +2853,26 @@ export const getHighPredictionDashboard = queryGeneric({
       ...recentWeathercomAmosObservations,
     ];
     const latestAttemptedForecastCapture = forecastCaptureRows[0] ?? null;
-    const latestPrediction = toWeatherComOnlyPagePrediction(
-      revisionRows[0] ?? null,
+    const latestPrediction = toCanonicalPagePrediction(
+      revisionRows.find(
+        (prediction) =>
+          prediction.modelVersion === PREDICTION_MODEL_VERSION,
+      ) ?? null,
     );
     const revisions = [...revisionRows]
+      .filter(
+        (prediction) =>
+          prediction.modelVersion === PREDICTION_MODEL_VERSION,
+      )
       .reverse()
-      .map(toWeatherComOnlyPagePrediction);
+      .map(toCanonicalPagePrediction)
+      .filter(Boolean);
+    const kmaForecast = buildKmaForecastView({
+      approved: kmaAccessApproved,
+      captures: kmaForecastCaptureRows,
+      targetDate: date,
+      now,
+    });
     const latestWeatherComCapture = selectLatestUsableWeatherComCapture({
       captures: forecastCaptureRows,
       targetDate: date,
@@ -2514,7 +2882,7 @@ export const getHighPredictionDashboard = queryGeneric({
       forecastCaptureRows,
       date,
     );
-    const latestForecastCapture = latestWeatherComCapture
+    const secondaryWeathercomForecastCapture = latestWeatherComCapture
       ? {
           _id: latestWeatherComCapture._id,
           _creationTime: latestWeatherComCapture._creationTime,
@@ -2579,9 +2947,37 @@ export const getHighPredictionDashboard = queryGeneric({
       todayDate,
       isToday: date === todayDate,
       summary,
+      kmaAccess: {
+        approved: kmaAccessApproved,
+        status: kmaAccessApproved ? "approved" : "approval_required",
+        flagName: KMA_AMO_APPROVAL_FLAG,
+        sourceUrl: KMA_AMO_AIRPORT_FORECAST_URL,
+      },
+      kmaForecast,
+      latestKmaForecastCapture: kmaForecast.latestCapture,
+      // Canonical compatibility alias. This no longer points at Weather.com.
+      latestForecastCapture: kmaForecast.latestCapture,
+      kmaHourlyDiagnostics: {
+        status: kmaForecast.status,
+        isStale: kmaForecast.isStale,
+        staleAfterMinutes: kmaForecast.staleAfterMinutes,
+        pointCount: kmaForecast.hourlyRows.length,
+        points: kmaForecast.hourlyRows,
+        latestCapture: kmaForecast.latestCapture,
+        selectedDateForecast: kmaForecast.selectedDateForecast,
+        ...(Number.isFinite(kmaForecast.latestSuccessAgeMinutes)
+          ? {
+              latestSuccessAgeMinutes:
+                kmaForecast.latestSuccessAgeMinutes,
+            }
+          : {}),
+        ...(kmaForecast.latestAttemptError
+          ? { error: kmaForecast.latestAttemptError }
+          : {}),
+      },
       latestPrediction,
       revisions,
-      latestForecastCapture,
+      secondaryWeathercomForecastCapture,
       weathercomHourlyDiagnostics,
       evaluation,
       accuracy: summarizeEvaluations(accuracyRows),
