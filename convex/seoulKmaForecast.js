@@ -1,9 +1,11 @@
 import {
   internalActionGeneric,
   internalMutationGeneric,
+  mutationGeneric,
 } from "convex/server";
 import { v } from "convex/values";
 
+import { internal } from "./_generated/api";
 import { parseKmaAirportForecastHtml } from "./seoulKmaForecastParser.js";
 
 const SEOUL_TIMEZONE = "Asia/Seoul";
@@ -15,6 +17,8 @@ const APPROVAL_REQUIRED_MESSAGE =
   "KMA/AMO airport forecast access approval is required before RKSI collection can run.";
 const KMA_SOURCE = "kma_amo_airport";
 const KMA_REQUEST_TIMEOUT_MS = 15_000;
+const COLLECTION_LOCK_TIMEOUT_MS = 15 * 60 * 1_000;
+const MIN_COLLECTION_INTERVAL_MS = 10 * 60 * 1_000;
 
 const SEOUL_STATION = {
   stationIcao: "RKSI",
@@ -223,6 +227,95 @@ async function storeAttempt(ctx, {
   });
 }
 
+async function queueAirportForecastCollection(
+  ctx,
+  { stationIcao, collectionTrigger },
+) {
+  const now = Date.now();
+  if (!hasApprovedKmaAmoAccess()) {
+    return {
+      queued: false,
+      status: "approval_required",
+      stationIcao,
+      approval: {
+        approved: false,
+        status: "approval_required",
+        flagName: KMA_AMO_APPROVAL_FLAG,
+      },
+    };
+  }
+
+  const existing = await ctx.db
+    .query("seoulKmaForecastCollectorStatus")
+    .withIndex("by_station", (query) =>
+      query.eq("stationIcao", stationIcao),
+    )
+    .first();
+  if (
+    Number.isFinite(existing?.collectionInFlightSince) &&
+    now - existing.collectionInFlightSince < COLLECTION_LOCK_TIMEOUT_MS
+  ) {
+    return {
+      queued: false,
+      status: "already_running",
+      stationIcao,
+      collectionQueuedAt: existing.collectionQueuedAt,
+      collectionInFlightSince: existing.collectionInFlightSince,
+    };
+  }
+  if (
+    Number.isFinite(existing?.collectionQueuedAt) &&
+    now - existing.collectionQueuedAt < MIN_COLLECTION_INTERVAL_MS
+  ) {
+    return {
+      queued: false,
+      status: "cooldown",
+      stationIcao,
+      retryAfterSeconds: Math.ceil(
+        (MIN_COLLECTION_INTERVAL_MS - (now - existing.collectionQueuedAt)) /
+          1_000,
+      ),
+    };
+  }
+
+  const runId = `${collectionTrigger}:${now}`;
+  const patch = {
+    stationIcao,
+    status: "queued",
+    collectionQueuedAt: now,
+    collectionInFlightSince: now,
+    collectionMode: collectionTrigger,
+    collectionRunId: runId,
+    lastError: undefined,
+    dailyRowCount: undefined,
+    hourlyRowCount: undefined,
+    updatedAt: now,
+  };
+  if (existing) {
+    await ctx.db.patch(existing._id, patch);
+  } else {
+    await ctx.db.insert("seoulKmaForecastCollectorStatus", patch);
+  }
+  await ctx.scheduler.runAfter(
+    0,
+    internal.seoulKmaForecast.collectQueuedAirportForecast,
+    {
+      stationIcao,
+      requestedAt: now,
+      collectionTrigger,
+      runId,
+    },
+  );
+  return {
+    queued: true,
+    status: "queued",
+    stationIcao,
+    requestedAt: now,
+    collectionTrigger,
+    cooldownSeconds: MIN_COLLECTION_INTERVAL_MS / 1_000,
+  };
+}
+
 async function runAirportForecastCollection(ctx, args, collectionTrigger) {
   const stationIcao = normalizeStationIcao(args.stationIcao);
   const capturedAt = Date.now();
@@ -368,20 +461,199 @@ async function runAirportForecastCollection(ctx, args, collectionTrigger) {
   }
 }
 
-// Internal-only manual entry point. Approval authorizes the provider use, not
-// arbitrary browser clients to trigger unbounded upstream requests.
-export const collectAirportForecast = internalActionGeneric({
+// Browser clients can request a refresh only through this atomic, globally
+// rate-limited queue. The upstream-fetching action remains internal.
+export const requestAirportForecastRefresh = mutationGeneric({
   args: {
     stationIcao: v.optional(v.string()),
   },
   handler: async (ctx, args) =>
-    await runAirportForecastCollection(ctx, args, "manual"),
+    await queueAirportForecastCollection(ctx, {
+      stationIcao: normalizeStationIcao(args.stationIcao),
+      collectionTrigger: "manual",
+    }),
 });
 
-export const collectScheduledAirportForecast = internalActionGeneric({
+export const queueScheduledAirportForecastRefresh = internalMutationGeneric({
   args: {
     stationIcao: v.optional(v.string()),
   },
   handler: async (ctx, args) =>
-    await runAirportForecastCollection(ctx, args, "scheduled"),
+    await queueAirportForecastCollection(ctx, {
+      stationIcao: normalizeStationIcao(args.stationIcao),
+      collectionTrigger: "scheduled",
+    }),
+});
+
+export const claimQueuedAirportForecast = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    runId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = normalizeStationIcao(args.stationIcao);
+    const existing = await ctx.db
+      .query("seoulKmaForecastCollectorStatus")
+      .withIndex("by_station", (query) =>
+        query.eq("stationIcao", stationIcao),
+      )
+      .first();
+    if (!existing || existing.collectionRunId !== args.runId) {
+      return {
+        claimed: false,
+        status: "superseded",
+        stationIcao,
+      };
+    }
+    if (!hasApprovedKmaAmoAccess()) {
+      return {
+        claimed: false,
+        status: "approval_required",
+        stationIcao,
+      };
+    }
+    const startedAt = Date.now();
+    await ctx.db.patch(existing._id, {
+      collectionInFlightSince: startedAt,
+      updatedAt: startedAt,
+    });
+    return {
+      claimed: true,
+      status: "claimed",
+      stationIcao,
+      startedAt,
+    };
+  },
+});
+
+export const writeCollectorStatus = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    runId: v.string(),
+    status: captureStatusValidator,
+    completedAt: v.number(),
+    lastError: v.optional(v.string()),
+    dailyRowCount: v.optional(v.number()),
+    hourlyRowCount: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("seoulKmaForecastCollectorStatus")
+      .withIndex("by_station", (query) =>
+        query.eq("stationIcao", args.stationIcao),
+      )
+      .first();
+    if (!existing || existing.collectionRunId !== args.runId) {
+      return { updated: false, reason: "superseded" };
+    }
+    await ctx.db.patch(existing._id, {
+      status: args.status,
+      lastCompletedAt: args.completedAt,
+      ...(args.status === "ok"
+        ? {
+            lastSuccessAt: args.completedAt,
+            lastError: undefined,
+            dailyRowCount: args.dailyRowCount,
+            hourlyRowCount: args.hourlyRowCount,
+          }
+        : {
+            lastError: args.lastError,
+            dailyRowCount: undefined,
+            hourlyRowCount: undefined,
+          }),
+      collectionInFlightSince: undefined,
+      collectionMode: undefined,
+      collectionRunId: undefined,
+      updatedAt: Date.now(),
+    });
+    return { updated: true };
+  },
+});
+
+export const collectQueuedAirportForecast = internalActionGeneric({
+  args: {
+    stationIcao: v.string(),
+    requestedAt: v.number(),
+    collectionTrigger: collectionTriggerValidator,
+    runId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = normalizeStationIcao(args.stationIcao);
+    const claim = await ctx.runMutation(
+      internal.seoulKmaForecast.claimQueuedAirportForecast,
+      {
+        stationIcao,
+        runId: args.runId,
+      },
+    );
+    if (!claim.claimed) {
+      if (claim.status === "approval_required") {
+        await ctx.runMutation(
+          internal.seoulKmaForecast.writeCollectorStatus,
+          {
+            stationIcao,
+            runId: args.runId,
+            status: "approval_required",
+            completedAt: Date.now(),
+            lastError: APPROVAL_REQUIRED_MESSAGE,
+          },
+        );
+        return {
+          status: "approval_required",
+          stationIcao,
+          collectionTrigger: args.collectionTrigger,
+          requestedAt: args.requestedAt,
+          message: APPROVAL_REQUIRED_MESSAGE,
+        };
+      }
+      return {
+        status: "superseded",
+        stationIcao,
+        collectionTrigger: args.collectionTrigger,
+        requestedAt: args.requestedAt,
+      };
+    }
+    try {
+      const result = await runAirportForecastCollection(
+        ctx,
+        { stationIcao },
+        args.collectionTrigger,
+      );
+      await ctx.runMutation(
+        internal.seoulKmaForecast.writeCollectorStatus,
+        {
+          stationIcao,
+          runId: args.runId,
+          status: result.status,
+          completedAt: Date.now(),
+          ...(result.message ? { lastError: result.message } : {}),
+          ...(Number.isFinite(result.dailyRowCount)
+            ? { dailyRowCount: result.dailyRowCount }
+            : {}),
+          ...(Number.isFinite(result.hourlyRowCount)
+            ? { hourlyRowCount: result.hourlyRowCount }
+            : {}),
+        },
+      );
+      return {
+        ...result,
+        requestedAt: args.requestedAt,
+      };
+    } catch (error) {
+      const approvalRevoked = !hasApprovedKmaAmoAccess();
+      await ctx.runMutation(
+        internal.seoulKmaForecast.writeCollectorStatus,
+        {
+          stationIcao,
+          runId: args.runId,
+          status: approvalRevoked ? "approval_required" : "error",
+          completedAt: Date.now(),
+          lastError: approvalRevoked
+            ? APPROVAL_REQUIRED_MESSAGE
+            : formatErrorMessage(error),
+        },
+      );
+      throw error;
+    }
+  },
 });

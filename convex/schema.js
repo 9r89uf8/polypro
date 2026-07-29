@@ -16,6 +16,13 @@ const seoulKmaForecastCaptureStatus = v.union(
   v.literal("approval_required"),
 );
 
+const seoulKmaForecastCollectorStatus = v.union(
+  v.literal("queued"),
+  v.literal("ok"),
+  v.literal("error"),
+  v.literal("approval_required"),
+);
+
 const seoulGk2aCollectorStatus = v.union(
   v.literal("ok"),
   v.literal("partial"),
@@ -1150,6 +1157,23 @@ export default defineSchema({
     collectionInFlightSince: v.optional(v.number()),
     collectionMode: v.optional(v.string()),
     collectionRunId: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_station", ["stationIcao"]),
+
+  seoulKmaForecastCollectorStatus: defineTable({
+    stationIcao: v.string(),
+    status: seoulKmaForecastCollectorStatus,
+    collectionQueuedAt: v.number(),
+    collectionInFlightSince: v.optional(v.number()),
+    collectionMode: v.optional(
+      v.union(v.literal("manual"), v.literal("scheduled")),
+    ),
+    collectionRunId: v.optional(v.string()),
+    lastCompletedAt: v.optional(v.number()),
+    lastSuccessAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    dailyRowCount: v.optional(v.number()),
+    hourlyRowCount: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_station", ["stationIcao"]),
 

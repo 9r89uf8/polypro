@@ -24,6 +24,8 @@ const PREDICTION_INTERVAL_MS = 5 * MILLIS_PER_MINUTE;
 const MAX_LIVE_OBSERVATION_AGE_MS = 10 * MILLIS_PER_MINUTE;
 const MAX_PROVIDER_CAPTURE_AGE_MS = 12 * MILLIS_PER_HOUR;
 const MAX_KMA_CAPTURE_AGE_MS = 6 * MILLIS_PER_HOUR;
+const KMA_COLLECTION_COOLDOWN_SECONDS = 10 * 60;
+const KMA_COLLECTION_LOCK_TIMEOUT_SECONDS = 15 * 60;
 const WEATHERCOM_BASELINE_WINDOW_MS = 2 * MILLIS_PER_HOUR;
 const WEATHERCOM_HISTORY_STALE_MS = 90 * MILLIS_PER_MINUTE;
 const PREDICTION_HEARTBEAT_MS = 30 * MILLIS_PER_MINUTE;
@@ -2619,6 +2621,7 @@ function buildWeatherComHourlyDiagnostics({
 function buildKmaForecastView({
   approved,
   captures,
+  collectorState,
   targetDate,
   now,
 }) {
@@ -2628,10 +2631,15 @@ function buildKmaForecastView({
     role: "primary",
     sourceUrl: KMA_AMO_AIRPORT_FORECAST_URL,
     staleAfterMinutes: MAX_KMA_CAPTURE_AGE_MS / MILLIS_PER_MINUTE,
+    collectionCooldownSeconds: KMA_COLLECTION_COOLDOWN_SECONDS,
+    collectionLockTimeoutSeconds: KMA_COLLECTION_LOCK_TIMEOUT_SECONDS,
   };
   if (!approved) {
     return {
       ...base,
+      collector: {
+        status: "approval_required",
+      },
       status: "approval_required",
       latestAttemptStatus: "approval_required",
       latestAttempt: null,
@@ -2705,6 +2713,7 @@ function buildKmaForecastView({
     latestAttempt,
     latestCapture: latestSuccessfulCapture,
     canonicalCapture,
+    collector: collectorState ?? null,
     selectedDateForecast,
     hourlyRows,
     isStale,
@@ -2735,6 +2744,7 @@ export const getHighPredictionDashboard = queryGeneric({
       summary,
       revisionRows,
       kmaForecastCaptureRows,
+      kmaForecastCollectorState,
       forecastCaptureRows,
       evaluation,
       accuracyRows,
@@ -2766,6 +2776,14 @@ export const getHighPredictionDashboard = queryGeneric({
             .order("desc")
             .take(MAX_FORECAST_CAPTURES_FOR_DAY)
         : Promise.resolve([]),
+      kmaAccessApproved
+        ? ctx.db
+            .query("seoulKmaForecastCollectorStatus")
+            .withIndex("by_station", (query) =>
+              query.eq("stationIcao", stationIcao),
+            )
+            .first()
+        : Promise.resolve(null),
       ctx.db
         .query("seoulForecastCaptures")
         .withIndex("by_station_capturedAt", (query) =>
@@ -2870,6 +2888,7 @@ export const getHighPredictionDashboard = queryGeneric({
     const kmaForecast = buildKmaForecastView({
       approved: kmaAccessApproved,
       captures: kmaForecastCaptureRows,
+      collectorState: kmaForecastCollectorState,
       targetDate: date,
       now,
     });
@@ -2954,6 +2973,7 @@ export const getHighPredictionDashboard = queryGeneric({
         sourceUrl: KMA_AMO_AIRPORT_FORECAST_URL,
       },
       kmaForecast,
+      kmaCollector: kmaForecast.collector,
       latestKmaForecastCapture: kmaForecast.latestCapture,
       // Canonical compatibility alias. This no longer points at Weather.com.
       latestForecastCapture: kmaForecast.latestCapture,

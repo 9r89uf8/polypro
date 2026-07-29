@@ -2019,6 +2019,7 @@ function normalizeKmaHourlyRows(rows, date, capture, diagnostics) {
 function normalizeKmaDashboard(dashboard, date, nowMs) {
   const access = dashboard?.kmaAccess ?? dashboard?.kmaConfigStatus ?? null;
   const forecast = dashboard?.kmaForecast ?? null;
+  const collector = forecast?.collector ?? dashboard?.kmaCollector ?? null;
   const diagnostics = dashboard?.kmaHourlyDiagnostics ?? null;
   const capture =
     forecast?.latestCapture ??
@@ -2118,6 +2119,7 @@ function normalizeKmaDashboard(dashboard, date, nowMs) {
     loading: dashboard === undefined,
     access,
     forecast,
+    collector,
     diagnostics,
     capture,
     selectedDateForecast,
@@ -2133,6 +2135,14 @@ function normalizeKmaDashboard(dashboard, date, nowMs) {
     approvalRequired,
     setupRequired,
     available,
+    collectionCooldownSeconds: firstFinite(
+      finiteNumber(forecast?.collectionCooldownSeconds),
+      10 * 60,
+    ),
+    collectionLockTimeoutSeconds: firstFinite(
+      finiteNumber(forecast?.collectionLockTimeoutSeconds),
+      15 * 60,
+    ),
     sourceUrl:
       forecast?.sourceUrl ??
       access?.sourceUrl ??
@@ -3136,6 +3146,7 @@ function SolarHeatingPanel({
 function MaxOutlookPanel({
   date,
   today,
+  clockNowMs,
   unit,
   latestAmos,
   amosFreshness,
@@ -3144,6 +3155,8 @@ function MaxOutlookPanel({
   kmaPeak,
   expectedHighC,
   trendCPerHour,
+  onCollect,
+  collectionState,
 }) {
   const isToday = date === today;
   const isArchive = date < today;
@@ -3215,6 +3228,52 @@ function MaxOutlookPanel({
         : kma?.isStale
           ? "border-amber-300/25 bg-amber-300/10 text-amber-300"
           : "border-slate-500/20 bg-slate-500/10 text-slate-500";
+  const collectorInFlightSince = finiteNumber(
+    kma?.collector?.collectionInFlightSince,
+  );
+  const collectionLockTimeoutMs =
+    (finiteNumber(kma?.collectionLockTimeoutSeconds) ?? 15 * 60) * 1_000;
+  const collectorRunning =
+    Number.isFinite(collectorInFlightSince) &&
+    (!Number.isFinite(clockNowMs) ||
+      clockNowMs - collectorInFlightSince < collectionLockTimeoutMs);
+  const collectionActive = Boolean(collectionState?.active || collectorRunning);
+  const backendRetryAt = Number.isFinite(kma?.collector?.collectionQueuedAt)
+    ? kma.collector.collectionQueuedAt +
+      (finiteNumber(kma?.collectionCooldownSeconds) ?? 10 * 60) * 1_000
+    : null;
+  const retryAt = Math.max(
+    finiteNumber(collectionState?.retryAt) ?? 0,
+    finiteNumber(backendRetryAt) ?? 0,
+  );
+  const retrySeconds =
+    Number.isFinite(clockNowMs) && retryAt > clockNowMs
+      ? Math.ceil((retryAt - clockNowMs) / 1_000)
+      : 0;
+  const collectDisabled =
+    kma?.loading ||
+    kma?.approvalRequired ||
+    kma?.setupRequired ||
+    collectionActive ||
+    retrySeconds > 0;
+  const collectLabel = kma?.loading
+    ? "Loading KMA"
+    : kma?.approvalRequired
+      ? "Approval required"
+      : kma?.setupRequired
+        ? "Setup required"
+        : collectionActive
+          ? "Collecting KMA…"
+          : retrySeconds > 0
+            ? `Retry in ${Math.max(1, Math.ceil(retrySeconds / 60))}m`
+            : "Collect KMA now";
+  const collectTitle = kma?.approvalRequired
+    ? `${kma?.access?.flagName ?? "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED"} must be approved before manual collection.`
+    : kma?.setupRequired
+      ? "KMA/AMO collection requires server-side setup."
+      : retrySeconds > 0
+        ? `KMA collection is rate-limited; retry in ${retrySeconds} seconds.`
+        : "Fetch the latest official KMA/AMO RKSI airport forecast.";
   const accessMessage = kma?.approvalRequired
     ? `${kma?.access?.flagName ?? "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED"} is not approved. Official KMA forecast collection is disabled, and Weather.com is not used as a fallback.`
     : kma?.setupRequired
@@ -3258,12 +3317,34 @@ function MaxOutlookPanel({
             AMOS observations using the feed&apos;s 15L designation.
           </p>
         </div>
-        <span
-          className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${forecastStatusTone}`}
-        >
-          {forecastStatus}
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {!isArchive && (
+            <button
+              type="button"
+              onClick={onCollect}
+              disabled={collectDisabled}
+              title={collectTitle}
+              className="border border-violet-300/30 bg-violet-300/10 px-3 py-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-violet-200 transition hover:border-violet-200/60 hover:bg-violet-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {collectLabel}
+            </button>
+          )}
+          <span
+            className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${forecastStatusTone}`}
+          >
+            {forecastStatus}
+          </span>
+        </div>
       </div>
+
+      {(collectionState?.message || collectorRunning) && (
+        <p
+          aria-live="polite"
+          className="mb-3 font-mono text-[10px] leading-4 text-violet-200/80"
+        >
+          {collectionState?.message || "KMA collection is running…"}
+        </p>
+      )}
 
       {(accessMessage || attemptMessage) && (
         <div className="mb-3 border border-amber-300/20 bg-amber-300/[0.055] px-4 py-3">
@@ -3837,6 +3918,12 @@ export default function SeoulDayPage() {
     message: "",
     requestedAt: null,
   });
+  const [kmaCollectionState, setKmaCollectionState] = useState({
+    active: false,
+    message: "",
+    requestedAt: null,
+    retryAt: null,
+  });
   const refreshInFlight = useRef(false);
   const chartScrollRef = useRef(null);
   const hasAutoScrolledChart = useRef(false);
@@ -3867,6 +3954,9 @@ export default function SeoulDayPage() {
   const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
   const requestSolarHeatingRefresh = useMutation(
     "seoulGk2aCollector:requestSolarHeatingRefresh",
+  );
+  const requestKmaForecastRefresh = useMutation(
+    "seoulKmaForecast:requestAirportForecastRefresh",
   );
 
   const metarRows = dayData?.rows ?? [];
@@ -4380,6 +4470,94 @@ export default function SeoulDayPage() {
     }
   }
 
+  async function collectKmaForecast() {
+    if (
+      !isDateValid ||
+      date < today ||
+      kmaCollectionState.active
+    ) {
+      return;
+    }
+    setKmaCollectionState({
+      active: true,
+      message: "Queueing the latest official KMA/AMO RKSI forecast…",
+      requestedAt: null,
+      retryAt: null,
+    });
+    try {
+      const result = await requestKmaForecastRefresh({
+        stationIcao: STATION_ICAO,
+      });
+      if (result?.status === "approval_required") {
+        setKmaCollectionState({
+          active: false,
+          message:
+            "KMA/AMO access approval is required before manual collection can run.",
+          requestedAt: null,
+          retryAt: null,
+        });
+        return;
+      }
+      if (result?.status === "already_running") {
+        const queuedAt = finiteNumber(result?.collectionQueuedAt);
+        setKmaCollectionState({
+          active: Number.isFinite(queuedAt),
+          message: Number.isFinite(queuedAt)
+            ? "A KMA forecast collection is already running…"
+            : "A KMA forecast collection is already running.",
+          requestedAt: queuedAt,
+          retryAt: null,
+        });
+        return;
+      }
+      if (result?.status === "cooldown") {
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil(result?.retryAfterSeconds ?? 60),
+        );
+        setKmaCollectionState({
+          active: false,
+          message: `KMA collection is cooling down; retry in about ${Math.max(
+            1,
+            Math.ceil(retryAfterSeconds / 60),
+          )} minute(s).`,
+          requestedAt: null,
+          retryAt: Date.now() + retryAfterSeconds * 1_000,
+        });
+        return;
+      }
+      if (
+        result?.status === "queued" &&
+        Number.isFinite(result?.requestedAt)
+      ) {
+        setKmaCollectionState({
+          active: true,
+          message:
+            "KMA forecast collection queued; waiting for the official page…",
+          requestedAt: result.requestedAt,
+          retryAt:
+            result.requestedAt +
+            Math.max(1, result?.cooldownSeconds ?? 10 * 60) * 1_000,
+        });
+        return;
+      }
+      setKmaCollectionState({
+        active: false,
+        message: "KMA collection was not queued. Try again shortly.",
+        requestedAt: null,
+        retryAt: null,
+      });
+    } catch (error) {
+      console.error(error);
+      setKmaCollectionState({
+        active: false,
+        message: "Could not queue KMA collection. Try again shortly.",
+        requestedAt: null,
+        retryAt: null,
+      });
+    }
+  }
+
   useEffect(() => {
     const requestedAt = solarRefreshState.requestedAt;
     const collector = solarDashboard?.collector;
@@ -4420,6 +4598,100 @@ export default function SeoulDayPage() {
   ]);
 
   useEffect(() => {
+    const requestedAt = kmaCollectionState.requestedAt;
+    const collector = kma?.collector;
+    if (Number.isFinite(requestedAt) && kma?.approvalRequired) {
+      setKmaCollectionState({
+        active: false,
+        message:
+          "KMA approval was removed before collection completed; no forecast is exposed.",
+        requestedAt: null,
+        retryAt: null,
+      });
+      return;
+    }
+    if (
+      !Number.isFinite(requestedAt) ||
+      !Number.isFinite(collector?.collectionQueuedAt) ||
+      collector.collectionQueuedAt < requestedAt
+    ) {
+      return;
+    }
+    const inFlightSince = finiteNumber(collector?.collectionInFlightSince);
+    const lockTimeoutMs =
+      (finiteNumber(kma?.collectionLockTimeoutSeconds) ?? 15 * 60) * 1_000;
+    if (Number.isFinite(inFlightSince)) {
+      if (!Number.isFinite(clockNowMs)) {
+        return;
+      }
+      if (clockNowMs - inFlightSince < lockTimeoutMs) {
+        return;
+      }
+    }
+    const message =
+      Number.isFinite(inFlightSince) && Number.isFinite(clockNowMs)
+        ? "KMA collection timed out; manual collection is available again."
+        : collector?.status === "approval_required"
+          ? "KMA approval was removed before collection completed; no forecast was stored."
+          : collector?.status === "error"
+            ? `KMA collection failed. ${collector?.lastError ?? ""}`.trim()
+            : collector?.status === "ok"
+              ? `KMA forecast collected · ${collector?.dailyRowCount ?? 0} daily / ${
+                  collector?.hourlyRowCount ?? 0
+                } hourly rows.`
+              : "KMA collection finished; the dashboard will use the latest stored capture.";
+    setKmaCollectionState((current) =>
+      current.requestedAt === requestedAt
+        ? {
+            active: false,
+            message,
+            requestedAt: null,
+            retryAt: current.retryAt,
+          }
+        : current,
+    );
+  }, [
+    clockNowMs,
+    kma?.collectionLockTimeoutSeconds,
+    kma?.approvalRequired,
+    kma?.collector?.collectionInFlightSince,
+    kma?.collector?.collectionQueuedAt,
+    kma?.collector?.dailyRowCount,
+    kma?.collector?.hourlyRowCount,
+    kma?.collector?.lastError,
+    kma?.collector?.status,
+    kmaCollectionState.requestedAt,
+  ]);
+
+  useEffect(() => {
+    if (
+      kmaCollectionState.active ||
+      !Number.isFinite(kmaCollectionState.retryAt) ||
+      !Number.isFinite(clockNowMs) ||
+      clockNowMs < kmaCollectionState.retryAt ||
+      !kmaCollectionState.message.startsWith(
+        "KMA collection is cooling down",
+      )
+    ) {
+      return;
+    }
+    setKmaCollectionState((current) =>
+      current.message.startsWith("KMA collection is cooling down")
+        ? {
+            ...current,
+            message: "",
+            retryAt: null,
+          }
+        : current,
+    );
+  }, [
+    clockNowMs,
+    kmaCollectionState.active,
+    kmaCollectionState.message,
+    kmaCollectionState.retryAt,
+  ]);
+
+  useEffect(() => {
     if (!isToday) {
       setRefreshState({
         active: false,
@@ -4429,6 +4701,12 @@ export default function SeoulDayPage() {
         active: false,
         message: "",
         requestedAt: null,
+      });
+      setKmaCollectionState({
+        active: false,
+        message: "",
+        requestedAt: null,
+        retryAt: null,
       });
       return;
     }
@@ -4634,6 +4912,7 @@ export default function SeoulDayPage() {
         <MaxOutlookPanel
           date={date}
           today={today}
+          clockNowMs={clockNowMs}
           unit={unit}
           latestAmos={latestAmos}
           amosFreshness={amosFreshness}
@@ -4642,6 +4921,8 @@ export default function SeoulDayPage() {
           kmaPeak={kmaPeak}
           expectedHighC={expectedHighC}
           trendCPerHour={trend60mCPerHour}
+          onCollect={collectKmaForecast}
+          collectionState={kmaCollectionState}
         />
 
         <SolarHeatingPanel

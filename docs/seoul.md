@@ -304,12 +304,18 @@ npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
 
 Every protected entry point uses the same current flag:
 
-- `seoulKmaForecast:collectAirportForecast` is the internal-only manual
-  collector. It is deliberately not client-callable, because source approval
-  does not authorize arbitrary browsers to create unbounded AMO requests.
-- `seoulKmaForecast:collectScheduledAirportForecast` is the internal action
-  invoked by cron `seoul_kma_amo_airport_forecast_every_30_min` at minutes
-  `:05` and `:35`.
+- `seoulKmaForecast:requestAirportForecastRefresh` is the public manual queue
+  mutation used by the Seoul-page button. It checks approval and an atomic
+  per-station cooldown/lock before it can schedule work; it never fetches AMO
+  directly.
+- `seoulKmaForecast:queueScheduledAirportForecastRefresh` is the internal
+  mutation invoked by cron
+  `seoul_kma_amo_airport_forecast_every_30_min` at minutes `:05` and `:35`.
+  It uses the same queue as manual requests.
+- `seoulKmaForecast:collectQueuedAirportForecast` is the internal-only fetch
+  worker. `seoulKmaForecast:claimQueuedAirportForecast` atomically verifies its
+  run ID immediately before protected work, and
+  `seoulKmaForecast:writeCollectorStatus` clears its run-owned lock.
 - `seoulKmaForecast:storeForecastCapture` is the internal storage mutation.
 - `seoulWeather:recomputeTodayHighPrediction` and
   `seoulWeather:recomputeHighPredictionInternal` create current KMA-primary
@@ -321,16 +327,39 @@ Every protected entry point uses the same current flag:
   `seoulWeather:getDayPageWeather`, and
   `seoulWeather:getHighPredictionAccuracy` are the protected read surfaces.
 
-Collection checks the flag when the manual/scheduled action begins,
-immediately before the outbound request, after the response, immediately
-before storage, and again inside the storage mutation. The prediction,
+The public/manual and scheduled queue mutations check the flag before writing
+queue state or scheduling work. The internal worker checks it again when it
+begins, immediately before the outbound request, after the response,
+immediately before storage, and again inside the storage mutation. The prediction,
 finalization, dashboard, day-weather, and accuracy boundaries also check the
 current flag and do not expose or derive from stored protected KMA rows after
-revocation. While disabled, a collection attempt stores and returns
-the metadata-only status `approval_required`, makes no request to AMO, stores
-no daily or hourly forecast rows, and the UI says approval or setup is
-required. Observed AMOS and METAR values remain visible, but every KMA forecast
-field is unavailable; Weather.com does not silently replace it.
+revocation. While disabled, a manual queue request returns
+`approval_required` without writing queue state, scheduling a worker, or
+contacting AMO. A worker already queued when approval is revoked records only
+the metadata-only `approval_required` attempt and stores no daily or hourly
+forecast rows. The UI says approval or setup is required. Observed AMOS and
+METAR values remain visible, but every KMA forecast field is unavailable;
+Weather.com does not silently replace it.
+
+Manual and scheduled requests share a ten-minute minimum interval and a
+15-minute stale-lock timeout in the singleton
+`seoulKmaForecastCollectorStatus` row for RKSI. The queue transaction returns
+`queued`, `already_running`, `cooldown`, or `approval_required`, so repeated
+clicks, concurrent tabs, direct Convex callers, and a cron arriving beside a
+manual click cannot create unbounded upstream requests. Each queued run owns a
+run ID; only that run may clear its lock or publish its final collector status.
+The internal worker must atomically claim that still-current run ID before any
+fetch or storage, so a delayed worker superseded after the stale-lock timeout
+exits without contacting AMO.
+Because the public route is unauthenticated, a caller can deliberately consume
+the one global slot every ten minutes, for a hard ceiling of 144 KMA requests
+per day; a scheduled attempt inside that cooldown is skipped. Provider
+approval must therefore cover public manual initiation and that maximum
+request cadence, not only the twice-hourly cron.
+The maximum-outlook header exposes this path as `Collect KMA now` on current
+and future forecast dates, reports queued/success/error state, and shows the
+remaining cooldown. Historical dates omit it because the current AMO page
+cannot backfill an archived forecast.
 
 ### Capture and provenance
 

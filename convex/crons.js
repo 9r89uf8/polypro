@@ -264,7 +264,7 @@ crons.cron(
 crons.cron(
   "seoul_kma_amo_airport_forecast_every_30_min",
   "5,35 * * * *",
-  internal.seoulKmaForecast.collectScheduledAirportForecast,
+  internal.seoulKmaForecast.queueScheduledAirportForecastRefresh,
   { stationIcao: "RKSI" },
 );
 

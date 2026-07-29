@@ -426,22 +426,38 @@ lists the **Information and Communications Technology Division,
 current office and number immediately before requesting approval because
 contact details can change.
 
-The gate is checked when the scheduled/manual action begins, immediately before
-the request, after the response, immediately before storage, and inside the
-storage mutation. The dashboard/query boundary checks it too and hides stored
-protected KMA rows after revocation. With the flag absent, collection returns
-and records a metadata-only `approval_required` attempt without contacting AMO
-or storing forecast rows. The page shows a
+The gate is checked before either the public manual or internal scheduled queue
+can write queue state, again when the internal worker begins, immediately
+before the request, after the response, immediately before storage, and inside
+the storage mutation. The dashboard/query boundary checks it too and hides
+stored protected KMA rows after revocation. With the flag absent, the manual
+queue returns `approval_required` without scheduling work or contacting AMO.
+A worker already queued when approval is revoked records only a metadata-only
+`approval_required` attempt and stores no forecast rows. The page shows a
 visible `Official KMA forecast unavailable` banner, names
 `KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED`, keeps actual AMOS and METAR
 observations available, and marks the KMA maximum, curve, peak, condition, and
 ceiling unavailable. It does not promote Weather.com to primary or use it as a
 fallback.
 
-Both collector actions are internal-only. Approval covers the provider use; it
-does not let an anonymous browser trigger upstream requests. The fetch rejects
-redirects, requires the response URL to remain the HTTPS AMO airport page, and
-requires an HTML content type before parsing.
+The browser can call only
+`seoulKmaForecast:requestAirportForecastRefresh`, a public queue mutation that
+checks approval and atomically enforces the shared cooldown and in-flight lock.
+It cannot call the internal fetch worker. Manual and scheduled requests share
+a ten-minute minimum interval and a 15-minute stale-lock timeout, so repeated
+clicks, concurrent tabs, direct Convex calls, and a neighboring cron cannot
+create unbounded AMO traffic. Immediately before protected work, the worker
+atomically claims the still-current run ID; a delayed worker superseded after
+the stale timeout exits without an AMO request or capture. The fetch rejects
+redirects, requires the
+response URL to remain the HTTPS AMO airport page, and requires an HTML content
+type before parsing.
+
+The public queue is unauthenticated, so a caller can intentionally occupy its
+single global slot every ten minutes: at most 144 KMA requests per day.
+Scheduled attempts that land inside that cooldown are skipped. KMA/AMO
+approval must explicitly cover public manual initiation and this maximum
+cadence in addition to the normal twice-hourly schedule.
 
 The forecast status badge is one of `Current KMA forecast`,
 `Stored KMA forecast`, `Stored KMA forecast · stale`,
@@ -454,14 +470,25 @@ is `Condition / ceiling`. The Weather.com diagnostic opens with
 peak timing, or cloud guidance`; its cloud-score column is
 `Secondary Weather.com − observed`.
 
+For today and future forecast dates, the maximum-outlook header also shows
+`Collect KMA now`. The button becomes `Collecting KMA…` while its internal
+worker owns the lock and `Retry in Xm` during the server-enforced cooldown.
+Approval/setup states disable it with the matching label. Its live status text
+reports queued, successful row counts, error, revocation, or timeout without
+discarding an older successful capture. Historical routes omit the button
+because collecting the current KMA page cannot backfill an archived date.
+
 KMA guidance becomes stale after `360` minutes. The page may retain and
 visibly label stale stored KMA values, while the backend KMA-primary prediction
 requires a capture no more than six hours old. Weather.com does not replace it.
 
 The protected entry points are:
 
-- collection: `seoulKmaForecast:collectAirportForecast`,
-  `seoulKmaForecast:collectScheduledAirportForecast`, and
+- collection: `seoulKmaForecast:requestAirportForecastRefresh`,
+  `seoulKmaForecast:queueScheduledAirportForecastRefresh`,
+  `seoulKmaForecast:claimQueuedAirportForecast`,
+  `seoulKmaForecast:collectQueuedAirportForecast`,
+  `seoulKmaForecast:writeCollectorStatus`, and
   `seoulKmaForecast:storeForecastCapture`
 - prediction/finalization:
   `seoulWeather:recomputeTodayHighPrediction`,
@@ -492,13 +519,15 @@ For the current Seoul date, the first page load and `Sync now` request:
 - `seoul:pollLatestNoaaStationMetar`
 - `seoul:pollLatestAmosTemperatureSites`
 
-The page no longer calls `seoulWeather:recomputeTodayHighPrediction` from this
-manual path. The status message reports partial observation-source failures.
+The page no longer calls `seoulWeather:recomputeTodayHighPrediction` from the
+observation-refresh path. The status message reports partial
+observation-source failures.
 The manual AMOS request is a single immediate fetch, while the scheduled
-rollover watch remains the lowest-latency path. Initial load and `Sync now` do
-not invoke the KMA forecast collector; the page reacts to scheduled or
-server-side manual KMA capture output returned by the dashboard query. The
-current-day solar panel
+rollover watch remains the lowest-latency path. Initial load and `Sync now`
+remain observation-only and do not invoke the KMA forecast collector. The
+separate `Collect KMA now` button calls the bounded public queue mutation; its
+internal worker and collector-state updates flow back through the reactive
+dashboard query. The current-day solar panel
 provides a separate `Refresh GK2A` button that calls
 `seoulGk2aCollector:requestSolarHeatingRefresh` during the same daytime window
 and shows its own queued/in-flight/final state. The server enforces a ten-minute
@@ -527,10 +556,13 @@ trigger recomputation.
   explicit on-demand run inside the same window. A separate database-only
   cleanup runs every 30 minutes; it does not contact NMSC.
 - `seoul_kma_amo_airport_forecast_every_30_min` runs at minutes `:05` and
-  `:35` and invokes
-  `seoulKmaForecast:collectScheduledAirportForecast`. The internal-only manual
-  equivalent is `seoulKmaForecast:collectAirportForecast`; both parse the same
-  server-rendered RKSI page and store immutable attempts through
+  `:35` and invokes the internal
+  `seoulKmaForecast:queueScheduledAirportForecastRefresh`. The public
+  `seoulKmaForecast:requestAirportForecastRefresh` mutation used by the button
+  enters the same queue. Both paths share the ten-minute interval and
+  run-owned lock, then schedule only
+  `seoulKmaForecast:collectQueuedAirportForecast`. The worker parses the
+  server-rendered RKSI page and stores immutable attempts through
   `seoulKmaForecast:storeForecastCapture`. The parser requires the page itself
   to display `RKSI` before an attempt can succeed. Successful KMA guidance is
   usable for at most six hours and must include both a daily maximum and
@@ -720,6 +752,18 @@ after approval is revoked.
 The table indexes `(stationIcao, capturedAt)` and
 `(stationIcao, status, capturedAt)`. Daily rows identify `short_term` or
 `midterm`; hourly timestamps store both UTC and Seoul-local representations.
+
+### `seoulKmaForecastCollectorStatus`
+
+One row per station serializes manual and scheduled KMA forecast requests. It
+records the latest queue time, in-flight start, manual/scheduled mode, run ID,
+completion/success times, final status/error, and successful daily/hourly row
+counts. The `(stationIcao)` index lets the public queue mutation apply its
+ten-minute cooldown and 15-minute stale-lock check atomically. Run-ID matching
+prevents an older or superseded worker from performing protected work or
+clearing a newer worker's lock.
+This operational metadata is kept separate from immutable provider captures
+and is hidden by the KMA dashboard boundary while approval is absent.
 
 ### `seoulForecastCaptures`
 
