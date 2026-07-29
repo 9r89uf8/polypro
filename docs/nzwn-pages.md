@@ -55,8 +55,8 @@ Behavior details:
   page when the scheduled station collector accepts a newer source timestamp.
 - Manual refresh is available only for today, only when the approval flag is
   enabled, and only inside the `09:00`-`19:00` Wellington collection window.
-  It polls both the approval-gated station current and the official METAR
-  reference.
+  It polls only the approval-gated station current. The METAR comparison is
+  read-only on this page and never triggers a PreFlight request.
 - The page reads its near-live state through
   `nzwnWeather:getLiveTemperature`; it does not make a MetService request
   merely because a browser opened the route.

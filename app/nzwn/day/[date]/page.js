@@ -426,7 +426,6 @@ export default function NzwnDayPage() {
   const pollLiveTemperature = useAction(
     "nzwnWeather:pollMetServiceCurrentConditions",
   );
-  const pollOfficialLatest = useAction("preflight:pollLatestStationMetar");
 
   const approval = liveData?.approval ?? null;
   const approved = approval?.approved === true;
@@ -505,12 +504,9 @@ export default function NzwnDayPage() {
     }
     setIsRefreshing(true);
     setSyncMessage("");
-    const results = await Promise.allSettled([
+    const [liveResult] = await Promise.allSettled([
       pollLiveTemperature({ stationIcao: STATION_ICAO }),
-      pollOfficialLatest({ stationIcao: STATION_ICAO }),
     ]);
-    const liveResult = results[0];
-    const officialResult = results[1];
     const messages = [];
 
     if (liveResult.status === "fulfilled") {
@@ -533,11 +529,6 @@ export default function NzwnDayPage() {
       messages.push("Live temperature refresh failed.");
     }
 
-    messages.push(
-      officialResult.status === "fulfilled"
-        ? "METAR reference refreshed."
-        : "METAR reference refresh failed.",
-    );
     setSyncMessage(messages.join(" "));
     setIsRefreshing(false);
   }
