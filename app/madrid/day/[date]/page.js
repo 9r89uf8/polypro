@@ -6,39 +6,36 @@ import {
   LinearScale,
   LineElement,
   PointElement,
-  Title,
   Tooltip,
 } from "chart.js";
+import annotationPlugin from "chartjs-plugin-annotation";
+import { useAction, useQuery } from "convex/react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
-import { useAction, useQuery } from "convex/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, Title);
+ChartJS.register(
+  LinearScale,
+  PointElement,
+  LineElement,
+  Tooltip,
+  Legend,
+  annotationPlugin,
+);
 
 const STATION_ICAO = "LEMD";
-const STATION_NAME = "Adolfo Suarez Madrid-Barajas";
+const STATION_NAME = "Adolfo Suárez Madrid–Barajas";
 const MADRID_TIMEZONE = "Europe/Madrid";
-const CHICAGO_TIMEZONE = "America/Chicago";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const CLEAR_SKY_TOKENS = new Set(["SKC", "CLR", "NSC", "NCD", "CAVOK"]);
-const CLOUD_COVER_PRIORITY = {
-  FEW: 1,
-  SCT: 2,
-  BKN: 3,
-  OVC: 4,
-  VV: 5,
-};
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
 function getDateParts(formatter, date) {
-  const parts = formatter.formatToParts(date);
   const values = {};
-  for (const part of parts) {
+  for (const part of formatter.formatToParts(date)) {
     if (part.type !== "literal") {
       values[part.type] = part.value;
     }
@@ -47,17 +44,19 @@ function getDateParts(formatter, date) {
 }
 
 function madridTodayKey() {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: MADRID_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const parts = getDateParts(formatter, new Date());
+  const parts = getDateParts(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: MADRID_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }),
+    new Date(),
+  );
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function parseDateKeyParts(dateKey) {
+function parseDateKey(dateKey) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey || "");
   if (!match) {
     return null;
@@ -69,796 +68,811 @@ function parseDateKeyParts(dateKey) {
   };
 }
 
-function pad2(value) {
-  return String(value).padStart(2, "0");
+function formatDateKey(date) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-function formatDateKeyFromUtcDate(date) {
-  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(
-    date.getUTCDate(),
-  )}`;
-}
-
-function shiftDateKey(dateKey, deltaDays) {
-  const parts = parseDateKeyParts(dateKey);
+function shiftDateKey(dateKey, dayDelta) {
+  const parts = parseDateKey(dateKey);
   if (!parts) {
-    return null;
+    return dateKey;
   }
-  const utcMs = Date.UTC(parts.year, parts.month - 1, parts.day);
-  return formatDateKeyFromUtcDate(new Date(utcMs + deltaDays * DAY_MS));
+  return formatDateKey(
+    new Date(Date.UTC(parts.year, parts.month - 1, parts.day) + dayDelta * DAY_MS),
+  );
 }
 
-function buildPreviousDateKeys(dateKey, count) {
-  const keys = [];
-  for (let offset = 1; offset <= count; offset += 1) {
-    const previousDate = shiftDateKey(dateKey, -offset);
-    if (previousDate) {
-      keys.push(previousDate);
-    }
+function formatDateHeading(dateKey) {
+  const parts = parseDateKey(dateKey);
+  if (!parts) {
+    return dateKey;
   }
-  return keys;
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12)));
 }
 
-function parseMinute(tsLocal) {
-  const match = /(\d{2}):(\d{2})(?::\d{2})?$/.exec(tsLocal || "");
+function parseLocalMinute(localDateTime) {
+  const match = /(?:^|\s)(\d{2}):(\d{2})(?::\d{2})?$/.exec(
+    String(localDateTime ?? ""),
+  );
   if (!match) {
     return null;
   }
   const hour = Number(match[1]);
   const minute = Number(match[2]);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+  if (
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
     return null;
   }
   return hour * 60 + minute;
 }
 
-function minuteLabel(totalMinutes) {
+function minuteLabel(totalMinutes, includeMinutes = true) {
   if (!Number.isFinite(totalMinutes)) {
-    return "";
+    return "—";
   }
-  const normalized = Math.max(0, Math.min(1439, Math.round(totalMinutes)));
+  const normalized = ((Math.round(totalMinutes) % 1440) + 1440) % 1440;
   const hour24 = Math.floor(normalized / 60);
   const minute = normalized % 60;
   const period = hour24 >= 12 ? "PM" : "AM";
   const hour12 = hour24 % 12 || 12;
+  if (!includeMinutes && minute === 0) {
+    return `${hour12} ${period}`;
+  }
   return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
-function formatTemp(value, unit) {
-  if (value === undefined || value === null) {
-    return "—";
-  }
-  return `${value.toFixed(1)}°${unit}`;
+function formatLocalTime(localDateTime) {
+  const minute = parseLocalMinute(localDateTime);
+  return minute === null ? "—" : minuteLabel(minute);
 }
 
-function formatStoredLocalDateTime(tsLocal) {
-  const match =
-    /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(tsLocal || "");
-  if (!match) {
-    return tsLocal || "—";
-  }
-  const hour24 = Number(match[2]);
-  const minute = Number(match[3]);
-  if (!Number.isFinite(hour24) || !Number.isFinite(minute)) {
-    return tsLocal;
-  }
-  const period = hour24 >= 12 ? "PM" : "AM";
-  const hour12 = hour24 % 12 || 12;
-  return `${match[1]} ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
-}
-
-function formatMadridDateTimeSeconds(epochMs) {
+function formatMadridTime(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
-  const formatter = new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("en-US", {
     timeZone: MADRID_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-    second: "2-digit",
     hour12: true,
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
+  }).format(new Date(epochMs));
 }
 
-function formatChicagoDateTimeSeconds(epochMs) {
+function formatMadridStoredDateTime(epochMs) {
   if (!Number.isFinite(epochMs)) {
-    return "—";
-  }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: CHICAGO_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""}`.trim();
-}
-
-function formatMadridClock(epochMs) {
-  if (!Number.isFinite(epochMs)) {
-    return "—";
-  }
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: MADRID_TIMEZONE,
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-    timeZoneName: "short",
-  });
-  const parts = getDateParts(formatter, new Date(epochMs));
-  return `${parts.weekday} ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod?.toUpperCase() ?? ""} ${parts.timeZoneName ?? ""}`.trim();
-}
-
-function formatRaceWinner(winner) {
-  if (winner === "aemet") {
-    return "AEMET";
-  }
-  if (winner === "tgftp") {
-    return "NOAA tgftp";
-  }
-  if (winner === "tie") {
-    return "Tie";
-  }
-  return "Pending";
-}
-
-function formatLeadMs(leadMs) {
-  if (!Number.isFinite(leadMs)) {
-    return "—";
-  }
-  if (leadMs > 0 && leadMs < 1000) {
-    return "<1s";
-  }
-  if (leadMs < 120000) {
-    return `${(leadMs / 1000).toFixed(1)}s`;
-  }
-  return `${(leadMs / 60000).toFixed(1)} min`;
-}
-
-function compareCloudLayers(a, b) {
-  const priorityDelta =
-    (CLOUD_COVER_PRIORITY[b.coverage] ?? 0) - (CLOUD_COVER_PRIORITY[a.coverage] ?? 0);
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-
-  const aBase = Number.isFinite(a.baseFt) ? a.baseFt : Number.POSITIVE_INFINITY;
-  const bBase = Number.isFinite(b.baseFt) ? b.baseFt : Number.POSITIVE_INFINITY;
-  return aBase - bBase;
-}
-
-function formatCloudBaseFeet(baseFt) {
-  if (!Number.isFinite(baseFt)) {
     return null;
   }
-  return `${baseFt.toLocaleString("en-US")} ft`;
+  const parts = getDateParts(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: MADRID_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }),
+    new Date(epochMs),
+  );
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
-function buildCloudVisualMeta({ fillClassName, coverLevel, coverLabel, baseFt }) {
-  let baseVisual = null;
-  if (Number.isFinite(baseFt)) {
-    if (baseFt <= 1000) {
-      baseVisual = {
-        tierIndex: 0,
-        label: "Low base",
-        className: "border-rose-200 bg-rose-50 text-rose-800",
-      };
-    } else if (baseFt <= 3000) {
-      baseVisual = {
-        tierIndex: 1,
-        label: "Mid base",
-        className: "border-amber-200 bg-amber-50 text-amber-900",
-      };
-    } else {
-      baseVisual = {
-        tierIndex: 2,
-        label: "Higher base",
-        className: "border-emerald-200 bg-emerald-50 text-emerald-800",
-      };
+function madridMinuteNow(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return null;
+  }
+  const parts = getDateParts(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: MADRID_TIMEZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }),
+    new Date(epochMs),
+  );
+  const hour = Number(parts.hour);
+  const minute = Number(parts.minute);
+  return Number.isFinite(hour) && Number.isFinite(minute)
+    ? hour * 60 + minute
+    : null;
+}
+
+function temperatureForUnit(row, unit) {
+  if (unit === "F") {
+    if (Number.isFinite(row?.tempF)) {
+      return row.tempF;
+    }
+    return Number.isFinite(row?.tempC) ? (row.tempC * 9) / 5 + 32 : null;
+  }
+  return Number.isFinite(row?.tempC) ? row.tempC : null;
+}
+
+function celsiusForUnit(tempC, unit) {
+  if (!Number.isFinite(tempC)) {
+    return null;
+  }
+  return unit === "F" ? (tempC * 9) / 5 + 32 : tempC;
+}
+
+function formatTemperature(value, unit) {
+  return Number.isFinite(value) ? `${value.toFixed(1)}°${unit}` : "—";
+}
+
+function formatObservationAge(observedAt, nowMs) {
+  if (!Number.isFinite(observedAt) || !Number.isFinite(nowMs)) {
+    return null;
+  }
+  const minutes = Math.max(0, Math.floor((nowMs - observedAt) / 60000));
+  if (minutes < 1) {
+    return "less than a minute ago";
+  }
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m ago` : `${hours}h ago`;
+}
+
+function latestByTimestamp(rows, timestampKey) {
+  let latest = null;
+  for (const row of rows) {
+    if (!Number.isFinite(row?.[timestampKey])) {
+      continue;
+    }
+    if (!latest || row[timestampKey] > latest[timestampKey]) {
+      latest = row;
     }
   }
-
-  return {
-    showVisuals: true,
-    fillClassName,
-    coverLevel,
-    coverLabel,
-    baseVisual,
-  };
+  return latest;
 }
 
-function parseMetarCloudToken(token) {
-  const normalized = String(token ?? "").toUpperCase().replace(/=+$/, "");
-  if (!normalized) {
+function parseMetarTemperature(rawMetar) {
+  if (typeof rawMetar !== "string") {
     return null;
   }
-  if (CLEAR_SKY_TOKENS.has(normalized)) {
-    return { kind: "clear" };
-  }
-
-  const match =
-    /^(FEW|SCT|BKN|OVC|VV)(\d{3}|\/\/\/)?(?:\/\/\/)?(?:[A-Z]{2,3})?$/.exec(
-      normalized,
-    );
+  const match = /\b(M?\d{2})\/(?:M?\d{2}|\/\/)\b/.exec(
+    rawMetar.toUpperCase(),
+  );
   if (!match) {
     return null;
   }
-
-  return {
-    kind: "layer",
-    coverage: match[1],
-    baseFt: match[2] && match[2] !== "///" ? Number(match[2]) * 100 : null,
-  };
+  const negative = match[1].startsWith("M");
+  const magnitude = Number(negative ? match[1].slice(1) : match[1]);
+  return Number.isFinite(magnitude) ? (negative ? -magnitude : magnitude) : null;
 }
 
-function summarizeMetarClouds(rawMetar) {
-  if (typeof rawMetar !== "string" || !rawMetar.trim()) {
-    return null;
-  }
-
-  const tokens = rawMetar
-    .toUpperCase()
-    .replace(/=/g, "")
-    .split(/\s+/)
-    .filter(Boolean);
-  const layers = [];
-  let sawClearToken = false;
-
-  for (const token of tokens) {
-    const parsed = parseMetarCloudToken(token);
-    if (!parsed) {
-      continue;
-    }
-    if (parsed.kind === "clear") {
-      sawClearToken = true;
-      continue;
-    }
-    layers.push(parsed);
-  }
-
-  if (!layers.length && sawClearToken) {
-    return {
-      badgeLabel: "Clear",
-      badgeClassName: "border-emerald-200 bg-emerald-50 text-emerald-800",
-      headline: "Open sky",
-      detail: "No significant cloud was reported in the latest official METAR.",
-      ...buildCloudVisualMeta({
-        fillClassName: "bg-emerald-400",
-        coverLevel: 0,
-        coverLabel: "Clear",
-        baseFt: null,
-      }),
-    };
-  }
-
-  if (!layers.length) {
-    return {
-      badgeLabel: "Unknown",
-      badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
-      headline: "Clouds not reported",
-      detail: "The latest official METAR did not include a cloud layer I can summarize.",
-      showVisuals: false,
-    };
-  }
-
-  const sortedLayers = [...layers].sort(compareCloudLayers);
-  const headlineLayer = sortedLayers[0];
-  const ceilingLayer =
-    sortedLayers.find((layer) => ["BKN", "OVC", "VV"].includes(layer.coverage)) ?? null;
-  const layerBaseLabel = formatCloudBaseFeet(headlineLayer.baseFt);
-  const ceilingBaseLabel = formatCloudBaseFeet(ceilingLayer?.baseFt);
-
-  switch (headlineLayer.coverage) {
-    case "FEW":
-      return {
-        badgeLabel: "Few Clouds",
-        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
-        headline: "Mostly open sky",
-        detail: layerBaseLabel
-          ? `Only a small amount of cloud was reported, based around ${layerBaseLabel} above the airport.`
-          : "Only a small amount of cloud was reported in the latest official METAR.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-sky-400",
-          coverLevel: 1,
-          coverLabel: "A little cloud",
-          baseFt: headlineLayer.baseFt,
-        }),
-      };
-    case "SCT":
-      return {
-        badgeLabel: "Partly Cloudy",
-        badgeClassName: "border-sky-200 bg-sky-50 text-sky-800",
-        headline: "Patches of cloud around the airport",
-        detail: layerBaseLabel
-          ? `Part of the sky is covered by cloud, with bases around ${layerBaseLabel} above the airport.`
-          : "Part of the sky is covered by cloud in the latest official METAR.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-sky-500",
-          coverLevel: 2,
-          coverLabel: "Partial cover",
-          baseFt: headlineLayer.baseFt,
-        }),
-      };
-    case "BKN":
-      return {
-        badgeLabel: "Mostly Cloudy",
-        badgeClassName: "border-amber-200 bg-amber-50 text-amber-900",
-        headline: "Clouds covering most of the sky",
-        detail: ceilingBaseLabel
-          ? `Most of the sky is under cloud. The main cloud deck starts around ${ceilingBaseLabel} above the airport.`
-          : "Most of the sky is under cloud. The METAR did not include a usable cloud-base height.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-amber-400",
-          coverLevel: 4,
-          coverLabel: "Mostly covered",
-          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
-        }),
-      };
-    case "OVC":
-      return {
-        badgeLabel: "Overcast",
-        badgeClassName: "border-slate-200 bg-slate-100 text-slate-800",
-        headline: "Gray sky overhead",
-        detail: ceilingBaseLabel
-          ? `The sky is fully covered by cloud. The cloud deck starts around ${ceilingBaseLabel} above the airport.`
-          : "The sky is fully covered by cloud. The METAR did not include a usable cloud-base height.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-slate-500",
-          coverLevel: 5,
-          coverLabel: "Full cover",
-          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
-        }),
-      };
-    case "VV":
-      return {
-        badgeLabel: "Obscured",
-        badgeClassName: "border-rose-200 bg-rose-50 text-rose-800",
-        headline: "Sky hidden by low cloud or fog",
-        detail: ceilingBaseLabel
-          ? `The sky is obscured. Vertical visibility is around ${ceilingBaseLabel} above the airport.`
-          : "The sky is obscured in the latest official METAR.",
-        ...buildCloudVisualMeta({
-          fillClassName: "bg-rose-400",
-          coverLevel: 5,
-          coverLabel: "Obscured",
-          baseFt: ceilingLayer?.baseFt ?? headlineLayer.baseFt,
-        }),
-      };
-    default:
-      return {
-        badgeLabel: "Unknown",
-        badgeClassName: "border-black/10 bg-black/[0.04] text-black/65",
-        headline: "Clouds not reported",
-        detail: "The latest official METAR did not include a cloud layer I can summarize.",
-        showVisuals: false,
-      };
-  }
+function getRaceFirstSeen(row) {
+  const seenTimes = [row?.aemetFirstSeenAt, row?.tgftpFirstSeenAt].filter(
+    Number.isFinite,
+  );
+  return seenTimes.length ? Math.min(...seenTimes) : null;
 }
 
-function selectLatestLiveCloudMetar(raceRows, latestRow, summary, isToday) {
-  if (isToday && typeof latestRow?.rawMetar === "string" && latestRow.rawMetar.trim()) {
-    return {
-      rawMetar: latestRow.rawMetar,
-      observedAtUtc: Number.isFinite(latestRow?.obsTimeUtc) ? latestRow.obsTimeUtc : null,
-      reportType: latestRow?.reportType ?? null,
-    };
+function getRaceSource(row) {
+  if (
+    Number.isFinite(row?.tgftpFirstSeenAt) &&
+    (!Number.isFinite(row?.aemetFirstSeenAt) ||
+      row.tgftpFirstSeenAt < row.aemetFirstSeenAt)
+  ) {
+    return "NOAA tgftp METAR";
   }
+  if (Number.isFinite(row?.aemetFirstSeenAt)) {
+    return "AEMET AMA METAR";
+  }
+  return "Official METAR";
+}
 
-  for (const row of raceRows) {
-    const rawMetar =
-      row?.rawMetar ?? row?.aemetRawMetar ?? row?.tgftpRawMetar ?? null;
-    if (typeof rawMetar === "string" && rawMetar.trim()) {
+function getRaceRawMetar(row) {
+  if (getRaceSource(row).startsWith("NOAA")) {
+    return row?.tgftpRawMetar ?? row?.rawMetar ?? row?.aemetRawMetar ?? null;
+  }
+  return row?.aemetRawMetar ?? row?.rawMetar ?? row?.tgftpRawMetar ?? null;
+}
+
+function buildRaceMetarRows(raceRows, date) {
+  return raceRows
+    .filter(
+      (row) =>
+        row?.reportDateLocal === date && Number.isFinite(row?.reportTsUtc),
+    )
+    .map((row) => {
+      const rawMetar = getRaceRawMetar(row);
+      const tempC = parseMetarTemperature(rawMetar);
+      if (!Number.isFinite(tempC)) {
+        return null;
+      }
       return {
+        obsTimeUtc: row.reportTsUtc,
+        obsTimeLocal: formatMadridStoredDateTime(row.reportTsUtc),
+        reportType: row.reportType ?? "METAR",
+        tempC,
+        tempF: (tempC * 9) / 5 + 32,
         rawMetar,
-        observedAtUtc: Number.isFinite(row?.reportTsUtc) ? row.reportTsUtc : null,
-        reportType: row?.reportType ?? null,
+        firstSeenAt: getRaceFirstSeen(row),
+        liveSource: getRaceSource(row),
+        distributionRace: true,
       };
+    })
+    .filter(Boolean);
+}
+
+function mergeMetarRows(storedRows, raceRows) {
+  const merged = new Map();
+  for (const row of storedRows) {
+    merged.set(row.obsTimeUtc, row);
+  }
+  for (const row of raceRows) {
+    const stored = merged.get(row.obsTimeUtc);
+    merged.set(row.obsTimeUtc, stored ? { ...row, ...stored } : row);
+  }
+  return [...merged.values()].sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
+}
+
+function buildFreshestAirportReading(metarRows, stationRows) {
+  const latestMetar = latestByTimestamp(metarRows, "obsTimeUtc");
+  const latestStation = latestByTimestamp(stationRows, "obsTimeUtc");
+  const candidates = [
+    latestMetar
+      ? {
+          kind: "metar",
+          source:
+            latestMetar.liveSource ??
+            `Official ${latestMetar.reportType ?? "METAR"}`,
+          cadence: latestMetar.distributionRace
+            ? "First available AEMET/NOAA report"
+            : "Normally every 30 minutes",
+          precision: "Whole-degree report",
+          priority: 2,
+          observedAt: latestMetar.obsTimeUtc,
+          observedAtLocal: latestMetar.obsTimeLocal,
+          receivedAt:
+            latestMetar.firstSeenAt ??
+            latestMetar.aemetFirstSeenAt ??
+            latestMetar.updatedAt,
+          tempC: latestMetar.tempC,
+          tempF: latestMetar.tempF,
+        }
+      : null,
+    latestStation
+      ? {
+          kind: "station",
+          source: "AEMET station 3129",
+          cadence: "Hourly airport observation",
+          precision: "0.1°C precision",
+          priority: 1,
+          observedAt: latestStation.obsTimeUtc,
+          observedAtLocal: latestStation.obsTimeLocal,
+          receivedAt: null,
+          tempC: latestStation.tempC,
+          tempF: latestStation.tempF,
+        }
+      : null,
+  ].filter(Boolean);
+
+  candidates.sort(
+    (a, b) =>
+      b.observedAt - a.observedAt ||
+      b.priority - a.priority,
+  );
+
+  return {
+    freshest: candidates[0] ?? null,
+    latestMetar,
+    latestStation,
+  };
+}
+
+function buildForecastPeak(rows) {
+  const usable = rows
+    .map((row) => ({
+      row,
+      minute: parseLocalMinute(row.forecastTimeLocal),
+      tempC: row.tempC,
+    }))
+    .filter(
+      (point) => point.minute !== null && Number.isFinite(point.tempC),
+    )
+    .sort((a, b) => a.minute - b.minute);
+
+  if (!usable.length) {
+    return null;
+  }
+
+  const maxTempC = Math.max(...usable.map((point) => point.tempC));
+  const peakPoints = usable.filter((point) => point.tempC === maxTempC);
+  const groups = [];
+
+  for (const point of peakPoints) {
+    const current = groups[groups.length - 1];
+    if (!current || point.minute - current.endMinute > 90) {
+      groups.push({
+        startMinute: point.minute,
+        endMinute: point.minute,
+        points: [point],
+      });
+    } else {
+      current.endMinute = point.minute;
+      current.points.push(point);
     }
   }
 
-  if (isToday && typeof summary?.latestRawMetar === "string" && summary.latestRawMetar.trim()) {
-    return {
-      rawMetar: summary.latestRawMetar,
-      observedAtUtc: Number.isFinite(summary?.latestObsTimeUtc)
-        ? summary.latestObsTimeUtc
-        : null,
-      reportType: summary?.latestReportType ?? null,
-    };
-  }
+  const peakTimeLabel = groups
+    .map((group) =>
+      group.startMinute === group.endMinute
+        ? minuteLabel(group.startMinute)
+        : `${minuteLabel(group.startMinute)}–${minuteLabel(group.endMinute)}`,
+    )
+    .join(" / ");
 
-  return null;
+  return {
+    maxTempC,
+    peakPoints,
+    groups,
+    peakTimeLabel,
+    capturedAt: Math.max(
+      ...usable
+        .map((point) => point.row.capturedAt)
+        .filter(Number.isFinite),
+      0,
+    ),
+  };
 }
 
-function formatLivePollMessage(result) {
-  if (!result?.ok) {
-    return "Latest official poll skipped.";
-  }
-
-  const firstSeenText = Number.isFinite(result.row?.aemetFirstSeenAt)
-    ? formatMadridDateTimeSeconds(result.row.aemetFirstSeenAt)
-    : null;
-  const lagText = Number.isFinite(result.availabilityLagMs)
-    ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
-    : null;
-
-  return `Latest official poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
-}
-
-function buildOfficialLineDataset(rows, unit) {
+function buildForecastDataset(rows, unit) {
   const points = rows
     .map((row) => {
-      const x = parseMinute(row.obsTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return {
-        x,
-        y,
-        reportType: row.reportType,
-      };
+      const x = parseLocalMinute(row.forecastTimeLocal);
+      const y = temperatureForUnit(row, unit);
+      return x === null || !Number.isFinite(y)
+        ? null
+        : {
+            x,
+            y,
+            kind: "forecast",
+            source: "AEMET hourly forecast",
+          };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
 
+  return points.length
+    ? {
+        label: "AEMET forecast",
+        data: points,
+        borderColor: "#f59e0b",
+        backgroundColor: "#f59e0b",
+        borderWidth: 3,
+        borderDash: [9, 6],
+        pointRadius: 2.5,
+        pointHoverRadius: 6,
+        pointHitRadius: 18,
+        pointStyle: "triangle",
+        tension: 0.32,
+        showLine: true,
+        order: 3,
+      }
+    : null;
+}
+
+function buildStationDataset(rows, unit) {
+  const points = rows
+    .map((row) => {
+      const x = parseLocalMinute(row.obsTimeLocal);
+      const y = temperatureForUnit(row, unit);
+      return x === null || !Number.isFinite(y)
+        ? null
+        : {
+            x,
+            y,
+            kind: "station",
+            source: "AEMET station 3129",
+          };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
+
+  return points.length
+    ? {
+        label: "Airport station 3129",
+        data: points,
+        borderColor: "#0f766e",
+        backgroundColor: "#0f766e",
+        borderWidth: 2.5,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        pointHitRadius: 18,
+        pointStyle: "rectRounded",
+        tension: 0.28,
+        showLine: true,
+        order: 2,
+      }
+    : null;
+}
+
+function buildMetarDataset(rows, unit) {
+  const points = rows
+    .map((row) => {
+      const x = parseLocalMinute(row.obsTimeLocal);
+      const y = temperatureForUnit(row, unit);
+      return x === null || !Number.isFinite(y)
+        ? null
+        : {
+            x,
+            y,
+            kind: "metar",
+            source:
+              row.liveSource ?? `Official ${row.reportType ?? "METAR"}`,
+            reportType: row.reportType,
+          };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
+
+  return points.length
+    ? {
+        label: "Actual METAR",
+        data: points,
+        borderColor: "#be123c",
+        backgroundColor: "#be123c",
+        borderWidth: 2,
+        pointRadius: points.map((point) =>
+          point.reportType === "SPECI" ? 6 : 4.5,
+        ),
+        pointHoverRadius: points.map((point) =>
+          point.reportType === "SPECI" ? 8 : 7,
+        ),
+        pointHitRadius: 18,
+        pointStyle: "circle",
+        tension: 0.18,
+        showLine: false,
+        order: 1,
+      }
+    : null;
+}
+
+function buildPeakDataset(peak, unit) {
+  if (!peak) {
+    return null;
+  }
+  const y = celsiusForUnit(peak.maxTempC, unit);
   return {
-    label: "Official AEMET",
-    data: points,
-    borderColor: "#b91c1c",
-    backgroundColor: "#b91c1c",
-    pointRadius: points.map((point) => (point.reportType === "SPECI" ? 4.5 : 2.5)),
-    pointHoverRadius: points.map((point) => (point.reportType === "SPECI" ? 6 : 4)),
-    tension: 0.2,
+    label: "Forecast peak",
+    data: peak.peakPoints.map((point) => ({
+      x: point.minute,
+      y,
+      kind: "peak",
+      source: "Forecast maximum",
+    })),
+    borderColor: "#7c2d12",
+    backgroundColor: "#fff7ed",
+    pointBorderColor: "#7c2d12",
+    pointBorderWidth: 3,
+    pointRadius: 8,
+    pointHoverRadius: 10,
+    pointHitRadius: 20,
+    pointStyle: "rectRot",
+    showLine: false,
+    order: 0,
   };
 }
 
-function buildAemetForecastDataset(forecastRows, unit) {
-  const points = forecastRows
-    .map((row) => {
-      const x = parseMinute(row.forecastTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return { x, y };
-    })
-    .filter(Boolean);
-
-  if (!points.length) {
-    return null;
-  }
-
-  return {
-    label: "AEMET Hourly Forecast",
-    data: points,
-    borderColor: "#f59e0b",
-    backgroundColor: "#f59e0b",
-    pointRadius: 3,
-    pointHoverRadius: 5,
-    pointHitRadius: 18,
-    pointStyle: "triangle",
-    pointBorderColor: "#b45309",
-    pointBorderWidth: 1.5,
-    borderWidth: 2,
-    borderDash: [6, 3],
-    tension: 0.22,
-    showLine: true,
-  };
-}
-
-function buildAemetStationObsDataset(obsRows, unit) {
-  const points = obsRows
-    .map((row) => {
-      const x = parseMinute(row.obsTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return { x, y };
-    })
-    .filter(Boolean);
-
-  if (!points.length) {
-    return null;
-  }
-
-  return {
-    label: "AEMET Station (0.1°C)",
-    data: points,
-    borderColor: "#16a34a",
-    backgroundColor: "#16a34a",
-    pointRadius: 3,
-    pointHoverRadius: 5,
-    pointHitRadius: 18,
-    pointStyle: "rect",
-    pointBorderColor: "#15803d",
-    pointBorderWidth: 1.5,
-    borderWidth: 2,
-    tension: 0.2,
-    showLine: true,
-  };
-}
-
-function buildSynopDataset(synopRows, unit) {
-  const points = synopRows
-    .map((row) => {
-      const x = parseMinute(row.obsTimeLocal);
-      if (x === null) {
-        return null;
-      }
-      const y = unit === "C" ? row.tempC : row.tempF;
-      if (!Number.isFinite(y)) {
-        return null;
-      }
-      return { x, y };
-    })
-    .filter(Boolean);
-
-  if (!points.length) {
-    return null;
-  }
-
-  return {
-    label: "SYNOP (0.1°C)",
-    data: points,
-    borderColor: "#7c3aed",
-    backgroundColor: "#7c3aed",
-    pointRadius: 4,
-    pointHoverRadius: 6,
-    pointHitRadius: 18,
-    pointStyle: "crossRot",
-    pointBorderColor: "#6d28d9",
-    pointBorderWidth: 2,
-    borderWidth: 2,
-    tension: 0.2,
-    showLine: true,
-  };
+function StatusDot({ tone }) {
+  const toneClass =
+    tone === "live"
+      ? "bg-emerald-400 shadow-[0_0_0_5px_rgba(52,211,153,0.16)]"
+      : tone === "stale"
+        ? "bg-amber-400 shadow-[0_0_0_5px_rgba(251,191,36,0.16)]"
+        : "bg-slate-400";
+  return <span className={`h-2.5 w-2.5 rounded-full ${toneClass}`} />;
 }
 
 export default function MadridDayPage() {
   const params = useParams();
   const router = useRouter();
   const date = String(params?.date ?? "");
-  const [displayUnit, setDisplayUnit] = useState("C");
-  const [inputDate, setInputDate] = useState(date);
-  const [liveMessage, setLiveMessage] = useState("");
+  const [unit, setUnit] = useState("C");
+  const [dateInput, setDateInput] = useState(date);
+  const [nowMs, setNowMs] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [clockNowMs, setClockNowMs] = useState(null);
-  const inFlightRef = useRef(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const autoRefreshDateRef = useRef(null);
 
   const isDateValid = isValidDate(date);
-  const madridTodayDate = madridTodayKey();
-  const isToday = isDateValid && date === madridTodayDate;
-  const quickPreviousDates = useMemo(() => buildPreviousDateKeys(date, 2), [date]);
+  const today = madridTodayKey();
+  const isToday = isDateValid && date === today;
 
-  const pollLatest = useAction("madrid:pollLatestStationMetar");
-  const pollStationObs = useAction("madrid:pollAemetStationObservations");
-  const pollSynop = useAction("madrid:pollSynopObservations");
+  const pollLatestMetar = useAction("madrid:pollLatestStationMetar");
+  const pollLatestNoaaMetar = useAction("madrid:pollLatestNoaaPublishRace");
+  const pollStationObservations = useAction(
+    "madrid:pollAemetStationObservations",
+  );
+  const pollHourlyForecast = useAction("madrid:pollAemetHourlyForecast");
 
   const dayData = useQuery(
     "madrid:getDayStationRows",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
-      : "skip",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
-  const aemetForecastData = useQuery(
+  const forecastData = useQuery(
     "madrid:getAemetHourlyForecasts",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
-      : "skip",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
-  const aemetStationObsData = useQuery(
+  const stationData = useQuery(
     "madrid:getAemetStationObservations",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
+  );
+  const raceData = useQuery(
+    "madrid:getRecentPublishRaceReports",
     isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
+      ? { stationIcao: STATION_ICAO, limit: 48, routineOnly: false }
       : "skip",
   );
-  const synopData = useQuery(
-    "madrid:getSynopObservations",
-    isDateValid
-      ? {
-          stationIcao: STATION_ICAO,
-          date,
-        }
-      : "skip",
-  );
-  const raceData = useQuery("madrid:getRecentPublishRaceReports", {
-    stationIcao: STATION_ICAO,
-    limit: 12,
-    routineOnly: true,
-  });
 
-  const rows = dayData?.rows ?? [];
-  const summary = dayData?.summary ?? null;
-  const aemetForecastRows = aemetForecastData?.rows ?? [];
-  const aemetStationObsRows = aemetStationObsData?.rows ?? [];
-  const synopRows = synopData?.rows ?? [];
+  const storedMetarRows = dayData?.rows ?? [];
+  const forecastRows = forecastData?.rows ?? [];
+  const stationRows = stationData?.rows ?? [];
   const raceRows = raceData?.rows ?? [];
-  const latestRow = rows.length ? rows[rows.length - 1] : null;
-  const latestTemp = displayUnit === "C" ? summary?.latestTempC : summary?.latestTempF;
-  const maxTemp = displayUnit === "C" ? summary?.maxTempC : summary?.maxTempF;
-  const minTemp = displayUnit === "C" ? summary?.minTempC : summary?.minTempF;
-  const latestLiveCloudMetar = useMemo(
-    () => selectLatestLiveCloudMetar(raceRows, latestRow, summary, isToday),
-    [raceRows, latestRow, summary, isToday],
+  const raceMetarRows = useMemo(
+    () => buildRaceMetarRows(raceRows, date),
+    [date, raceRows],
   );
-  const liveCloudSummary = useMemo(
-    () => summarizeMetarClouds(latestLiveCloudMetar?.rawMetar),
-    [latestLiveCloudMetar],
+  const metarRows = useMemo(
+    () => mergeMetarRows(storedMetarRows, raceMetarRows),
+    [raceMetarRows, storedMetarRows],
   );
+  const isLoading =
+    dayData === undefined ||
+    forecastData === undefined ||
+    stationData === undefined ||
+    raceData === undefined;
+
+  const forecastPeak = useMemo(
+    () => buildForecastPeak(forecastRows),
+    [forecastRows],
+  );
+  const airportReading = useMemo(
+    () => buildFreshestAirportReading(metarRows, stationRows),
+    [metarRows, stationRows],
+  );
+
+  const freshest = airportReading.freshest;
+  const freshestTemperature = temperatureForUnit(freshest, unit);
+  const latestMetarTemperature = temperatureForUnit(
+    airportReading.latestMetar,
+    unit,
+  );
+  const forecastMax = celsiusForUnit(forecastPeak?.maxTempC, unit);
+  const observationAge = formatObservationAge(freshest?.observedAt, nowMs);
+  const isFresh =
+    isToday &&
+    Number.isFinite(nowMs) &&
+    Number.isFinite(freshest?.observedAt) &&
+    nowMs - freshest.observedAt <= 75 * 60 * 1000;
+  const readingTone = isFresh ? "live" : freshest ? "stale" : "empty";
 
   useEffect(() => {
-    setInputDate(date);
+    setDateInput(date);
   }, [date]);
 
   useEffect(() => {
-    setClockNowMs(Date.now());
-    const intervalId = window.setInterval(() => {
-      setClockNowMs(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    setNowMs(Date.now());
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 30000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
-    if (!isDateValid) {
-      setLiveMessage("");
+    if (!isToday || autoRefreshDateRef.current === date) {
       return;
     }
-    if (!isToday) {
-      setLiveMessage(
-        "Historical LEMD dates depend on previously captured live AEMET rows. No date-bounded official history backfill is wired yet.",
-      );
-      return;
-    }
-
+    autoRefreshDateRef.current = date;
     let cancelled = false;
 
-    async function bootstrap() {
-      if (inFlightRef.current) {
+    async function refreshOnOpen() {
+      setSyncMessage("Checking the latest airport readings and forecast…");
+      const results = await Promise.allSettled([
+        pollLatestMetar({ stationIcao: STATION_ICAO }),
+        pollLatestNoaaMetar({ stationIcao: STATION_ICAO }),
+        pollStationObservations({ stationIcao: STATION_ICAO }),
+        pollHourlyForecast({ stationIcao: STATION_ICAO }),
+      ]);
+      if (cancelled) {
         return;
       }
-      inFlightRef.current = true;
-      try {
-        const [result] = await Promise.all([
-          pollLatest({ stationIcao: STATION_ICAO }),
-          pollStationObs({ stationIcao: STATION_ICAO }).catch(() => {}),
-          pollSynop({ stationIcao: STATION_ICAO }).catch(() => {}),
-        ]);
-        if (!cancelled) {
-          setLiveMessage(formatLivePollMessage(result));
-        }
-      } catch (error) {
-        console.error(error);
-        if (!cancelled) {
-          const message = error instanceof Error ? error.message : String(error);
-          setLiveMessage(`LEMD sync failed: ${message}`);
-        }
-      } finally {
-        inFlightRef.current = false;
-      }
+      const failedCount = results.filter(
+        (result) =>
+          result.status === "rejected" ||
+          result.value?.status === "error" ||
+          result.value?.ok === false,
+      ).length;
+      setSyncMessage(
+        failedCount === results.length
+          ? "Live checks failed; showing the latest stored readings."
+          : failedCount
+            ? "Latest stored data is shown; one source could not be refreshed."
+            : `Sources checked at ${formatMadridTime(Date.now())} Madrid time.`,
+      );
     }
 
-    bootstrap();
-
+    refreshOnOpen();
     return () => {
       cancelled = true;
     };
-  }, [date, isDateValid, isToday, pollLatest, pollStationObs, pollSynop]);
+  }, [
+    date,
+    isToday,
+    pollHourlyForecast,
+    pollLatestMetar,
+    pollLatestNoaaMetar,
+    pollStationObservations,
+  ]);
 
-  async function handleRefreshNow() {
-    if (!isDateValid || !isToday || inFlightRef.current) {
+  async function handleRefresh() {
+    if (!isToday || isRefreshing) {
       return;
     }
-
     setIsRefreshing(true);
-    inFlightRef.current = true;
+    setSyncMessage("Refreshing airport readings and forecast…");
     try {
-      const [result] = await Promise.all([
-        pollLatest({ stationIcao: STATION_ICAO }),
-        pollStationObs({ stationIcao: STATION_ICAO }).catch(() => {}),
-        pollSynop({ stationIcao: STATION_ICAO }).catch(() => {}),
+      const results = await Promise.allSettled([
+        pollLatestMetar({ stationIcao: STATION_ICAO }),
+        pollLatestNoaaMetar({ stationIcao: STATION_ICAO }),
+        pollStationObservations({ stationIcao: STATION_ICAO }),
+        pollHourlyForecast({ stationIcao: STATION_ICAO }),
       ]);
-      setLiveMessage(formatLivePollMessage(result));
-    } catch (error) {
-      console.error(error);
-      const message = error instanceof Error ? error.message : String(error);
-      setLiveMessage(`Manual refresh failed: ${message}`);
+      const failedCount = results.filter(
+        (result) =>
+          result.status === "rejected" ||
+          result.value?.status === "error" ||
+          result.value?.ok === false,
+      ).length;
+      setSyncMessage(
+        failedCount === results.length
+          ? "Refresh failed; the latest stored readings remain on screen."
+          : failedCount
+            ? "Refresh completed, but one source was unavailable."
+            : `Updated at ${formatMadridTime(Date.now())} Madrid time.`,
+      );
     } finally {
-      inFlightRef.current = false;
       setIsRefreshing(false);
     }
   }
 
-  function handleGoToDate(event) {
+  function handleDateSubmit(event) {
     event.preventDefault();
-    if (!isValidDate(inputDate)) {
-      return;
+    if (isValidDate(dateInput)) {
+      router.push(`/madrid/day/${dateInput}`);
     }
-    router.push(`/madrid/day/${inputDate}`);
   }
 
-  const chartData = useMemo(
-    () => {
-      const datasets = [];
-      if (rows.length) {
-        datasets.push(buildOfficialLineDataset(rows, displayUnit));
-      }
-      const stationDs = buildAemetStationObsDataset(aemetStationObsRows, displayUnit);
-      if (stationDs) {
-        datasets.push(stationDs);
-      }
-      const synopDs = buildSynopDataset(synopRows, displayUnit);
-      if (synopDs) {
-        datasets.push(synopDs);
-      }
-      const fcDs = buildAemetForecastDataset(aemetForecastRows, displayUnit);
-      if (fcDs) {
-        datasets.push(fcDs);
-      }
-      return { datasets };
-    },
-    [rows, displayUnit, aemetStationObsRows, synopRows, aemetForecastRows],
-  );
+  const chartData = useMemo(() => {
+    const datasets = [
+      buildForecastDataset(forecastRows, unit),
+      buildStationDataset(stationRows, unit),
+      buildMetarDataset(metarRows, unit),
+      buildPeakDataset(forecastPeak, unit),
+    ].filter(Boolean);
+    return { datasets };
+  }, [forecastPeak, forecastRows, metarRows, stationRows, unit]);
 
-  const chartOptions = useMemo(
-    () => ({
+  const chartOptions = useMemo(() => {
+    const annotations = {};
+    const maxValue = celsiusForUnit(forecastPeak?.maxTempC, unit);
+
+    if (Number.isFinite(maxValue)) {
+      annotations.forecastMaximum = {
+        type: "line",
+        yMin: maxValue,
+        yMax: maxValue,
+        borderColor: "rgba(180, 83, 9, 0.7)",
+        borderDash: [5, 5],
+        borderWidth: 1.5,
+        label: {
+          display: true,
+          content: `Forecast max ${formatTemperature(maxValue, unit)}`,
+          position: "end",
+          backgroundColor: "#7c2d12",
+          color: "#fff7ed",
+          font: { size: 11, weight: "600" },
+          padding: { x: 8, y: 5 },
+          borderRadius: 8,
+        },
+      };
+
+      forecastPeak.groups.forEach((group, index) => {
+        annotations[`peakWindow${index}`] = {
+          type: "box",
+          xMin: Math.max(0, group.startMinute - 24),
+          xMax: Math.min(1440, group.endMinute + 24),
+          backgroundColor: "rgba(245, 158, 11, 0.08)",
+          borderColor: "rgba(245, 158, 11, 0.22)",
+          borderWidth: 1,
+        };
+      });
+    }
+
+    const nowMinute = isToday ? madridMinuteNow(nowMs) : null;
+    if (Number.isFinite(nowMinute)) {
+      annotations.now = {
+        type: "line",
+        xMin: nowMinute,
+        xMax: nowMinute,
+        borderColor: "rgba(15, 23, 42, 0.5)",
+        borderWidth: 1.5,
+        label: {
+          display: true,
+          content: "NOW",
+          position: "start",
+          backgroundColor: "#0f172a",
+          color: "#ffffff",
+          font: { size: 10, weight: "700" },
+          padding: { x: 6, y: 4 },
+          borderRadius: 999,
+        },
+      };
+    }
+
+    return {
       responsive: true,
       maintainAspectRatio: false,
       parsing: false,
+      normalized: true,
       interaction: {
         mode: "nearest",
         axis: "x",
         intersect: false,
       },
+      layout: {
+        padding: { top: 18, right: 8 },
+      },
       plugins: {
-        legend: { position: "top" },
+        annotation: { annotations },
+        legend: {
+          position: "top",
+          align: "start",
+          labels: {
+            color: "#334155",
+            usePointStyle: true,
+            pointStyleWidth: 12,
+            boxWidth: 10,
+            boxHeight: 10,
+            padding: 20,
+            font: { size: 12, weight: "600" },
+            filter(item) {
+              return item.text !== "Forecast peak";
+            },
+          },
+        },
         tooltip: {
-          padding: 10,
-          titleFont: { size: 13 },
-          bodyFont: { size: 12 },
+          backgroundColor: "#0f172a",
+          titleColor: "#f8fafc",
+          bodyColor: "#e2e8f0",
+          padding: 12,
+          cornerRadius: 12,
+          displayColors: true,
           callbacks: {
             title(items) {
-              if (!items.length) {
-                return "";
-              }
-              return `Local ${minuteLabel(items[0].parsed.x)}`;
+              return items.length
+                ? `${minuteLabel(items[0].parsed.x)} Madrid`
+                : "";
             },
             label(item) {
-              const reportType = item.raw?.reportType ? `${item.raw.reportType} ` : "";
-              return `${reportType}${item.parsed.y.toFixed(1)}°${displayUnit}`;
+              const source = item.raw?.source ?? item.dataset.label;
+              return `${source}: ${formatTemperature(item.parsed.y, unit)}`;
             },
           },
         },
@@ -867,518 +881,347 @@ export default function MadridDayPage() {
         x: {
           type: "linear",
           min: 0,
-          max: 1439,
-          title: { display: true, text: "Local Time (Europe/Madrid)" },
+          max: 1440,
+          border: { display: false },
+          grid: {
+            color: "rgba(100, 116, 139, 0.12)",
+            drawTicks: false,
+          },
           ticks: {
-            stepSize: 60,
+            stepSize: 180,
+            color: "#64748b",
+            padding: 10,
+            maxRotation: 0,
             callback(value) {
-              return minuteLabel(Number(value));
+              return minuteLabel(Number(value), false);
             },
+          },
+          title: {
+            display: true,
+            text: "Madrid local time",
+            color: "#64748b",
+            padding: { top: 12 },
+            font: { size: 12, weight: "600" },
           },
         },
         y: {
-          title: { display: true, text: `Temperature (°${displayUnit})` },
+          border: { display: false },
+          grace: "12%",
+          grid: {
+            color: "rgba(100, 116, 139, 0.12)",
+            drawTicks: false,
+          },
+          ticks: {
+            color: "#64748b",
+            padding: 10,
+            callback(value) {
+              return `${Number(value).toFixed(0)}°`;
+            },
+          },
+          title: {
+            display: true,
+            text: `Temperature (°${unit})`,
+            color: "#64748b",
+            padding: { bottom: 10 },
+            font: { size: 12, weight: "600" },
+          },
         },
       },
-    }),
-    [displayUnit],
-  );
+    };
+  }, [forecastPeak, isToday, nowMs, unit]);
 
   if (!isDateValid) {
     return (
-      <main className="min-h-screen px-4 py-8 md:px-8">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-red-200 bg-white p-6">
-          <h1 className="text-2xl font-semibold text-red-800">Invalid Madrid date</h1>
-          <p className="mt-2 text-sm text-red-700">
-            Use a `YYYY-MM-DD` date in the route.
+      <main className="min-h-screen px-4 py-10">
+        <div className="mx-auto max-w-xl rounded-[2rem] border border-rose-200 bg-white p-8 shadow-xl shadow-rose-950/5">
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-rose-700">
+            Madrid · LEMD
           </p>
-          <div className="mt-4">
-            <Link
-              href="/madrid/today"
-              className="inline-flex rounded-full border border-red-300 px-4 py-2 text-sm font-semibold text-red-800"
-            >
-              Open Madrid today
-            </Link>
-          </div>
+          <h1 className="mt-3 text-3xl font-semibold text-slate-950">
+            Invalid date
+          </h1>
+          <p className="mt-3 text-sm leading-6 text-slate-600">
+            Use a YYYY-MM-DD date in the route.
+          </p>
+          <Link
+            href="/madrid/today"
+            className="mt-6 inline-flex rounded-full bg-slate-950 px-5 py-2.5 text-sm font-bold text-white"
+          >
+            Open Madrid today
+          </Link>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen px-4 py-8 md:px-8">
-      <div className="mx-auto max-w-6xl space-y-6">
-        <header className="rounded-3xl border border-line/80 bg-panel/90 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.08)]">
-          <p className="inline-flex rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold tracking-[0.18em] text-accent">
-            STATION {STATION_ICAO}
-          </p>
-          <h1 className="mt-3 text-2xl font-semibold text-foreground">
-            {STATION_NAME} Official METAR Day Chart
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-black/65">
-            Official LEMD METAR and SPECI from AEMET&apos;s authenticated AMA
-            portal, stored live and compared against NOAA `tgftp` in a
-            publish-race table.
-          </p>
+    <main className="min-h-screen px-3 py-4 sm:px-6 sm:py-7 lg:px-8">
+      <div className="mx-auto max-w-[1440px] space-y-5">
+        <header className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-[#102c33] px-5 py-6 text-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] sm:px-8 sm:py-8">
+          <div className="pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full bg-amber-300/15 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-32 left-1/3 h-72 w-72 rounded-full bg-emerald-300/10 blur-3xl" />
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Link
-              href="/"
-              className="inline-flex rounded-full border border-black/20 px-4 py-2 text-sm font-semibold text-black hover:border-black"
-            >
-              Home
-            </Link>
-            <Link
-              href="/madrid/today"
-              className="inline-flex rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-800 hover:border-rose-400"
-            >
-              Current Date {madridTodayDate}
-            </Link>
-            {quickPreviousDates.map((previousDate) => (
-              <Link
-                key={previousDate}
-                href={`/madrid/day/${previousDate}`}
-                className="inline-flex rounded-full border border-black/15 bg-white/70 px-4 py-2 text-sm font-semibold text-black hover:border-black"
-              >
-                {previousDate}
-              </Link>
-            ))}
-          </div>
-
-          <form
-            onSubmit={handleGoToDate}
-            className="mt-4 flex flex-wrap items-center gap-3"
-          >
-            <label className="text-sm font-medium text-black/70" htmlFor="madrid-day-picker">
-              Pick Date
-            </label>
-            <input
-              id="madrid-day-picker"
-              type="date"
-              value={inputDate}
-              onChange={(event) => setInputDate(event.target.value)}
-              className="rounded-2xl border border-black/15 bg-white px-3 py-2 text-sm text-black outline-none focus:border-black"
-            />
-            <button
-              type="submit"
-              className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent"
-            >
-              Go
-            </button>
-          </form>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-full border border-black/10 bg-white/70 p-1">
-              {["C", "F"].map((unit) => (
-                <button
-                  key={unit}
-                  type="button"
-                  onClick={() => setDisplayUnit(unit)}
-                  className={`rounded-full px-3 py-1 text-sm font-semibold ${
-                    displayUnit === unit
-                      ? "bg-black text-white"
-                      : "text-black/70 hover:text-black"
-                  }`}
+          <div className="relative flex flex-col gap-7 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href="/"
+                  className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-white/75 transition hover:bg-white/10 hover:text-white"
                 >
-                  °{unit}
-                </button>
-              ))}
+                  Home
+                </Link>
+                <span className="rounded-full border border-emerald-200/20 bg-emerald-200/10 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-emerald-100">
+                  {STATION_ICAO}
+                </span>
+                {isToday ? (
+                  <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-emerald-100">
+                    <StatusDot tone="live" />
+                    Today
+                  </span>
+                ) : null}
+              </div>
+
+              <p className="mt-6 text-sm font-semibold text-emerald-100/70">
+                {STATION_NAME}
+              </p>
+              <h1 className="mt-1 text-3xl font-semibold tracking-[-0.035em] sm:text-5xl">
+                {formatDateHeading(date)}
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-white/65 sm:text-base">
+                Airport temperature outlook with the hourly AEMET forecast,
+                the precise station 3129 observations, and official METAR
+                actuals on one Madrid-time timeline.
+              </p>
             </div>
-            <button
-              type="button"
-              onClick={handleRefreshNow}
-              disabled={isRefreshing || !isToday}
-              className="rounded-full border border-black bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isRefreshing ? "Refreshing..." : "Refresh Current Data"}
-            </button>
-            {isToday ? (
-              <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-emerald-800">
-                Live official ingest enabled
-              </span>
-            ) : (
-              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold tracking-[0.14em] text-amber-900">
-                Historical capture only
-              </span>
-            )}
-          </div>
 
-          <div className="mt-4 inline-flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-sky-950">
-            <span className="font-semibold uppercase tracking-[0.16em] text-sky-800">
-              Madrid Time
-            </span>
-            <span className="font-medium">{formatMadridClock(clockNowMs)}</span>
-          </div>
+            <div className="flex flex-col gap-3 sm:items-end">
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/madrid/day/${shiftDateKey(date, -1)}`}
+                  aria-label="Previous day"
+                  className="grid h-10 w-10 place-items-center rounded-full border border-white/15 bg-white/5 text-lg text-white transition hover:bg-white/15"
+                >
+                  ←
+                </Link>
+                <Link
+                  href="/madrid/today"
+                  className="rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-white/15"
+                >
+                  Today
+                </Link>
+                <Link
+                  href={`/madrid/day/${shiftDateKey(date, 1)}`}
+                  aria-label="Next day"
+                  className="grid h-10 w-10 place-items-center rounded-full border border-white/15 bg-white/5 text-lg text-white transition hover:bg-white/15"
+                >
+                  →
+                </Link>
+              </div>
 
-          <p className="mt-4 text-sm text-black/70">
-            {liveMessage ||
-              (isToday
-                ? "Waiting for AEMET sync..."
-                : "Historical LEMD dates depend on previously captured live official rows.")}
-          </p>
+              <form
+                onSubmit={handleDateSubmit}
+                className="flex flex-wrap items-center gap-2"
+              >
+                <label htmlFor="madrid-date" className="sr-only">
+                  Choose Madrid date
+                </label>
+                <input
+                  id="madrid-date"
+                  type="date"
+                  value={dateInput}
+                  onChange={(event) => setDateInput(event.target.value)}
+                  className="h-10 rounded-full border border-white/15 bg-white/10 px-4 text-sm font-semibold text-white outline-none [color-scheme:dark] focus:border-emerald-200/60"
+                />
+                <button
+                  type="submit"
+                  className="h-10 rounded-full bg-white px-4 text-sm font-bold text-[#102c33] transition hover:bg-emerald-50"
+                >
+                  Go
+                </button>
+              </form>
+            </div>
+          </div>
         </header>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Latest
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {summary ? formatTemp(latestTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              {summary?.latestReportType ?? "—"} at{" "}
-              {summary?.latestObsTimeLocal
-                ? formatStoredLocalDateTime(summary.latestObsTimeLocal)
-                : "—"}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Day Range
-            </p>
-            <p className="mt-2 text-xl font-semibold text-foreground">
-              Max {summary ? formatTemp(maxTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-1 text-sm text-black/65">
-              {summary?.maxTempAtLocal
-                ? `at ${formatStoredLocalDateTime(summary.maxTempAtLocal)}`
-                : "—"}
-            </p>
-            <p className="mt-3 text-xl font-semibold text-foreground">
-              Min {summary ? formatTemp(minTemp, displayUnit) : "—"}
-            </p>
-            <p className="mt-1 text-sm text-black/65">
-              {summary?.minTempAtLocal
-                ? `at ${formatStoredLocalDateTime(summary.minTempAtLocal)}`
-                : "—"}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Messages
-            </p>
-            <p className="mt-2 text-3xl font-semibold text-foreground">
-              {summary?.obsCount ?? 0}
-            </p>
-            <p className="mt-2 text-sm text-black/65">
-              Routine LEMD METAR is normally half-hourly. Full-day coverage
-              depends on rows being captured live because this page stores the
-              latest authenticated AMA result rather than a confirmed history
-              endpoint.
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-line/70 bg-white/90 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45">
-              Near-Live Sky
-            </p>
-            {liveCloudSummary ? (
-              <>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <span
-                    className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] ${liveCloudSummary.badgeClassName}`}
-                  >
-                    {liveCloudSummary.badgeLabel}
-                  </span>
-                  <span className="text-sm font-semibold text-black/85">
-                    {liveCloudSummary.headline}
-                  </span>
-                </div>
-                {liveCloudSummary.showVisuals ? (
-                  <div className="mt-3 rounded-2xl border border-black/10 bg-[linear-gradient(180deg,rgba(224,242,254,0.8),rgba(255,255,255,0.95))] p-3">
-                    <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
-                      <span>Sky Cover</span>
-                      <span>{liveCloudSummary.coverLabel}</span>
-                    </div>
-                    <div className="mt-2 flex gap-1.5">
-                      {Array.from({ length: 5 }).map((_, index) => (
-                        <span
-                          key={`madrid-cloud-cover-${index}`}
-                          className={`h-2.5 flex-1 rounded-full ${
-                            index < liveCloudSummary.coverLevel
-                              ? liveCloudSummary.fillClassName
-                              : "bg-white/80"
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    {liveCloudSummary.baseVisual ? (
-                      <>
-                        <div className="mt-3 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-black/50">
-                          <span>Cloud Base</span>
-                          <span>{liveCloudSummary.baseVisual.label}</span>
-                        </div>
-                        <div className="mt-2 grid grid-cols-3 gap-1.5">
-                          {["Low", "Mid", "High"].map((label, index) => {
-                            const isActive = index === liveCloudSummary.baseVisual.tierIndex;
-                            return (
-                              <span
-                                key={`madrid-cloud-base-${label}`}
-                                className={`rounded-full border px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-[0.08em] ${
-                                  isActive
-                                    ? liveCloudSummary.baseVisual.className
-                                    : "border-black/10 bg-white/80 text-black/45"
-                                }`}
-                              >
-                                {label}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-                <p className="mt-3 text-sm text-black/65">
-                  {liveCloudSummary.detail}
-                </p>
-                <p className="mt-2 text-xs text-black/55">
-                  From the latest official LEMD{" "}
-                  {latestLiveCloudMetar?.reportType ?? "METAR"}
-                  {Number.isFinite(latestLiveCloudMetar?.observedAtUtc)
-                    ? ` at ${formatMadridDateTimeSeconds(latestLiveCloudMetar.observedAtUtc)}.`
-                    : "."}
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="mt-2 text-xl font-semibold text-foreground">—</p>
-                <p className="mt-2 text-sm text-black/65">
-                  Cloud conditions not available yet from the latest official LEMD METAR.
-                </p>
-              </>
-            )}
-          </div>
-        </section>
-
-        <section className="grid gap-4 md:grid-cols-2">
-          {(() => {
-            const latestStn = aemetStationObsRows.length
-              ? aemetStationObsRows[aemetStationObsRows.length - 1]
-              : null;
-            const stnTemp = latestStn
-              ? displayUnit === "C" ? latestStn.tempC : latestStn.tempF
-              : null;
-            return (
-              <div className="rounded-3xl border border-emerald-200/70 bg-emerald-50/40 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/70">
-                  AEMET Station 3129 (0.1°C)
-                </p>
-                <p className="mt-2 text-3xl font-semibold text-emerald-900">
-                  {stnTemp !== null ? formatTemp(stnTemp, displayUnit) : "—"}
-                </p>
-                <p className="mt-2 text-sm text-emerald-900/65">
-                  {latestStn
-                    ? `at ${formatStoredLocalDateTime(latestStn.obsTimeLocal)}`
-                    : "No station observations yet"}
+        <section className="grid gap-4 lg:grid-cols-[1.2fr_0.9fr_0.9fr]">
+          <article className="relative overflow-hidden rounded-[2rem] border border-emerald-900/10 bg-[#f5fffb] p-6 shadow-[0_16px_45px_rgba(15,118,110,0.08)] sm:p-7">
+            <div className="absolute right-0 top-0 h-28 w-28 rounded-bl-full bg-emerald-200/25" />
+            <div className="relative">
+              <div className="flex items-center gap-3">
+                <StatusDot tone={readingTone} />
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-900/60">
+                  {isToday
+                    ? "Freshest airport temperature"
+                    : "Latest stored airport temperature"}
                 </p>
               </div>
-            );
-          })()}
-          {(() => {
-            const latestSyn = synopRows.length
-              ? synopRows[synopRows.length - 1]
-              : null;
-            const synTemp = latestSyn
-              ? displayUnit === "C" ? latestSyn.tempC : latestSyn.tempF
-              : null;
-            return (
-              <div className="rounded-3xl border border-violet-200/70 bg-violet-50/40 p-5 shadow-[0_12px_28px_rgba(37,35,27,0.06)]">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700/70">
-                  SYNOP 08221 (0.1°C)
+              <div className="mt-5 flex flex-wrap items-end gap-x-4 gap-y-2">
+                <p className="text-5xl font-semibold tracking-[-0.06em] text-emerald-950 sm:text-6xl">
+                  {formatTemperature(freshestTemperature, unit)}
                 </p>
-                <p className="mt-2 text-3xl font-semibold text-violet-900">
-                  {synTemp !== null ? formatTemp(synTemp, displayUnit) : "—"}
-                </p>
-                <p className="mt-2 text-sm text-violet-900/65">
-                  {latestSyn
-                    ? `at ${formatStoredLocalDateTime(latestSyn.obsTimeLocal)}`
-                    : "No SYNOP observations yet"}
+                <p className="pb-1 text-sm font-semibold text-emerald-900/65">
+                  {freshest?.source ?? "Waiting for an airport observation"}
                 </p>
               </div>
-            );
-          })()}
+              <p className="mt-4 text-sm leading-6 text-emerald-950/65">
+                {freshest ? (
+                  <>
+                    Observed at{" "}
+                    <span className="font-bold text-emerald-950">
+                      {formatLocalTime(freshest.observedAtLocal)} Madrid
+                    </span>
+                    {isToday && observationAge ? ` · ${observationAge}` : ""}
+                    . {freshest.cadence}; {freshest.precision.toLowerCase()}.
+                  </>
+                ) : (
+                  "No airport temperature has been stored for this date."
+                )}
+              </p>
+              {freshest?.receivedAt ? (
+                <p className="mt-2 text-xs font-semibold text-emerald-900/45">
+                  Feed received {formatMadridTime(freshest.receivedAt)} Madrid
+                  time
+                </p>
+              ) : null}
+            </div>
+          </article>
+
+          <article className="rounded-[2rem] border border-amber-900/10 bg-[#fffaf0] p-6 shadow-[0_16px_45px_rgba(180,83,9,0.07)] sm:p-7">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-900/55">
+              Forecast maximum
+            </p>
+            <p className="mt-5 text-5xl font-semibold tracking-[-0.055em] text-amber-950">
+              {formatTemperature(forecastMax, unit)}
+            </p>
+            <p className="mt-4 text-sm leading-6 text-amber-950/60">
+              Highest point in AEMET&apos;s hourly forecast for this date.
+            </p>
+            {forecastPeak?.capturedAt ? (
+              <p className="mt-2 text-xs font-semibold text-amber-900/45">
+                Forecast checked{" "}
+                {formatMadridTime(forecastPeak.capturedAt)} Madrid time
+              </p>
+            ) : null}
+          </article>
+
+          <article className="rounded-[2rem] border border-sky-900/10 bg-[#f4faff] p-6 shadow-[0_16px_45px_rgba(3,105,161,0.07)] sm:p-7">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-900/55">
+              Forecast peak time
+            </p>
+            <p className="mt-5 text-3xl font-semibold tracking-[-0.045em] text-sky-950 sm:text-4xl">
+              {forecastPeak?.peakTimeLabel ?? "—"}
+            </p>
+            <p className="mt-4 text-sm leading-6 text-sky-950/60">
+              All tied hourly maximum points are highlighted in the chart.
+            </p>
+          </article>
         </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <section className="overflow-hidden rounded-[2rem] border border-slate-900/10 bg-white/95 shadow-[0_22px_65px_rgba(15,23,42,0.08)]">
+          <div className="flex flex-col gap-4 border-b border-slate-900/8 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-7">
             <div>
-              <h2 className="text-xl font-semibold text-foreground">
-                Temperature Line
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
+                24-hour temperature
+              </p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] text-slate-950">
+                Forecast versus airport actuals
               </h2>
-              <p className="mt-1 text-sm text-black/60">
-                Stored official LEMD METAR and SPECI rows captured from AEMET
-                AMA.
+              <p className="mt-1 text-xs font-semibold text-slate-400 sm:hidden">
+                Swipe the timeline horizontally →
               </p>
             </div>
-          </div>
 
-          <div className="mt-6 h-[420px]">
-            {chartData.datasets.length ? (
-              <Line data={chartData} options={chartOptions} />
-            ) : (
-              <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/15 bg-black/[0.02] text-sm text-black/55">
-                No LEMD official observations stored for this date yet.
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+                {["C", "F"].map((nextUnit) => (
+                  <button
+                    key={nextUnit}
+                    type="button"
+                    onClick={() => setUnit(nextUnit)}
+                    className={`rounded-full px-3.5 py-1.5 text-sm font-bold transition ${
+                      unit === nextUnit
+                        ? "bg-slate-950 text-white shadow-sm"
+                        : "text-slate-500 hover:text-slate-950"
+                    }`}
+                  >
+                    °{nextUnit}
+                  </button>
+                ))}
               </div>
-            )}
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={!isToday || isRefreshing}
+                className="rounded-full bg-[#102c33] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#17434c] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isRefreshing ? "Refreshing…" : "Refresh live"}
+              </button>
+            </div>
           </div>
-        </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">Latest Raw METAR</h2>
-          <div className="mt-4 rounded-2xl border border-black/10 bg-black/[0.02] p-4 font-mono text-sm text-black/80">
-            {summary?.latestRawMetar ?? "No latest raw METAR stored yet."}
+          <div className="px-3 py-4 sm:px-6 sm:py-6">
+            <div className="overflow-x-auto">
+              <div className="h-[430px] min-w-[820px] sm:h-[500px]">
+                {chartData.datasets.length ? (
+                  <Line data={chartData} options={chartOptions} />
+                ) : (
+                  <div className="grid h-full place-items-center rounded-3xl border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center text-sm text-slate-500">
+                    {isLoading
+                      ? "Loading Madrid forecast and airport observations…"
+                      : "No forecast or airport observations are stored for this date."}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">Publish Race</h2>
-              <p className="mt-1 text-sm text-black/60">
-                Recent routine half-hour LEMD METAR first-seen timing across the
-                official AEMET AMA portal and NOAA `tgftp`. Times in this table
-                are shown in America/Chicago. A 1-second watch starts at `:03`
-                and `:33` each hour and runs for six minutes, because the new
-                Madrid METAR typically appears around `:04` and `:34` rather
-                than exactly on the hour or half-hour boundary.
+          <div className="grid border-t border-slate-900/8 sm:grid-cols-3">
+            <div className="border-b border-slate-900/8 px-5 py-4 sm:border-b-0 sm:border-r sm:px-7">
+              <p className="text-xs font-bold uppercase tracking-[0.15em] text-amber-700">
+                Forecast
+              </p>
+              <p className="mt-1 text-sm leading-5 text-slate-600">
+                AEMET hourly municipal forecast, with every tied maximum marked.
+              </p>
+            </div>
+            <div className="border-b border-slate-900/8 px-5 py-4 sm:border-b-0 sm:border-r sm:px-7">
+              <p className="text-xs font-bold uppercase tracking-[0.15em] text-teal-700">
+                Airport station
+              </p>
+              <p className="mt-1 text-sm leading-5 text-slate-600">
+                AEMET 3129 is airport-based and precise to 0.1°C, but reported
+                hourly.
+              </p>
+            </div>
+            <div className="px-5 py-4 sm:px-7">
+              <p className="text-xs font-bold uppercase tracking-[0.15em] text-rose-700">
+                Actual METAR
+              </p>
+              <p className="mt-1 text-sm leading-5 text-slate-600">
+                Official LEMD METAR/SPECI points from the first AEMET or NOAA
+                copy seen; normally half-hourly and whole-degree.
               </p>
             </div>
           </div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Report Time</th>
-                  <th className="px-3 py-2 font-semibold">Winner</th>
-                  <th className="px-3 py-2 font-semibold">Lead</th>
-                  <th className="px-3 py-2 font-semibold">AEMET Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Seen</th>
-                  <th className="px-3 py-2 font-semibold">tgftp Last-Modified</th>
-                  <th className="px-3 py-2 font-semibold">Raw METAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {raceRows.length ? (
-                  raceRows.map((row) => (
-                    <tr
-                      key={row._id}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatChicagoDateTimeSeconds(row.reportTsUtc)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.winner === "aemet"
-                              ? "bg-emerald-50 text-emerald-800"
-                              : row.winner === "tgftp"
-                                ? "bg-amber-50 text-amber-900"
-                                : row.winner === "tie"
-                                  ? "bg-slate-100 text-slate-800"
-                                  : "bg-black/[0.05] text-black/65"
-                          }`}
-                        >
-                          {formatRaceWinner(row.winner)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatLeadMs(row.leadMs)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.aemetFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpFirstSeenAt)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {formatChicagoDateTimeSeconds(row.tgftpLastModifiedAt)}
-                      </td>
-                      <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar ?? row.aemetRawMetar ?? row.tgftpRawMetar ?? "—"}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-black/55">
-                      No publish-race rows stored yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
         </section>
 
-        <section className="rounded-3xl border border-line/80 bg-white/95 p-6 shadow-[0_18px_50px_rgba(37,35,27,0.06)]">
-          <h2 className="text-xl font-semibold text-foreground">Raw Observations</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-black/10 text-black/55">
-                  <th className="px-3 py-2 font-semibold">Local Time</th>
-                  <th className="px-3 py-2 font-semibold">Type</th>
-                  <th className="px-3 py-2 font-semibold">Temp</th>
-                  <th className="px-3 py-2 font-semibold">First Seen</th>
-                  <th className="px-3 py-2 font-semibold">Source</th>
-                  <th className="px-3 py-2 font-semibold">Raw METAR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length ? (
-                  rows.map((row) => (
-                    <tr
-                      key={row._id}
-                      className="border-b border-black/5 align-top last:border-b-0"
-                    >
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {formatStoredLocalDateTime(row.obsTimeLocal)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            row.reportType === "SPECI"
-                              ? "bg-red-50 text-red-800"
-                              : "bg-sky-50 text-sky-800"
-                          }`}
-                        >
-                          {row.reportType}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/80">
-                        {displayUnit === "C"
-                          ? formatTemp(row.tempC, "C")
-                          : formatTemp(row.tempF, "F")}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.aemetFirstSeenAt
-                          ? formatMadridDateTimeSeconds(row.aemetFirstSeenAt)
-                          : "—"}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-black/60">
-                        {row.source}
-                      </td>
-                      <td className="px-3 py-3 font-mono text-xs text-black/80">
-                        {row.rawMetar}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-black/55">
-                      No stored rows for this date.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <footer className="flex flex-col gap-2 px-2 pb-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+          <p aria-live="polite">
+            {syncMessage ||
+              (isToday
+                ? "Live Convex subscriptions will update this chart as new rows arrive."
+                : "Showing stored forecast and observations for the selected date.")}
+          </p>
+          <p>
+            Latest METAR on chart:{" "}
+            <span className="font-bold text-slate-700">
+              {formatTemperature(latestMetarTemperature, unit)}
+            </span>
+            {airportReading.latestMetar
+              ? ` at ${formatLocalTime(airportReading.latestMetar.obsTimeLocal)}`
+              : ""}
+          </p>
+        </footer>
       </div>
     </main>
   );
