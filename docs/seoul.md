@@ -234,9 +234,34 @@ The parser also reads the airport code displayed in the page's
 missing or different displayed ICAO code is a provenance mismatch and fails
 the attempt before successful storage. This prevents a redirect, default
 airport, or changed page from being mislabeled as the requested RKSI forecast.
-The fetch itself rejects redirects, requires the final response to remain on
-HTTPS `amo.kma.go.kr/eng/airport.do`, and accepts only an HTML content type, so
-a different host cannot be followed and relabeled as AMO.
+The Node HTTPS request uses only the fixed
+`https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI` host and path, does not
+follow redirects, and accepts only a successful HTML response, so a different
+host cannot be followed and relabeled as AMO.
+
+### TLS chain handling
+
+As verified on 2026-07-29, `amo.kma.go.kr` sends its valid `*.kma.go.kr` leaf
+certificate but omits the issuing `RapidSSL TLS RSA CA G1` intermediate from
+the TLS handshake. Node therefore correctly fails to build the chain with
+`UNABLE_TO_VERIFY_LEAF_SIGNATURE`, while Windows clients may appear to work
+because they retrieve or cache the certificate named by the leaf's AIA field.
+
+The internal fetch worker runs in the Convex Node runtime and appends the exact
+[DigiCert-published RapidSSL intermediate](https://cacerts.digicert.com/RapidSSLTLSRSACAG1.crt.pem)
+to Node's normal root certificates for this request. Its SHA-256 fingerprint
+is
+`44:22:E9:63:EE:53:CD:58:CC:9F:85:CD:40:BF:5F:FE:C0:09:5F:DF:1A:15:45:35:66:1C:1C:06:BC:AD:C6:9B`.
+Request-time validation checks that fingerprint, its CA identity, its issuer, its
+signature against Node's trusted `DigiCert Global Root G2`, and the presence of
+that trusted root. The request keeps `rejectUnauthorized: true`, default
+hostname validation, and SNI for `amo.kma.go.kr`. It never disables TLS
+verification, trusts a partial chain, follows a redirect, or downloads an AIA
+certificate at runtime.
+
+The bundled intermediate expires on 2027-11-02. Replace or remove the bundle
+before then based on KMA's live chain; the preferred upstream resolution is
+for KMA to serve the complete certificate chain.
 
 KMA/AMO controls all canonical forecast decisions:
 
@@ -312,7 +337,7 @@ Every protected entry point uses the same current flag:
   mutation invoked by cron
   `seoul_kma_amo_airport_forecast_every_30_min` at minutes `:05` and `:35`.
   It uses the same queue as manual requests.
-- `seoulKmaForecast:collectQueuedAirportForecast` is the internal-only fetch
+- `seoulKmaForecastNode:collectQueuedAirportForecast` is the internal-only Node fetch
   worker. `seoulKmaForecast:claimQueuedAirportForecast` atomically verifies its
   run ID immediately before protected work, and
   `seoulKmaForecast:writeCollectorStatus` clears its run-owned lock.

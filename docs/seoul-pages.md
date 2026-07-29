@@ -448,10 +448,20 @@ a ten-minute minimum interval and a 15-minute stale-lock timeout, so repeated
 clicks, concurrent tabs, direct Convex calls, and a neighboring cron cannot
 create unbounded AMO traffic. Immediately before protected work, the worker
 atomically claims the still-current run ID; a delayed worker superseded after
-the stale timeout exits without an AMO request or capture. The fetch rejects
-redirects, requires the
-response URL to remain the HTTPS AMO airport page, and requires an HTML content
-type before parsing.
+the stale timeout exits without an AMO request or capture. The Node fetch uses
+only the fixed HTTPS AMO host/path, does not follow redirects, and requires a
+successful HTML content type before parsing.
+
+As verified on 2026-07-29, AMO's TLS server sends its `*.kma.go.kr` leaf but
+omits the `RapidSSL TLS RSA CA G1` intermediate. The Node-only worker appends
+the exact DigiCert-published intermediate (SHA-256
+`44:22:E9:63:EE:53:CD:58:CC:9F:85:CD:40:BF:5F:FE:C0:09:5F:DF:1A:15:45:35:66:1C:1C:06:BC:AD:C6:9B`)
+to Node's normal root store after validating its identity and signature
+against the trusted `DigiCert Global Root G2`. TLS and hostname verification
+remain enabled, the worker never trusts a partial chain or fetches an AIA
+certificate at runtime, and native HTTPS never follows a redirect. The
+intermediate expires on 2027-11-02 and must be replaced or removed based on
+KMA's live chain before then.
 
 The public queue is unauthenticated, so a caller can intentionally occupy its
 single global slot every ten minutes: at most 144 KMA requests per day.
@@ -491,7 +501,7 @@ The protected entry points are:
 - collection: `seoulKmaForecast:requestAirportForecastRefresh`,
   `seoulKmaForecast:queueScheduledAirportForecastRefresh`,
   `seoulKmaForecast:claimQueuedAirportForecast`,
-  `seoulKmaForecast:collectQueuedAirportForecast`,
+  `seoulKmaForecastNode:collectQueuedAirportForecast`,
   `seoulKmaForecast:writeCollectorStatus`, and
   `seoulKmaForecast:storeForecastCapture`
 - prediction/finalization:
@@ -565,7 +575,7 @@ trigger recomputation.
   `seoulKmaForecast:requestAirportForecastRefresh` mutation used by the button
   enters the same queue. Both paths share the ten-minute interval and
   run-owned lock, then schedule only
-  `seoulKmaForecast:collectQueuedAirportForecast`. The worker parses the
+  `seoulKmaForecastNode:collectQueuedAirportForecast`. The worker parses the
   server-rendered RKSI page and stores immutable attempts through
   `seoulKmaForecast:storeForecastCapture`. The parser requires the page itself
   to display `RKSI` before an attempt can succeed. Successful KMA guidance is
