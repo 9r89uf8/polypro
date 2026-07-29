@@ -12,7 +12,7 @@ import { useAction, useQuery } from "convex/react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend);
 
@@ -408,7 +408,6 @@ export default function NzwnDayPage() {
   const [clockNowMs, setClockNowMs] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
-  const bootstrapDateRef = useRef("");
 
   const validDate = isValidDate(date);
   const today = aucklandTodayKey();
@@ -427,7 +426,6 @@ export default function NzwnDayPage() {
   const pollLiveTemperature = useAction(
     "nzwnWeather:pollMetServiceCurrentConditions",
   );
-  const backfillOfficialDay = useAction("preflight:backfillDayStationMessages");
   const pollOfficialLatest = useAction("preflight:pollLatestStationMetar");
 
   const approval = liveData?.approval ?? null;
@@ -500,41 +498,6 @@ export default function NzwnDayPage() {
     const intervalId = window.setInterval(() => setClockNowMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, []);
-
-  useEffect(() => {
-    if (!validDate || bootstrapDateRef.current === date) {
-      return;
-    }
-    bootstrapDateRef.current = date;
-    let cancelled = false;
-
-    async function syncOfficialReference() {
-      const results = await Promise.allSettled([
-        backfillOfficialDay({ stationIcao: STATION_ICAO, date }),
-        isToday ? pollOfficialLatest({ stationIcao: STATION_ICAO }) : null,
-      ]);
-      if (cancelled) {
-        return;
-      }
-      const failures = results.filter((result) => result.status === "rejected");
-      setSyncMessage(
-        failures.length
-          ? "Official METAR reference could not be refreshed."
-          : "Official METAR reference is synchronized.",
-      );
-    }
-
-    syncOfficialReference();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    backfillOfficialDay,
-    date,
-    isToday,
-    pollOfficialLatest,
-    validDate,
-  ]);
 
   async function handleRefresh() {
     if (!isToday || isRefreshing) {

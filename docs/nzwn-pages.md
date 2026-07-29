@@ -48,14 +48,11 @@ What this page displays:
 Behavior details:
 
 - Page expects a `YYYY-MM-DD` date segment.
-- On first load for a date:
-  - runs `preflight:backfillDayStationMessages`
-  - saves any official NZWN rows for that selected Wellington local day that are
-    still present in the current PreFlight rolling message window
-- If viewing today in `Pacific/Auckland`:
-  - also runs `preflight:pollLatestStationMetar`
-  - Convex query subscriptions update the page when the scheduled station
-    collector accepts a newer source timestamp
+- Opening a date reads already-stored official NZWN METAR rows for the separate
+  comparison series. It does not automatically call PreFlight or backfill its
+  rolling message window.
+- If viewing today in `Pacific/Auckland`, Convex query subscriptions update the
+  page when the scheduled station collector accepts a newer source timestamp.
 - Manual refresh is available only for today, only when the approval flag is
   enabled, and only inside the `09:00`-`19:00` Wellington collection window.
   It polls both the approval-gated station current and the official METAR
@@ -174,6 +171,18 @@ To disable future requests immediately:
 ```text
 npx convex env remove METSERVICE_PUBLICDATA_ACCESS_APPROVED --prod
 ```
+
+Production deployment topology as of July 29, 2026:
+
+- Vercel production (`polypro-alpha.vercel.app`) is wired to the Convex
+  production deployment `rapid-greyhound-887`.
+- The repository's local `.env.local` selects the separate development
+  deployment `polite-wildcat-940`.
+- Deploy backend changes from the linked repository with `npx convex deploy`;
+  verify the CLI output names `rapid-greyhound-887`, then run the production
+  query with `npx convex run --prod`. Deploying only to the local selector
+  leaves Vercel on stale functions and produces client-side
+  `Function not found`/generic server errors.
 
 Do not store approval evidence or credentials in the repository. This endpoint
 does not require a credential; the approval flag is intentionally separate
