@@ -83,6 +83,86 @@ chart path:
   the one-minute AMOS line and uses five-minute rows solely to fill missing
   timestamps.
 
+## GK2A surface shortwave radiation
+
+The supported source for direct solar-heating input is KMA API Hub's
+authenticated **GK2A meteorological-products point query**:
+
+```text
+GET https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph_sun_sat_txt
+  ?tm1=YYYYMMDDHHmm
+  &tm2=YYYYMMDDHHmm
+  &int=10
+  &varn=DSR
+  &lat=37.4602
+  &lon=126.4407
+  &authKey=KEY
+```
+
+The request times are UTC. The service selects the nearest product grid point
+and returns text rather than JSON. Relevant variables are:
+
+- `DSR`: surface downward shortwave radiation in W/m²;
+- `ASR`: surface absorbed shortwave radiation in W/m²;
+- `CA`, `CT`, `CLL`, and `FOG`: cloud amount, cloud type, cloud-layer, and fog
+  products available from the same point-query family.
+
+KMA/NMSC documents the GK2A SWRAD product at approximately 2 km resolution and
+a ten-minute production cadence. The official algorithm document gives DSR a
+nominal 0–1500 W/m² range and describes daytime/high-zenith-angle limitations.
+The collector therefore preserves unavailable values and does not interpret a
+missing or nighttime retrieval as zero transmission.
+
+The endpoint returns HTTP 401 without a valid API Hub key. The production key
+belongs only in Convex as `KMA_API_HUB_AUTH_KEY`; it is never sent to the page
+or to the Next.js imagery route. KMA lists general API Hub membership as free,
+with one application key and a daily request allowance comfortably above this
+collector's eight requests per ten-minute run (DSR and ASR at RKSI plus three
+upwind points).
+
+GK2A does not expose a clear-sky surface-DSR field through this point endpoint.
+The dashboard therefore computes:
+
+```text
+estimated solar transmission = measured GK2A DSR / Haurwitz clear-sky GHI
+```
+
+The Haurwitz denominator uses the observation time and RKSI/point coordinates.
+Ratios are withheld below 50 W/m² modeled clear-sky irradiance and outside a
+0–200 percent plausibility guard. This is a useful operational signal, not a
+calibrated atmospheric-transmission retrieval; clear-sky-model error can be
+largest near sunrise/sunset and under unusual aerosol conditions.
+
+The 30-minute change uses the closest valid stored sample within ±15 minutes of
+the target. The recent direction uses the median of pairwise transmission
+slopes across the latest hour, requiring at least three samples and 30 minutes
+of coverage. A magnitude under five percentage points per hour is `steady`.
+
+For upstream context, the collector reads the freshest representative 15L AMOS
+average wind. At two knots or stronger and no more than 45 minutes old, it
+projects points the surface wind would traverse in 20, 40, and 60 minutes and
+queries DSR/ASR at those coordinates. A median upstream transmission at least
+ten percentage points above RKSI is `clearing`; ten points below is
+`cloudier`. The nearest qualifying projected horizon supplies the displayed
+arrival estimate. Surface wind is only an orientation/advection proxy and can
+differ substantially from motion at cloud level.
+
+The optional image loop is independent of the keyed point feed. KMA's public
+weather image service supplies recent two-minute Korea-area
+`RGB cloud-enhanced` frames. `/api/seoul/gk2a-loop` assembles a 90-minute
+window, exposes every other frame for a four-minute display cadence, validates
+requested timestamps, and proxies only KMA-listed image paths. This produces a
+lighter visual loop while the DSR point observations remain the numerical
+source of truth.
+
+Official references:
+
+- [KMA API Hub GK2A point-query form](https://apihub.kma.go.kr/specialApiList.do)
+- [KMA API Hub usage and key limits](https://apihub.kma.go.kr/apiInfo.do)
+- [NMSC GK2A product definitions](https://nmsc.kma.go.kr/homepage/html/base/cmm/selectPage.do?page=static.utilization.productDefinition)
+- [NMSC SWRAD algorithm document](https://nmsc.kma.go.kr/resources/common/pdf/%EC%99%B8GK2A_L2_ATBD_%EA%B5%AD%EB%AC%B8_%EB%8B%A8%ED%8C%8C%EB%B3%B5%EC%82%AC_SWRAD.pdf)
+- [KMA public GK2A image viewer](https://www.weather.go.kr/w/image/sat.do)
+
 ## RKSI 15L forecast capture and backend evaluation
 
 The Seoul page now has one active forecast source: **Weather.com**. It does not

@@ -10,6 +10,21 @@ const seoulForecastStatus = v.union(
 
 const seoulProviderStatus = v.union(v.literal("ok"), v.literal("error"));
 
+const seoulGk2aCollectorStatus = v.union(
+  v.literal("ok"),
+  v.literal("partial"),
+  v.literal("no_data"),
+  v.literal("error"),
+  v.literal("unconfigured"),
+);
+
+const seoulGk2aPointKind = v.union(
+  v.literal("airport"),
+  v.literal("upwind_20m"),
+  v.literal("upwind_40m"),
+  v.literal("upwind_60m"),
+);
+
 const seoulHourlyForecastRow = v.object({
   date: v.string(),
   forecastTimeUtc: v.number(),
@@ -1024,6 +1039,70 @@ export default defineSchema({
       "rwyDir",
       "obsTimeUtc",
     ]),
+
+  seoulGk2aSolarObservations: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    obsTimeUtc: v.number(),
+    obsTimeLocal: v.string(),
+    pointKind: seoulGk2aPointKind,
+    sampleKey: v.string(),
+    latitude: v.number(),
+    longitude: v.number(),
+    sourceLatitude: v.optional(v.number()),
+    sourceLongitude: v.optional(v.number()),
+    upwindMinutes: v.optional(v.number()),
+    distanceUpwindKm: v.optional(v.number()),
+    dsrWm2: v.optional(v.number()),
+    asrWm2: v.optional(v.number()),
+    clearSkyDsrWm2: v.number(),
+    solarElevationDeg: v.number(),
+    transmissionPct: v.optional(v.number()),
+    dsrRawLine: v.optional(v.string()),
+    asrRawLine: v.optional(v.string()),
+    windObservedAtUtc: v.optional(v.number()),
+    windDirectionFromDeg: v.optional(v.number()),
+    windSpeedKt: v.optional(v.number()),
+    windSpeedMps: v.optional(v.number()),
+    source: v.string(),
+    sourceEndpoint: v.string(),
+    productCadenceMinutes: v.number(),
+    collectionRunAt: v.number(),
+    firstSeenAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_station_date_sample_ts", [
+      "stationIcao",
+      "date",
+      "sampleKey",
+      "obsTimeUtc",
+    ])
+    .index("by_station_date_point_ts", [
+      "stationIcao",
+      "date",
+      "pointKind",
+      "obsTimeUtc",
+    ]),
+
+  seoulGk2aCollectorStatus: defineTable({
+    stationIcao: v.string(),
+    status: seoulGk2aCollectorStatus,
+    configured: v.boolean(),
+    lastAttemptAt: v.number(),
+    lastAttemptAtLocal: v.string(),
+    lastSuccessAt: v.optional(v.number()),
+    lastSuccessAtLocal: v.optional(v.string()),
+    latestObsTimeUtc: v.optional(v.number()),
+    latestObsTimeLocal: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    requestedPointCount: v.optional(v.number()),
+    storedRowCount: v.optional(v.number()),
+    upwindStatus: v.optional(v.string()),
+    windObservedAtUtc: v.optional(v.number()),
+    windDirectionFromDeg: v.optional(v.number()),
+    windSpeedKt: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_station", ["stationIcao"]),
 
   seoulForecastCaptures: defineTable({
     stationIcao: v.string(),

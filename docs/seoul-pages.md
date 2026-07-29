@@ -1,7 +1,7 @@
 # Seoul RKSI live-temperature page
 
-This document describes the focused RKSI 15L temperature and cloud-cover
-timeline, plus the collectors that feed it.
+This document describes the focused RKSI 15L temperature, cloud-cover, and
+GK2A solar-heating timeline, plus the collectors that feed it.
 
 ## Routes
 
@@ -226,6 +226,51 @@ The rest of the interface is deliberately compact:
 The previous correlation, publish-race, raw-METAR, and raw-observation panels
 are no longer part of the primary Seoul page.
 
+## GK2A solar-heating panel
+
+The compact `SOLAR HEATING` panel adds a direct daytime-heating observation
+alongside the categorical sky-cover strip. It subscribes to
+`seoulGk2a:getSolarHeatingDashboard({ stationIcao: "RKSI", date })` and shows:
+
+- estimated solar transmission, defined as the latest GK2A surface downward
+  shortwave radiation (`DSR`) divided by a local Haurwitz clear-sky estimate;
+- the change from the nearest valid sample approximately 30 minutes earlier;
+- an increasing, steady, or decreasing next-hour signal from a robust recent
+  transmission trend, overridden when the latest wind-projected upstream
+  points show a materially clearer or cloudier signal;
+- whether the upstream corridor is at least ten percentage points clearer than
+  RKSI, plus an approximate arrival time when such a signal exists.
+
+The KMA point product is normally produced every ten minutes at approximately
+2 km resolution. `DSR` and absorbed shortwave radiation (`ASR`) remain separate
+stored values in W/m². The clear-sky denominator is a model, not another GK2A
+measurement, so the UI calls the ratio **estimated solar transmission**.
+Transmission is omitted when modeled clear-sky DSR is below 50 W/m², including
+night and very low sun, rather than rendering a misleading zero percent.
+
+The collector projects 20-, 40-, and 60-minute upstream sample points from the
+latest representative 15L AMOS wind direction and speed. These are spatial
+GK2A DSR samples, but the distance and arrival time use surface wind as a
+proxy. They are not satellite-derived cloud-motion vectors. Missing, stale, or
+calm wind leaves the upstream reading unavailable.
+
+An expandable loop beneath the metrics requests the previous 90 minutes of
+KMA's public `RGB cloud-enhanced` Korea-area GK2A imagery. The source produces
+two-minute frames; the dashboard displays every other frame for a four-minute
+visual cadence and loads them only when expanded. The server route
+`/api/seoul/gk2a-loop` validates frame timestamps, obtains the KMA-owned image,
+and proxies it without exposing arbitrary upstream URLs. The UI applies a
+fixed RKSI crop, airport marker, surface-wind arrow, and upwind corridor. The
+loop is contextual imagery; the numerical panel continues to use the GK2A DSR
+point product.
+
+The point API requires the server-only Convex environment variable
+`KMA_API_HUB_AUTH_KEY`. When it is absent, the query and scheduled action return
+an explicit `unconfigured` status without throwing, the metric cells stay
+unavailable, and the public imagery loop can still operate. Historical routes
+show only DSR rows captured on that date; they do not trigger a point-product
+backfill.
+
 ## Weather.com hourly revision diagnostics
 
 Weather.com's daily maximum and hourly forecast remain separate products with
@@ -341,13 +386,15 @@ For the current Seoul date, the first page load and `Sync now` first request:
 
 - `seoul:pollLatestNoaaStationMetar`
 - `seoul:pollLatestAmosTemperatureSites`
+- `seoulGk2a:pollLatestSolarHeating`
 
 The page no longer calls `seoulWeather:recomputeTodayHighPrediction` from this
 manual path. The status message reports partial observation-source failures.
 The manual AMOS request is a single immediate fetch, while the scheduled
-rollover watch remains the lowest-latency path. Provider captures continue on
-their 15-minute schedule and update the Weather.com high/time marker
-reactively.
+rollover watch remains the lowest-latency path. A missing GK2A key is reported
+as setup required rather than making the two observation refreshes look
+failed. Provider captures continue on their 15-minute schedule and update the
+Weather.com high/time marker reactively.
 
 Historical routes only display already-captured rows. There is no historical
 backfill from these latest-value endpoints, and the historical page does not
@@ -355,6 +402,11 @@ trigger recomputation.
 
 ## Backend prediction collectors
 
+- `seoul_gk2a_solar_every_10_min` runs at minutes `:06`, `:16`, `:26`,
+  `:36`, `:46`, and `:56`. Its 80-minute lookback catches delayed KMA
+  publication through idempotent airport upserts. Each run keeps full airport
+  history and only the newest DSR-bearing row at each wind-projected upstream
+  point.
 - `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
   `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
   and errors together. Both requests use the explicit `icaoCode=RKSI`
@@ -495,6 +547,22 @@ One representative-15L row per station/date with observation counts, latest
 temperature, and the day's minimum and maximum temperature and occurrence
 times.
 
+### `seoulGk2aSolarObservations`
+
+Airport rows are unique by station/date/airport sample key/observation time and
+retain the full ten-minute history. Wind-projected rows use a per-collection
+sample key and retain the latest DSR-bearing result for the 20-, 40-, and
+60-minute corridor positions. Rows preserve DSR, optional ASR, modeled
+clear-sky DSR, solar elevation, optional transmission, source grid
+coordinates, wind and corridor metadata, raw source lines, and ingest timing.
+
+### `seoulGk2aCollectorStatus`
+
+One row per station records `ok`, `partial`, `no_data`, `error`, or
+`unconfigured`, together with last attempt/success times, latest source
+observation, requested/stored counts, upstream availability, and the wind used
+for the most recent collection.
+
 ### `seoulForecastCaptures`
 
 Immutable Weather.com RKSI airport forecast captures. Daily rows hold the
@@ -559,4 +627,11 @@ though the redesigned page no longer renders the diagnostic table.
   described as proof that the physical thermometer is at the 15L threshold.
 - The old `http://amoapi.kma.go.kr/amoApi/metar` service was retired on
   2026-07-20 and is not used by the live chart collector.
+- GK2A point access is server-side because KMA API Hub passes the auth key as a
+  request parameter. The key must never be placed in a `NEXT_PUBLIC_*`
+  variable or returned to the browser.
+- KMA/NMSC documents the SWRAD DSR product as a daylight retrieval with
+  limitations at high solar/viewing zenith angles. The UI preserves missing
+  values and source health instead of substituting cloud-cover categories or
+  zero radiation.
 - Research and source comparisons are in [seoul.md](./seoul.md).

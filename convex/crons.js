@@ -247,6 +247,16 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
+// GK2A radiation point products are produced on a ten-minute cadence. Poll
+// six minutes after each nominal boundary and retain an 80-minute lookback so
+// a delayed KMA publication is captured by a later idempotent upsert.
+crons.cron(
+  "seoul_gk2a_solar_every_10_min",
+  "6,16,26,36,46,56 * * * *",
+  api.seoulGk2a.pollLatestSolarHeating,
+  { stationIcao: "RKSI" },
+);
+
 // Captures immutable Weather.com RKSI airport daily and hourly forecasts. The
 // daily calendar high supplies the chart value; hourly values supply its time
 // estimate, revision history, and observed-versus-forecast diagnostics.

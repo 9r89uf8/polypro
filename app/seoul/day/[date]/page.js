@@ -1408,9 +1408,7 @@ function addCloudForecastComparison(observedHour, forecastPoint) {
     return observedHour;
   }
 
-  const forecastDeltaPct = Math.round(
-    forecastCoverPct - observedHour.coverPct,
-  );
+  const forecastDeltaPct = Math.round(forecastCoverPct - observedHour.coverPct);
   const forecastDeltaLabel = formatSignedCloudDeltaPct(forecastDeltaPct);
   const forecastCoverLabel = formatCloudCoverPercentage(forecastCoverPct);
   const forecastCapturedAt =
@@ -2393,6 +2391,447 @@ function OutlookMetric({ label, value, detail, tone = "text-slate-100" }) {
   );
 }
 
+function formatPercent(value) {
+  return Number.isFinite(value) ? `${Math.round(value)}%` : "—";
+}
+
+function formatPercentagePointChange(value) {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  const rounded = Math.round(value);
+  return `${rounded > 0 ? "+" : rounded < 0 ? "−" : ""}${Math.abs(rounded)} pp`;
+}
+
+function solarTrendLabel(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "increasing") {
+    return "Increasing";
+  }
+  if (normalized === "decreasing") {
+    return "Decreasing";
+  }
+  if (normalized === "steady") {
+    return "Holding steady";
+  }
+  return "Unavailable";
+}
+
+function compassDirection(degrees) {
+  if (!Number.isFinite(degrees)) {
+    return "—";
+  }
+  const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return labels[Math.round((((degrees % 360) + 360) % 360) / 45) % 8];
+}
+
+function Gk2aLoop({ windDirectionDeg, windSpeedKt, upstreamEtaMinutes }) {
+  const [opened, setOpened] = useState(false);
+  const [loop, setLoop] = useState({
+    status: "idle",
+    frames: [],
+    message: "",
+    durationMinutes: null,
+    cadenceMinutes: null,
+  });
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const [loadedFrameTimes, setLoadedFrameTimes] = useState(() => new Set());
+
+  useEffect(() => {
+    if (!opened || loop.status !== "idle") {
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoop((current) => ({ ...current, status: "loading" }));
+    fetch("/api/seoul/gk2a-loop", {
+      signal: controller.signal,
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) {
+          throw new Error(body?.error ?? "GK2A imagery request failed");
+        }
+        return body;
+      })
+      .then((body) => {
+        const frames = Array.isArray(body?.frames) ? body.frames : [];
+        if (frames.length === 0) {
+          throw new Error("KMA returned no recent imagery");
+        }
+        setLoop({
+          status: "ready",
+          frames,
+          message: "",
+          durationMinutes: body.durationMinutes,
+          cadenceMinutes: body.cadenceMinutes,
+        });
+        setLoadedFrameTimes(new Set());
+        setFrameIndex(frames.length - 1);
+      })
+      .catch((error) => {
+        if (error?.name === "AbortError") {
+          setLoop((current) =>
+            current.status === "loading"
+              ? { ...current, status: "idle" }
+              : current,
+          );
+          return;
+        }
+        setLoop({
+          status: "error",
+          frames: [],
+          message: error?.message ?? "GK2A imagery is unavailable",
+          durationMinutes: null,
+          cadenceMinutes: null,
+        });
+      });
+
+    return () => controller.abort();
+    // Loading state changes must not restart and abort this request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened]);
+
+  useEffect(() => {
+    if (loop.status !== "ready" || loop.frames.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const preloaders = loop.frames.map((candidate) => {
+      const image = new window.Image();
+      image.onload = () => {
+        if (!cancelled) {
+          setLoadedFrameTimes((current) => {
+            if (current.has(candidate.tm)) {
+              return current;
+            }
+            const next = new Set(current);
+            next.add(candidate.tm);
+            return next;
+          });
+        }
+      };
+      image.src = candidate.src;
+      return image;
+    });
+    return () => {
+      cancelled = true;
+      for (const image of preloaders) {
+        image.onload = null;
+      }
+    };
+  }, [loop.frames, loop.status]);
+
+  const allFramesBuffered =
+    loop.status === "ready" &&
+    loop.frames.length > 0 &&
+    loadedFrameTimes.size === loop.frames.length;
+
+  useEffect(() => {
+    if (!playing || !allFramesBuffered || loop.frames.length < 2) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setFrameIndex((current) => (current + 1) % loop.frames.length);
+    }, 650);
+    return () => window.clearInterval(timer);
+  }, [allFramesBuffered, loop.frames.length, playing]);
+
+  const frame = loop.frames[frameIndex] ?? null;
+  const windLabel = Number.isFinite(windDirectionDeg)
+    ? `${String(Math.round(windDirectionDeg)).padStart(3, "0")}° ${compassDirection(
+        windDirectionDeg,
+      )}`
+    : "unavailable";
+  const etaLabel = Number.isFinite(upstreamEtaMinutes)
+    ? `~${Math.round(upstreamEtaMinutes)} min`
+    : "unavailable";
+
+  return (
+    <details
+      className="border-t border-white/10"
+      onToggle={(event) => setOpened(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-cyan-300 transition hover:bg-cyan-300/[0.04] md:px-5 [&::-webkit-details-marker]:hidden">
+        <span>GK2A loop · previous 60–90 minutes</span>
+        <span className="text-slate-500">Expand ↘</span>
+      </summary>
+
+      <div className="grid gap-4 border-t border-white/[0.06] bg-[#06101c] p-4 lg:grid-cols-[minmax(0,840px)_minmax(220px,1fr)] md:p-5">
+        <div className="relative h-[440px] max-w-[840px] overflow-hidden border border-white/10 bg-black">
+          {loop.status === "loading" && (
+            <div className="grid h-full place-items-center font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500">
+              Loading KMA frames…
+            </div>
+          )}
+          {loop.status === "error" && (
+            <div className="grid h-full place-items-center px-6 text-center font-mono text-[10px] leading-5 text-rose-300">
+              {loop.message}
+            </div>
+          )}
+          {frame && (
+            <>
+              {/* Fixed crop centers RKSI (37.4602, 126.4407) in KMA's 600 px
+                  ko020lc cloud-enhanced image. */}
+              <img
+                key={frame.tm}
+                src={frame.src}
+                alt={`GK2A cloud-enhanced image around RKSI at ${frame.label}`}
+                onLoad={() =>
+                  setLoadedFrameTimes((current) => {
+                    if (current.has(frame.tm)) {
+                      return current;
+                    }
+                    const next = new Set(current);
+                    next.add(frame.tm);
+                    return next;
+                  })
+                }
+                className="absolute h-[840px] w-[840px] max-w-none select-none object-fill"
+                style={{
+                  left: "calc(50% - 416px)",
+                  top: "calc(50% - 392px)",
+                }}
+              />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0,transparent_48%,rgba(1,7,15,0.38)_100%)]" />
+              {Number.isFinite(windDirectionDeg) && (
+                <div
+                  className="pointer-events-none absolute left-1/2 top-1/2 -ml-8 -mt-40 h-40 w-16 border-x border-cyan-200/35 bg-gradient-to-t from-cyan-300/20 to-transparent"
+                  style={{
+                    transformOrigin: "50% 100%",
+                    transform: `rotate(${windDirectionDeg}deg)`,
+                  }}
+                  aria-hidden="true"
+                >
+                  <span className="absolute bottom-1 left-1/2 h-[calc(100%-0.25rem)] w-px -translate-x-1/2 bg-cyan-100/75" />
+                  <span className="absolute bottom-0 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r border-cyan-100" />
+                </div>
+              )}
+              <span className="pointer-events-none absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-cyan-300 shadow-[0_0_18px_4px_rgba(34,211,238,0.7)]" />
+              <span className="pointer-events-none absolute left-1/2 top-1/2 ml-3 mt-2 bg-[#03101b]/90 px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-[0.12em] text-white">
+                RKSI
+              </span>
+              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-3 pt-8">
+                <span className="font-mono text-[10px] text-white">
+                  {frame.label}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFrameIndex((current) =>
+                        current === 0 ? loop.frames.length - 1 : current - 1,
+                      )
+                    }
+                    className="grid h-7 w-7 place-items-center border border-white/20 bg-black/60 text-xs text-white hover:border-white/50"
+                    aria-label="Previous GK2A frame"
+                  >
+                    ←
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPlaying((current) => !current)}
+                    disabled={!allFramesBuffered}
+                    className="h-7 min-w-14 border border-white/20 bg-black/60 px-2 font-mono text-[9px] uppercase tracking-[0.12em] text-white hover:border-white/50 disabled:cursor-wait disabled:text-slate-400"
+                  >
+                    {!allFramesBuffered
+                      ? `Buffer ${loadedFrameTimes.size}/${loop.frames.length}`
+                      : playing
+                        ? "Pause"
+                        : "Play"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFrameIndex(
+                        (current) => (current + 1) % loop.frames.length,
+                      )
+                    }
+                    className="grid h-7 w-7 place-items-center border border-white/20 bg-black/60 text-xs text-white hover:border-white/50"
+                    aria-label="Next GK2A frame"
+                  >
+                    →
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
+              Surface-wind overlay
+            </p>
+            <p className="mt-1 text-lg text-slate-100">From {windLabel}</p>
+            <p className="mt-1 font-mono text-[9px] leading-4 text-slate-500">
+              {Number.isFinite(windSpeedKt)
+                ? `${windSpeedKt.toFixed(1)} kt representative AMOS wind`
+                : "No current representative AMOS wind"}
+            </p>
+          </div>
+          <div>
+            <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
+              Estimated arrival / clearing
+            </p>
+            <p className="mt-1 text-lg text-slate-100">{etaLabel}</p>
+            <p className="mt-1 font-mono text-[9px] leading-4 text-slate-500">
+              Distance divided by surface wind; cloud-layer motion can differ.
+            </p>
+          </div>
+          <div>
+            <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
+              Loop coverage
+            </p>
+            <p className="mt-1 text-lg text-slate-100">
+              {Number.isFinite(loop.durationMinutes)
+                ? `${loop.durationMinutes} minutes`
+                : "Awaiting frames"}
+            </p>
+            <p className="mt-1 font-mono text-[9px] leading-4 text-slate-500">
+              {loop.frames.length
+                ? `${loop.frames.length} frames · ${loop.cadenceMinutes}-minute display cadence`
+                : "Loaded only while this panel is expanded"}
+            </p>
+          </div>
+          <p className="border-t border-white/10 pt-3 font-mono text-[9px] leading-4 text-slate-600">
+            Source: KMA/NMSC GK2A RGB cloud-enhanced imagery. The corridor is
+            oriented by surface wind and is not a satellite-derived cloud-motion
+            vector.
+          </p>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function SolarHeatingPanel({ solar, queryLoading, latestAmos }) {
+  const latest = solar?.latest ?? null;
+  const configured = solar?.configured !== false;
+  const status = queryLoading
+    ? "loading"
+    : !configured
+      ? "setup required"
+      : (solar?.status ?? (latest ? "current" : "awaiting data"));
+  const currentTransmission = formatPercent(latest?.transmissionPct);
+  const currentDetail = Number.isFinite(latest?.dsrWm2)
+    ? `${Math.round(latest.dsrWm2)} W/m² DSR at ${formatClock(latest.obsTimeUtc)}`
+    : configured
+      ? "No valid daylight DSR sample"
+      : "Set KMA_API_HUB_AUTH_KEY in Convex";
+  const changeDetail = Number.isFinite(solar?.change30mActualMinutes)
+    ? `Nearest valid sample ${Math.round(solar.change30mActualMinutes)} min earlier`
+    : "Requires two valid daylight samples";
+  const clearingValue =
+    solar?.upstreamClearing === true
+      ? "Yes"
+      : solar?.upstreamClearing === false
+        ? "No"
+        : "Unknown";
+  const windDirectionDeg = Number.isFinite(solar?.windDirectionDeg)
+    ? solar.windDirectionDeg
+    : latestAmos?.windDirAvg;
+  const windSpeedKt = Number.isFinite(solar?.windSpeedKt)
+    ? solar.windSpeedKt
+    : latestAmos?.windSpeedAvg;
+  const statusTone =
+    status === "ok" || status === "current"
+      ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-300"
+      : status === "loading" || status === "night"
+        ? "border-slate-400/20 bg-slate-400/10 text-slate-400"
+        : "border-amber-300/25 bg-amber-300/10 text-amber-300";
+
+  return (
+    <section className="mt-5 border border-white/10 bg-[#081321]/85">
+      <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-4 md:px-5">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-amber-300">
+            Solar heating
+          </p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Actual GK2A surface downward shortwave radiation relative to a
+            modeled clear sky.
+          </p>
+        </div>
+        <span
+          className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${statusTone}`}
+        >
+          {status}
+        </span>
+      </div>
+
+      <div className="grid gap-px border-y border-white/10 bg-white/10 sm:grid-cols-2 xl:grid-cols-4">
+        <OutlookMetric
+          label="Current solar transmission"
+          value={queryLoading ? "Loading…" : currentTransmission}
+          detail={currentDetail}
+          tone="text-amber-200"
+        />
+        <OutlookMetric
+          label="Change over 30 minutes"
+          value={formatPercentagePointChange(solar?.change30mPctPoints)}
+          detail={changeDetail}
+          tone={
+            solar?.change30mPctPoints > 2
+              ? "text-amber-200"
+              : solar?.change30mPctPoints < -2
+                ? "text-sky-200"
+                : "text-slate-200"
+          }
+        />
+        <OutlookMetric
+          label="Expected next hour"
+          value={solarTrendLabel(solar?.expectedNextHour)}
+          detail="Recent transmission trend plus upwind GK2A points"
+          tone={
+            solar?.expectedNextHour === "increasing"
+              ? "text-amber-200"
+              : solar?.expectedNextHour === "decreasing"
+                ? "text-sky-200"
+                : "text-slate-200"
+          }
+        />
+        <OutlookMetric
+          label="Cloud clearing upstream"
+          value={clearingValue}
+          detail={
+            Number.isFinite(solar?.upstreamEtaMinutes)
+              ? `Surface-wind proxy ~${Math.round(
+                  solar.upstreamEtaMinutes,
+                )} min`
+              : "Requires upwind DSR and representative wind"
+          }
+          tone={
+            solar?.upstreamClearing === true
+              ? "text-emerald-200"
+              : "text-slate-200"
+          }
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-2 font-mono text-[9px] leading-4 text-slate-600 md:px-5">
+        <span>
+          {Number.isFinite(latest?.clearSkyDsrWm2)
+            ? `Modeled clear sky ${Math.round(latest.clearSkyDsrWm2)} W/m²`
+            : "Transmission is hidden at night and at very low sun angles"}
+        </span>
+        <span>
+          Source: KMA/NMSC GK2A · 10-minute point product · approx. 2 km
+        </span>
+      </div>
+
+      <Gk2aLoop
+        windDirectionDeg={windDirectionDeg}
+        windSpeedKt={windSpeedKt}
+        upstreamEtaMinutes={solar?.upstreamEtaMinutes}
+      />
+    </section>
+  );
+}
+
 function MaxOutlookPanel({
   date,
   today,
@@ -2464,10 +2903,7 @@ function MaxOutlookPanel({
       predictionFallbackReason = `stored outlook is ${Math.round(
         predictionAgeMinutes,
       )}m old`;
-    } else if (
-      !isArchive &&
-      !Number.isFinite(predictionForecastAgeMinutes)
-    ) {
+    } else if (!isArchive && !Number.isFinite(predictionForecastAgeMinutes)) {
       predictionFallbackReason = "Weather.com input time is unavailable";
     } else if (
       !isArchive &&
@@ -2484,9 +2920,7 @@ function MaxOutlookPanel({
           ? `outlook generated ${predictionGeneratedAt} KST`
           : null,
         Number.isFinite(predictionForecastAgeMinutes)
-          ? `Weather.com input ${Math.round(
-              predictionForecastAgeMinutes,
-            )}m old`
+          ? `Weather.com input ${Math.round(predictionForecastAgeMinutes)}m old`
           : null,
       ]
         .filter(Boolean)
@@ -3080,8 +3514,13 @@ export default function SeoulDayPage() {
     "seoulWeather:getHighPredictionDashboard",
     isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
+  const solarDashboard = useQuery(
+    "seoulGk2a:getSolarHeatingDashboard",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
+  );
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
   const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
+  const pollSolarHeating = useAction("seoulGk2a:pollLatestSolarHeating");
 
   const metarRows = dayData?.rows ?? [];
   const amosRows = dayData?.amosRows ?? [];
@@ -3285,8 +3724,7 @@ export default function SeoulDayPage() {
       hourlyCloudCover
         .filter(
           (hour) =>
-            hour.phase === "observed" &&
-            Number.isFinite(hour.forecastDeltaPct),
+            hour.phase === "observed" && Number.isFinite(hour.forecastDeltaPct),
         )
         .at(-1) ?? null,
     [hourlyCloudCover],
@@ -3356,7 +3794,8 @@ export default function SeoulDayPage() {
             boxHeight: 2,
             padding: 22,
             filter(legendItem, chartData) {
-              return !chartData.datasets[legendItem.datasetIndex]?.hideFromLegend;
+              return !chartData.datasets[legendItem.datasetIndex]
+                ?.hideFromLegend;
             },
             font: {
               family: "IBM Plex Mono, monospace",
@@ -3575,18 +4014,26 @@ export default function SeoulDayPage() {
       const sourceResults = await Promise.allSettled([
         pollMetar({ stationIcao: STATION_ICAO }),
         pollOneMinuteAmos({ stationIcao: STATION_ICAO }),
+        pollSolarHeating({ stationIcao: STATION_ICAO }),
       ]);
       const sourceFailures = sourceResults.filter(
         (result) => result.status === "rejected",
       );
+      const solarResult = sourceResults[2];
+      const solarUnconfigured =
+        solarResult?.status === "fulfilled" &&
+        (solarResult.value?.configured === false ||
+          solarResult.value?.status === "unconfigured");
 
       for (const failure of sourceFailures) {
         console.error(failure.reason);
       }
 
-      const message = sourceFailures.length
-        ? `${2 - sourceFailures.length}/2 live sources refreshed`
-        : "Live sources refreshed";
+      const message = solarUnconfigured
+        ? "Observations refreshed · GK2A key required"
+        : sourceFailures.length
+          ? `${3 - sourceFailures.length}/3 live sources refreshed`
+          : "Live sources refreshed";
       setRefreshState({ active: false, message });
     } finally {
       refreshInFlight.current = false;
@@ -3673,8 +4120,8 @@ export default function SeoulDayPage() {
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
               One-minute representative AMOS temperature using the feed&apos;s
-              15L designation, official coded RKSI METAR, and hourly cloud
-              guidance across the full Seoul day.
+              15L designation, official coded RKSI METAR, hourly cloud guidance,
+              and GK2A shortwave radiation across the full Seoul day.
             </p>
           </div>
 
@@ -3815,6 +4262,12 @@ export default function SeoulDayPage() {
           guidanceLowC={guidanceLowC}
           guidanceHighC={guidanceHighC}
           trendCPerHour={trend60mCPerHour}
+        />
+
+        <SolarHeatingPanel
+          solar={solarDashboard}
+          queryLoading={solarDashboard === undefined}
+          latestAmos={latestAmos}
         />
 
         <section className="flex min-h-0 flex-1 flex-col pt-5">
@@ -3958,17 +4411,17 @@ export default function SeoulDayPage() {
               latest Weather.com cloud forecast captured strictly before the
               hour minus the observed METAR-sample estimate. Positive means the
               forecast was cloudier, negative means it was clearer, and the
-              difference is measured in percentage points. The live partial
-              hour is not scored.
+              difference is measured in percentage points. The live partial hour
+              is not scored.
             </p>
             {preferredProviderPeak && (
               <p>
                 A rose circle marks the raw provider daily high from the latest
                 stored Weather.com Seoul calendar-day forecast:{" "}
-                {preferredProviderPeak.temperature.toFixed(1)}{" "}
-                degrees {unit === "C" ? "Celsius" : "Fahrenheit"}. Its
-                horizontal position is the first tied maximum among the
-                Weather.com hourly values returned for that date, beginning at{" "}
+                {preferredProviderPeak.temperature.toFixed(1)} degrees{" "}
+                {unit === "C" ? "Celsius" : "Fahrenheit"}. Its horizontal
+                position is the first tied maximum among the Weather.com hourly
+                values returned for that date, beginning at{" "}
                 {minuteLabel(preferredProviderPeak.minute)} Korea Standard Time.
                 It is separate from the expected maximum in the outlook, which
                 is floored at the observed AMOS maximum.
@@ -3978,8 +4431,8 @@ export default function SeoulDayPage() {
               <p>
                 A green diamond and horizontal dashed line mark the first
                 occurrence of the observed representative AMOS maximum:{" "}
-                {observedMaxMarker.temperature.toFixed(1)}{" "}
-                degrees {unit === "C" ? "Celsius" : "Fahrenheit"} at{" "}
+                {observedMaxMarker.temperature.toFixed(1)} degrees{" "}
+                {unit === "C" ? "Celsius" : "Fahrenheit"} at{" "}
                 {minuteLabel(observedMaxMarker.minute)} Korea Standard Time.
               </p>
             )}
@@ -4097,9 +4550,7 @@ export default function SeoulDayPage() {
                               KST
                             </div>
                             <div className="mt-0.5 text-[10px] text-slate-500">
-                              {cloudForecastDeltaMeaning(
-                                hour.forecastDeltaPct,
-                              )}
+                              {cloudForecastDeltaMeaning(hour.forecastDeltaPct)}
                             </div>
                           </div>
                         ) : (
