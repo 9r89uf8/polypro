@@ -356,6 +356,11 @@ the one global slot every ten minutes, for a hard ceiling of 144 KMA requests
 per day; a scheduled attempt inside that cooldown is skipped. Provider
 approval must therefore cover public manual initiation and that maximum
 request cadence, not only the twice-hourly cron.
+Approval record: on 2026-07-29, the project owner confirmed that KMA/AMO
+approved the production RKSI integration for public on-demand initiation at
+the documented global limit of one request per ten minutes, in addition to the
+scheduled collection. No private approval correspondence or credentials are
+stored in the repository.
 The maximum-outlook header exposes this path as `Collect KMA now` on current
 and future forecast dates, reports queued/success/error state, and shows the
 remaining cooldown. Historical dates omit it because the current AMO page

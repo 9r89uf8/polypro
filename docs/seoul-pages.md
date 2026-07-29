@@ -458,6 +458,10 @@ single global slot every ten minutes: at most 144 KMA requests per day.
 Scheduled attempts that land inside that cooldown are skipped. KMA/AMO
 approval must explicitly cover public manual initiation and this maximum
 cadence in addition to the normal twice-hourly schedule.
+On 2026-07-29, the project owner confirmed that KMA/AMO granted that production
+scope: public on-demand RKSI collection at the documented global ten-minute
+limit plus scheduled collection. The repository records only the authority,
+scope, and confirmation date, not private approval correspondence.
 
 The forecast status badge is one of `Current KMA forecast`,
 `Stored KMA forecast`, `Stored KMA forecast · stale`,
