@@ -28,6 +28,55 @@ const STATION_ICAO = "LEMD";
 const STATION_NAME = "Adolfo Suárez Madrid–Barajas";
 const MADRID_TIMEZONE = "Europe/Madrid";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ROUTINE_METAR_INTERVAL_MS = 30 * 60 * 1000;
+const ROUTINE_METAR_FALLBACK_LAG_MS = 4 * 60 * 1000 + 20 * 1000;
+const STATION_OBSERVATION_INTERVAL_MS = 60 * 60 * 1000;
+const STATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+const MADRID_DATE_KEY_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: MADRID_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const MADRID_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: MADRID_TIMEZONE,
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+const MADRID_SCHEDULE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: MADRID_TIMEZONE,
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+  timeZoneName: "short",
+});
+const MADRID_CLOCK_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: MADRID_TIMEZONE,
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: true,
+  timeZoneName: "short",
+});
+const MADRID_STORED_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: MADRID_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+const MADRID_MINUTE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: MADRID_TIMEZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
 
 function isValidDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -43,16 +92,11 @@ function getDateParts(formatter, date) {
   return values;
 }
 
-function madridTodayKey() {
-  const parts = getDateParts(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: MADRID_TIMEZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }),
-    new Date(),
-  );
+function madridDateKeyForEpoch(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return null;
+  }
+  const parts = getDateParts(MADRID_DATE_KEY_FORMATTER, new Date(epochMs));
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
@@ -145,30 +189,35 @@ function formatMadridTime(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return "—";
   }
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: MADRID_TIMEZONE,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(new Date(epochMs));
+  return MADRID_TIME_FORMATTER.format(new Date(epochMs));
+}
+
+function formatMadridScheduleTime(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return "—";
+  }
+  return MADRID_SCHEDULE_TIME_FORMATTER.format(new Date(epochMs));
+}
+
+function formatMadridClock(epochMs) {
+  if (!Number.isFinite(epochMs)) {
+    return {
+      time: "—",
+      date: "Madrid local time",
+    };
+  }
+  const parts = getDateParts(MADRID_CLOCK_FORMATTER, new Date(epochMs));
+  return {
+    time: `${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod}`,
+    date: `${parts.weekday}, ${parts.month} ${parts.day} · ${parts.timeZoneName}`,
+  };
 }
 
 function formatMadridStoredDateTime(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return null;
   }
-  const parts = getDateParts(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: MADRID_TIMEZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }),
-    new Date(epochMs),
-  );
+  const parts = getDateParts(MADRID_STORED_TIME_FORMATTER, new Date(epochMs));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
@@ -176,15 +225,7 @@ function madridMinuteNow(epochMs) {
   if (!Number.isFinite(epochMs)) {
     return null;
   }
-  const parts = getDateParts(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: MADRID_TIMEZONE,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }),
-    new Date(epochMs),
-  );
+  const parts = getDateParts(MADRID_MINUTE_FORMATTER, new Date(epochMs));
   const hour = Number(parts.hour);
   const minute = Number(parts.minute);
   return Number.isFinite(hour) && Number.isFinite(minute)
@@ -227,6 +268,82 @@ function formatObservationAge(observedAt, nowMs) {
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return remainder ? `${hours}h ${remainder}m ago` : `${hours}h ago`;
+}
+
+function isRoutineMetarRow(row) {
+  const minute = parseLocalMinute(row?.obsTimeLocal);
+  const rawMetar = String(row?.rawMetar ?? "").trim();
+  return (
+    row?.reportType !== "SPECI" &&
+    !/^SPECI\b/i.test(rawMetar) &&
+    minute !== null &&
+    minute % 30 === 0 &&
+    Number.isFinite(row?.obsTimeUtc)
+  );
+}
+
+function buildExpectedUpdateTiming({
+  latestObservedAt,
+  intervalMs,
+  expectedLagMs,
+  nowMs,
+}) {
+  if (!Number.isFinite(nowMs)) {
+    return null;
+  }
+
+  if (!Number.isFinite(latestObservedAt)) {
+    return null;
+  }
+
+  const observationAt = latestObservedAt + intervalMs;
+  const expectedAt = observationAt + expectedLagMs;
+  return {
+    observationAt,
+    expectedAt,
+    isDue: nowMs >= expectedAt,
+  };
+}
+
+function nextIntervalBoundary(nowMs, intervalMs) {
+  if (!Number.isFinite(nowMs) || !Number.isFinite(intervalMs)) {
+    return null;
+  }
+  return (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
+}
+
+function formatCountdown(expectedAt, nowMs) {
+  if (!Number.isFinite(expectedAt) || !Number.isFinite(nowMs)) {
+    return "—";
+  }
+  const remainingMs = expectedAt - nowMs;
+  if (remainingMs <= 0) {
+    return "Due now";
+  }
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+}
+
+function formatElapsedDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "less than a minute";
+  }
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
 }
 
 function latestByTimestamp(rows, timestampKey) {
@@ -283,6 +400,43 @@ function getRaceRawMetar(row) {
     return row?.tgftpRawMetar ?? row?.rawMetar ?? row?.aemetRawMetar ?? null;
   }
   return row?.aemetRawMetar ?? row?.rawMetar ?? row?.tgftpRawMetar ?? null;
+}
+
+function isRoutineRaceRow(row) {
+  if (!Number.isFinite(row?.reportTsUtc)) {
+    return false;
+  }
+  const reportMinute = Math.floor(row.reportTsUtc / 60000) % 60;
+  return (
+    row.reportType !== "SPECI" &&
+    !/^SPECI\b/i.test(String(getRaceRawMetar(row) ?? "").trim()) &&
+    reportMinute % 30 === 0
+  );
+}
+
+function getRecentRoutineMetarLagMs(raceRows) {
+  const lags = raceRows
+    .filter((row) => isRoutineRaceRow(row))
+    .map((row) => {
+      const firstSeenAt = getRaceFirstSeen(row);
+      return Number.isFinite(firstSeenAt) ? firstSeenAt - row.reportTsUtc : null;
+    })
+    .filter(
+      (lagMs) =>
+        Number.isFinite(lagMs) &&
+        lagMs >= 0 &&
+        lagMs <= 15 * 60 * 1000,
+    )
+    .slice(0, 24)
+    .sort((a, b) => a - b);
+
+  if (!lags.length) {
+    return ROUTINE_METAR_FALLBACK_LAG_MS;
+  }
+  const midpoint = Math.floor(lags.length / 2);
+  return lags.length % 2
+    ? lags[midpoint]
+    : (lags[midpoint - 1] + lags[midpoint]) / 2;
 }
 
 function buildRaceMetarRows(raceRows, date) {
@@ -579,7 +733,12 @@ function StatusDot({ tone }) {
       : tone === "stale"
         ? "bg-amber-400 shadow-[0_0_0_5px_rgba(251,191,36,0.16)]"
         : "bg-slate-400";
-  return <span className={`h-2.5 w-2.5 rounded-full ${toneClass}`} />;
+  return (
+    <span
+      aria-hidden="true"
+      className={`h-2.5 w-2.5 rounded-full ${toneClass}`}
+    />
+  );
 }
 
 export default function MadridDayPage() {
@@ -594,8 +753,8 @@ export default function MadridDayPage() {
   const autoRefreshDateRef = useRef(null);
 
   const isDateValid = isValidDate(date);
-  const today = madridTodayKey();
-  const isToday = isDateValid && date === today;
+  const today = madridDateKeyForEpoch(nowMs);
+  const isToday = isDateValid && today !== null && date === today;
 
   const pollLatestNoaaMetar = useAction("madrid:pollLatestNoaaPublishRace");
 
@@ -611,6 +770,15 @@ export default function MadridDayPage() {
     "madrid:getAemetStationObservations",
     isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
+  const previousStationData = useQuery(
+    "madrid:getAemetStationObservations",
+    isToday
+      ? {
+          stationIcao: STATION_ICAO,
+          date: shiftDateKey(date, -1),
+        }
+      : "skip",
+  );
   const raceData = useQuery(
     "madrid:getRecentPublishRaceReports",
     isDateValid
@@ -621,6 +789,7 @@ export default function MadridDayPage() {
   const storedMetarRows = dayData?.rows ?? [];
   const forecastRows = forecastData?.rows ?? [];
   const stationRows = stationData?.rows ?? [];
+  const previousStationRows = previousStationData?.rows ?? [];
   const raceRows = raceData?.rows ?? [];
   const raceMetarRows = useMemo(
     () => buildRaceMetarRows(raceRows, date),
@@ -635,6 +804,8 @@ export default function MadridDayPage() {
     forecastData === undefined ||
     stationData === undefined ||
     raceData === undefined;
+  const isTimingLoading =
+    isLoading || (isToday && previousStationData === undefined);
 
   const forecastPeak = useMemo(
     () => buildForecastPeak(forecastRows),
@@ -643,6 +814,34 @@ export default function MadridDayPage() {
   const airportReading = useMemo(
     () => buildFreshestAirportReading(metarRows, stationRows),
     [metarRows, stationRows],
+  );
+  const latestRoutineMetar = useMemo(
+    () =>
+      latestByTimestamp(
+        metarRows.filter((row) => isRoutineMetarRow(row)),
+        "obsTimeUtc",
+      ),
+    [metarRows],
+  );
+  const latestRoutineRaceReport = useMemo(
+    () =>
+      latestByTimestamp(
+        raceRows.filter((row) => isRoutineRaceRow(row)),
+        "reportTsUtc",
+      ),
+    [raceRows],
+  );
+  const latestScheduleStation = useMemo(
+    () =>
+      latestByTimestamp(
+        [...previousStationRows, ...stationRows],
+        "obsTimeUtc",
+      ),
+    [previousStationRows, stationRows],
+  );
+  const routineMetarExpectedLagMs = useMemo(
+    () => getRecentRoutineMetarLagMs(raceRows),
+    [raceRows],
   );
 
   const freshest = airportReading.freshest;
@@ -659,6 +858,55 @@ export default function MadridDayPage() {
     Number.isFinite(freshest?.observedAt) &&
     nowMs - freshest.observedAt <= 75 * 60 * 1000;
   const readingTone = isFresh ? "live" : freshest ? "stale" : "empty";
+  const madridClock = formatMadridClock(nowMs);
+  const currentMadridMinute = isToday ? madridMinuteNow(nowMs) : null;
+  const latestRoutineMetarObservedAt = Math.max(
+    ...[
+      latestRoutineMetar?.obsTimeUtc,
+      latestRoutineRaceReport?.reportTsUtc,
+    ].filter(Number.isFinite),
+  );
+  const nextMetarTiming = isToday
+    ? buildExpectedUpdateTiming({
+        latestObservedAt: Number.isFinite(latestRoutineMetarObservedAt)
+          ? latestRoutineMetarObservedAt
+          : null,
+        intervalMs: ROUTINE_METAR_INTERVAL_MS,
+        expectedLagMs: routineMetarExpectedLagMs,
+        nowMs,
+      })
+    : null;
+  const nextStationTiming = isToday
+    ? buildExpectedUpdateTiming({
+        latestObservedAt: latestScheduleStation?.obsTimeUtc,
+        intervalMs: STATION_OBSERVATION_INTERVAL_MS,
+        expectedLagMs: 0,
+        nowMs,
+      })
+    : null;
+  const nextStationCheckAt = isToday
+    ? nextIntervalBoundary(nowMs, STATION_CHECK_INTERVAL_MS)
+    : null;
+  const metarFeedDelayed =
+    isToday &&
+    Number.isFinite(nowMs) &&
+    Number.isFinite(latestRoutineMetarObservedAt) &&
+    nowMs - latestRoutineMetarObservedAt > 90 * 60 * 1000;
+  const stationFeedDelayed =
+    isToday &&
+    Number.isFinite(nowMs) &&
+    Number.isFinite(latestScheduleStation?.obsTimeUtc) &&
+    nowMs - latestScheduleStation.obsTimeUtc > 2 * 60 * 60 * 1000;
+  const metarCountdownLabel = metarFeedDelayed
+    ? "Feed delayed"
+    : nextMetarTiming?.isDue
+      ? "Awaiting"
+      : formatCountdown(nextMetarTiming?.expectedAt, nowMs);
+  const stationCountdownLabel = stationFeedDelayed
+    ? "Feed delayed"
+    : nextStationTiming?.isDue
+      ? "Awaiting"
+      : formatCountdown(nextStationTiming?.observationAt, nowMs);
 
   useEffect(() => {
     setDateInput(date);
@@ -666,7 +914,7 @@ export default function MadridDayPage() {
 
   useEffect(() => {
     setNowMs(Date.now());
-    const intervalId = window.setInterval(() => setNowMs(Date.now()), 30000);
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, []);
 
@@ -710,7 +958,7 @@ export default function MadridDayPage() {
     try {
       await pollLatestNoaaMetar({ stationIcao: STATION_ICAO });
       setSyncMessage(
-        `Live METAR updated at ${formatMadridTime(Date.now())} Madrid time.`,
+        `Live METAR checked at ${formatMadridTime(Date.now())} Madrid time.`,
       );
     } catch {
       setSyncMessage(
@@ -774,12 +1022,11 @@ export default function MadridDayPage() {
       });
     }
 
-    const nowMinute = isToday ? madridMinuteNow(nowMs) : null;
-    if (Number.isFinite(nowMinute)) {
+    if (Number.isFinite(currentMadridMinute)) {
       annotations.now = {
         type: "line",
-        xMin: nowMinute,
-        xMax: nowMinute,
+        xMin: currentMadridMinute,
+        xMax: currentMadridMinute,
         borderColor: "rgba(15, 23, 42, 0.5)",
         borderWidth: 1.5,
         label: {
@@ -897,7 +1144,7 @@ export default function MadridDayPage() {
         },
       },
     };
-  }, [forecastPeak, isToday, nowMs, unit]);
+  }, [currentMadridMinute, forecastPeak, unit]);
 
   if (!isDateValid) {
     return (
@@ -1012,6 +1259,163 @@ export default function MadridDayPage() {
           </div>
         </header>
 
+        <section
+          aria-label="Madrid live time and expected airport updates"
+          className="overflow-hidden rounded-[1.75rem] border border-white/10 bg-[#162f36] text-white shadow-[0_18px_55px_rgba(15,23,42,0.13)]"
+        >
+          <div
+            className={`grid ${
+              isToday ? "lg:grid-cols-3" : "lg:grid-cols-1"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-4 px-5 py-4 sm:px-7 lg:block lg:py-5">
+              <div>
+                <div className="flex items-center gap-2">
+                  <StatusDot tone="live" />
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-100/70">
+                    Madrid now
+                  </p>
+                </div>
+                <p className="mt-1 text-xs font-semibold text-white/60 lg:hidden">
+                  {madridClock.date}
+                </p>
+              </div>
+              <time
+                data-testid="madrid-clock"
+                dateTime={
+                  Number.isFinite(nowMs)
+                    ? new Date(nowMs).toISOString()
+                    : undefined
+                }
+                className="block shrink-0 font-mono text-2xl font-semibold tabular-nums tracking-[-0.04em] text-white sm:text-3xl lg:mt-3 lg:text-4xl"
+                aria-label={`Current time in Madrid: ${madridClock.time}`}
+              >
+                {madridClock.time}
+              </time>
+              <p className="mt-1 hidden text-sm font-semibold text-white/60 lg:block">
+                {madridClock.date}
+              </p>
+            </div>
+
+            {isToday && isTimingLoading ? (
+              <div className="border-t border-white/10 px-5 py-5 text-sm font-semibold text-white/60 sm:px-7 lg:col-span-2 lg:border-l lg:border-t-0">
+                Loading the latest METAR and station schedules…
+              </div>
+            ) : isToday ? (
+              <>
+                <div className="border-t border-white/10 px-5 py-4 sm:px-7 lg:border-l lg:border-t-0 lg:py-5">
+                  <div className="flex items-start justify-between gap-4 lg:block">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-200/75">
+                        Next routine METAR expected
+                      </p>
+                      <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-white/60 sm:inline-flex">
+                        Estimated
+                      </span>
+                    </div>
+                    <p
+                      data-testid="metar-countdown"
+                      className={`shrink-0 font-mono text-2xl font-semibold tabular-nums tracking-[-0.04em] sm:text-3xl lg:mt-3 lg:text-4xl ${
+                        nextMetarTiming?.isDue
+                          ? "text-amber-300"
+                          : "text-white"
+                      }`}
+                      aria-label={`Time remaining before the next expected METAR: ${metarCountdownLabel}`}
+                    >
+                      {metarCountdownLabel}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-white/65 lg:text-sm">
+                    {nextMetarTiming ? (
+                      nextMetarTiming.isDue ? (
+                        <>
+                          Awaiting the{" "}
+                          {formatMadridScheduleTime(
+                            nextMetarTiming.observationAt,
+                          )}{" "}
+                          report ·{" "}
+                          {formatElapsedDuration(
+                            nowMs - nextMetarTiming.expectedAt,
+                          )}{" "}
+                          later than usual
+                        </>
+                      ) : (
+                        <>
+                          {formatMadridScheduleTime(
+                            nextMetarTiming.observationAt,
+                          )}{" "}
+                          report · expected around{" "}
+                          {formatMadridScheduleTime(nextMetarTiming.expectedAt)}
+                        </>
+                      )
+                    ) : (
+                      "Routine METAR schedule unavailable."
+                    )}
+                  </p>
+                  <p className="mt-1 hidden text-xs text-white/60 lg:block">
+                    Recent first-seen lag is about{" "}
+                    {formatElapsedDuration(routineMetarExpectedLagMs)}. SPECI can
+                    arrive at any time.
+                  </p>
+                </div>
+
+                <div className="border-t border-white/10 px-5 py-4 sm:px-7 lg:border-l lg:border-t-0 lg:py-5">
+                  <div className="flex items-start justify-between gap-4 lg:block">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-200/75">
+                        Next 0.1°C observation
+                      </p>
+                      <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-white/60 sm:inline-flex">
+                        Station 3129
+                      </span>
+                    </div>
+                    <p
+                      data-testid="station-countdown"
+                      className={`shrink-0 font-mono text-2xl font-semibold tabular-nums tracking-[-0.04em] sm:text-3xl lg:mt-3 lg:text-4xl ${
+                        nextStationTiming?.isDue
+                          ? "text-sky-300"
+                          : "text-white"
+                      }`}
+                      aria-label={`Time remaining before the next expected station temperature observation: ${stationCountdownLabel}`}
+                    >
+                      {stationCountdownLabel}
+                    </p>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-white/65 lg:text-sm">
+                    {nextStationTiming ? (
+                      nextStationTiming.isDue ? (
+                        <>
+                          Awaiting the{" "}
+                          {formatMadridScheduleTime(
+                            nextStationTiming.observationAt,
+                          )}{" "}
+                          station reading · next source check in{" "}
+                          {formatCountdown(nextStationCheckAt, nowMs)}
+                        </>
+                      ) : (
+                        <>
+                          Nominal{" "}
+                          {formatMadridScheduleTime(
+                            nextStationTiming.observationAt,
+                          )}{" "}
+                          observation · next source check in{" "}
+                          {formatCountdown(nextStationCheckAt, nowMs)}
+                        </>
+                      )
+                    ) : (
+                      "Station observation schedule unavailable."
+                    )}
+                  </p>
+                  <p className="mt-1 hidden text-xs text-white/60 lg:block">
+                    Station 3129 is hourly. A ten-minute source check does not
+                    guarantee a new temperature.
+                  </p>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </section>
+
         <section className="grid gap-4 lg:grid-cols-[1.2fr_0.9fr_0.9fr]">
           <article className="relative overflow-hidden rounded-[2rem] border border-emerald-900/10 bg-[#f5fffb] p-6 shadow-[0_16px_45px_rgba(15,118,110,0.08)] sm:p-7">
             <div className="absolute right-0 top-0 h-28 w-28 rounded-bl-full bg-emerald-200/25" />
@@ -1107,6 +1511,7 @@ export default function MadridDayPage() {
                     key={nextUnit}
                     type="button"
                     onClick={() => setUnit(nextUnit)}
+                    aria-pressed={unit === nextUnit}
                     className={`rounded-full px-3.5 py-1.5 text-sm font-bold transition ${
                       unit === nextUnit
                         ? "bg-slate-950 text-white shadow-sm"
@@ -1129,10 +1534,29 @@ export default function MadridDayPage() {
           </div>
 
           <div className="px-3 py-4 sm:px-6 sm:py-6">
-            <div className="overflow-x-auto">
+            <p id="madrid-chart-summary" className="sr-only">
+              Temperature chart for {formatDateHeading(date)} with{" "}
+              {forecastRows.length} hourly forecast points, {stationRows.length}{" "}
+              station 3129 observations, and {metarRows.length} METAR or SPECI
+              actuals. The forecast maximum is{" "}
+              {formatTemperature(forecastMax, unit)} at{" "}
+              {forecastPeak?.peakTimeLabel ?? "an unavailable time"}.
+            </p>
+            <div
+              className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-700"
+              role="region"
+              aria-label="Scrollable 24-hour Madrid temperature chart"
+              aria-describedby="madrid-chart-summary"
+              tabIndex={0}
+            >
               <div className="h-[430px] min-w-[820px] sm:h-[500px]">
                 {chartData.datasets.length ? (
-                  <Line data={chartData} options={chartOptions} />
+                  <Line
+                    data={chartData}
+                    options={chartOptions}
+                    role="img"
+                    aria-label="Madrid forecast and airport temperature actuals"
+                  />
                 ) : (
                   <div className="grid h-full place-items-center rounded-3xl border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center text-sm text-slate-500">
                     {isLoading
