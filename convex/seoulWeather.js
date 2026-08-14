@@ -2,13 +2,31 @@ import {
   actionGeneric,
   internalActionGeneric,
   internalMutationGeneric,
+  internalQueryGeneric,
   queryGeneric,
 } from "convex/server";
 import { v } from "convex/values";
+import {
+  DECISION_INTERVAL_MS,
+  SEOUL_RAW_TARGET_C,
+  SEOUL_REMAINING_CEILING_MODEL_VERSION,
+  advanceDecisionState,
+  assessFutureObservationCoverage,
+  assessKmaHourlyCurve,
+  assessKmaUpwardRevision,
+  buildAmosChangeDiagnostics,
+  buildObservedTemperatureFeatures,
+  circularDifferenceDegrees,
+  computeKmaLiveBias,
+  computeKmaPeakWindow,
+  computeRemainingCeilings,
+  nearestRowAt,
+  normalizeDecisionTargetC,
+  planActiveDecisionTargetRegistration,
+} from "./seoulHighPredictionModel.js";
 
 const SEOUL_TIMEZONE = "Asia/Seoul";
-const KMA_AMO_APPROVAL_FLAG =
-  "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED";
+const KMA_AMO_APPROVAL_FLAG = "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED";
 const KMA_AMO_AIRPORT_FORECAST_URL =
   "https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI";
 const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
@@ -18,9 +36,11 @@ const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
 const WEATHERCOM_FALLBACK_API_KEY = "71f92ea9dd2f4790b92ea9dd2f779061";
 const RKSI_REPRESENTATIVE_RUNWAY_NO = "2";
 const RKSI_REPRESENTATIVE_RUNWAY_DIRECTION = "15L";
+const RKSI_SECONDARY_RUNWAY_NO = "3";
+const RKSI_SECONDARY_RUNWAY_DIRECTION = "16L";
 const MILLIS_PER_MINUTE = 60 * 1000;
 const MILLIS_PER_HOUR = 60 * MILLIS_PER_MINUTE;
-const PREDICTION_INTERVAL_MS = 5 * MILLIS_PER_MINUTE;
+const PREDICTION_INTERVAL_MS = DECISION_INTERVAL_MS;
 const MAX_LIVE_OBSERVATION_AGE_MS = 10 * MILLIS_PER_MINUTE;
 const MAX_PROVIDER_CAPTURE_AGE_MS = 12 * MILLIS_PER_HOUR;
 const MAX_KMA_CAPTURE_AGE_MS = 6 * MILLIS_PER_HOUR;
@@ -28,10 +48,15 @@ const KMA_COLLECTION_COOLDOWN_SECONDS = 10 * 60;
 const KMA_COLLECTION_LOCK_TIMEOUT_SECONDS = 15 * 60;
 const WEATHERCOM_BASELINE_WINDOW_MS = 2 * MILLIS_PER_HOUR;
 const WEATHERCOM_HISTORY_STALE_MS = 90 * MILLIS_PER_MINUTE;
-const PREDICTION_HEARTBEAT_MS = 30 * MILLIS_PER_MINUTE;
-const PREDICTION_MODEL_VERSION = "rksi15l-kma-amo-v1";
+const PREDICTION_MODEL_VERSION = SEOUL_REMAINING_CEILING_MODEL_VERSION;
+const MAX_DECISION_OBSERVATION_AGE_MS = 3 * MILLIS_PER_MINUTE;
+const MAX_DECISION_KMA_AGE_MS = 90 * MILLIS_PER_MINUTE;
+const MAX_DECISION_WEATHERCOM_AGE_MS = 90 * MILLIS_PER_MINUTE;
+const PEAK_CONFIRMATION_LAG_MS = 30 * MILLIS_PER_MINUTE;
+const NMSC_GK2A_APPROVAL_FLAG = "NMSC_GK2A_ACCESS_APPROVED";
 const MAX_DASHBOARD_REVISIONS = 288;
 const MAX_FORECAST_CAPTURES_FOR_DAY = 112;
+const MAX_ACTIVE_DECISION_TARGETS = 8;
 const WEATHER_STATUS = {
   OK: "ok",
   PARTIAL: "partial",
@@ -141,6 +166,10 @@ function hasApprovedKmaAmoAccess() {
   return process.env.KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED === "true";
 }
 
+function hasApprovedNmscGk2aAccess() {
+  return process.env.NMSC_GK2A_ACCESS_APPROVED === "true";
+}
+
 function addUtcDays(dateIso, days) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateIso);
   if (!match) {
@@ -184,14 +213,6 @@ function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function mean(values) {
-  const finite = values.filter(Number.isFinite);
-  if (!finite.length) {
-    return null;
-  }
-  return finite.reduce((total, value) => total + value, 0) / finite.length;
-}
-
 function median(values) {
   const finite = values.filter(Number.isFinite).sort((a, b) => a - b);
   if (!finite.length) {
@@ -201,18 +222,6 @@ function median(values) {
   return finite.length % 2
     ? finite[middle]
     : (finite[middle - 1] + finite[middle]) / 2;
-}
-
-function standardDeviation(values) {
-  const finite = values.filter(Number.isFinite);
-  if (finite.length < 2) {
-    return 0;
-  }
-  const average = mean(finite);
-  const variance =
-    finite.reduce((total, value) => total + (value - average) ** 2, 0) /
-    finite.length;
-  return Math.sqrt(variance);
 }
 
 function weightedMean(entries) {
@@ -499,8 +508,7 @@ export const getDayPageWeather = actionGeneric({
       todayDate: dashboard.todayDate,
       approval: dashboard.kmaAccess,
       forecast,
-      selectedDateForecast:
-        dashboard.kmaForecast?.selectedDateForecast ?? null,
+      selectedDateForecast: dashboard.kmaForecast?.selectedDateForecast ?? null,
     };
   },
 });
@@ -733,12 +741,16 @@ function amosCadencePriority(row) {
   return 0;
 }
 
-function canonicalizeRepresentativeAmosRows(rows) {
+function canonicalizeAmosRows(
+  rows,
+  rwyNo = RKSI_REPRESENTATIVE_RUNWAY_NO,
+  rwyDir = RKSI_REPRESENTATIVE_RUNWAY_DIRECTION,
+) {
   const byTimestamp = new Map();
   for (const row of rows) {
     if (
-      row.rwyNo !== RKSI_REPRESENTATIVE_RUNWAY_NO ||
-      row.rwyDir !== RKSI_REPRESENTATIVE_RUNWAY_DIRECTION ||
+      row.rwyNo !== rwyNo ||
+      row.rwyDir !== rwyDir ||
       !Number.isFinite(row.tempC)
     ) {
       continue;
@@ -758,6 +770,10 @@ function canonicalizeRepresentativeAmosRows(rows) {
     .sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
 }
 
+function canonicalizeRepresentativeAmosRows(rows) {
+  return canonicalizeAmosRows(rows);
+}
+
 function selectExtremeRow(rows, mode) {
   let selected = null;
   for (const row of rows) {
@@ -771,34 +787,6 @@ function selectExtremeRow(rows, mode) {
     }
   }
   return selected;
-}
-
-function calculateSlopeCPerHour(rows, windowMinutes) {
-  if (rows.length < 2) {
-    return null;
-  }
-  const latest = rows[rows.length - 1];
-  const targetTime = latest.obsTimeUtc - windowMinutes * MILLIS_PER_MINUTE;
-  let baseline = null;
-  for (const row of rows) {
-    if (row.obsTimeUtc <= targetTime) {
-      baseline = row;
-    } else {
-      break;
-    }
-  }
-  if (!baseline) {
-    return null;
-  }
-  const elapsedHours =
-    (latest.obsTimeUtc - baseline.obsTimeUtc) / MILLIS_PER_HOUR;
-  if (
-    elapsedHours < (windowMinutes / 60) * 0.75 ||
-    elapsedHours > (windowMinutes / 60) * 1.5
-  ) {
-    return null;
-  }
-  return roundToTenth((latest.tempC - baseline.tempC) / elapsedHours);
 }
 
 function interpolateHourlyTemperature(rows, epochMs) {
@@ -892,11 +880,7 @@ function findHighestForecastRow(rows, generatedAt, targetIsToday) {
   return selected;
 }
 
-function selectLatestUsableKmaCapture({
-  captures,
-  targetDate,
-  generatedAt,
-}) {
+function selectLatestUsableKmaCapture({ captures, targetDate, generatedAt }) {
   if (!hasApprovedKmaAmoAccess()) {
     return null;
   }
@@ -921,12 +905,7 @@ function selectLatestUsableKmaCapture({
   );
 }
 
-function buildKmaProvider({
-  capture,
-  targetDate,
-  targetIsToday,
-  generatedAt,
-}) {
+function buildKmaProvider({ capture, targetDate, targetIsToday, generatedAt }) {
   const day = capture?.dailyRows?.find((row) => row.date === targetDate);
   const dailyUsable =
     capture?.status === WEATHER_STATUS.OK && Number.isFinite(day?.maxTempC);
@@ -940,11 +919,7 @@ function buildKmaProvider({
       capturedAt: capture.capturedAt,
       capturedAtLocal: capture.capturedAtLocal,
     }));
-  const hourlyPeak = findHighestForecastRow(
-    dateRows,
-    generatedAt,
-    false,
-  );
+  const hourlyPeak = findHighestForecastRow(dateRows, generatedAt, false);
   const usable = dailyUsable && Boolean(hourlyPeak);
   const dailyHighC = dailyUsable ? roundToTenth(day.maxTempC) : null;
   const dailyHighF = dailyUsable
@@ -1201,9 +1176,7 @@ function buildHourlyEnsembleCurve(providerCurves) {
         ...(Number.isFinite(metadata?.ceilingFt)
           ? { ceilingFt: metadata.ceilingFt }
           : {}),
-        ...(metadata?.ceilingText
-          ? { ceilingText: metadata.ceilingText }
-          : {}),
+        ...(metadata?.ceilingText ? { ceilingText: metadata.ceilingText } : {}),
         ...(Number.isFinite(metadata?.windDirectionDeg)
           ? { windDirectionDeg: metadata.windDirectionDeg }
           : {}),
@@ -1229,23 +1202,660 @@ function buildHourlyEnsembleCurve(providerCurves) {
     });
 }
 
-function selectPreferredDailyPeakProvider(providerDetails) {
-  return (
-    providerDetails
-      .filter(
-        (provider) =>
-          provider.status === WEATHER_STATUS.OK &&
-          provider.weight > 0 &&
-          Number.isFinite(provider.dailyHighC) &&
-          Number.isFinite(provider.dailyPeakTimeUtc),
-      )
-      .sort(
-        (left, right) =>
-          right.weight - left.weight ||
-          (right.capturedAt ?? 0) - (left.capturedAt ?? 0) ||
-          left.provider.localeCompare(right.provider),
-      )[0] ?? null
+function addBlocker(target, code, description, critical = false) {
+  if (target.codes.includes(code)) {
+    return;
+  }
+  target.codes.push(code);
+  target.descriptions.push(description);
+  if (critical) {
+    target.criticalCodes.push(code);
+  }
+}
+
+function forecastWindDiagnostics(rows, generatedAt, liveWind) {
+  const future = (rows ?? []).filter(
+    (row) =>
+      row.forecastTimeUtc >= generatedAt - MILLIS_PER_MINUTE &&
+      row.forecastTimeUtc <= generatedAt + 2 * MILLIS_PER_HOUR,
   );
+  let maxDirectionChange = null;
+  let maxSpeedChange = null;
+  for (const row of future) {
+    if (
+      Number.isFinite(liveWind?.windDirAvg) &&
+      Number.isFinite(row.windDirectionDeg)
+    ) {
+      const change = circularDifferenceDegrees(
+        liveWind.windDirAvg,
+        row.windDirectionDeg,
+      );
+      maxDirectionChange = Number.isFinite(maxDirectionChange)
+        ? Math.max(maxDirectionChange, change)
+        : change;
+    }
+    if (
+      Number.isFinite(liveWind?.windSpeedAvg) &&
+      Number.isFinite(row.windSpeedKt)
+    ) {
+      const change = Math.abs(row.windSpeedKt - liveWind.windSpeedAvg);
+      maxSpeedChange = Number.isFinite(maxSpeedChange)
+        ? Math.max(maxSpeedChange, change)
+        : change;
+    }
+  }
+  return {
+    forecastWindDirectionChange2hDeg: Number.isFinite(maxDirectionChange)
+      ? roundToTenth(maxDirectionChange)
+      : null,
+    forecastWindSpeedChange2hKt: Number.isFinite(maxSpeedChange)
+      ? roundToTenth(maxSpeedChange)
+      : null,
+  };
+}
+
+function secondaryTemperatureDiagnostics({
+  primaryFeatures,
+  secondaryFeatures,
+  generatedAt,
+}) {
+  const secondaryLatest = secondaryFeatures.latestRow;
+  const primaryAtSecondary = secondaryLatest
+    ? nearestRowAt(primaryFeatures.rows, secondaryLatest.obsTimeUtc, 3)
+    : null;
+  const referenceTime = secondaryLatest
+    ? secondaryLatest.obsTimeUtc - 30 * MILLIS_PER_MINUTE
+    : null;
+  const secondaryReference = Number.isFinite(referenceTime)
+    ? nearestRowAt(secondaryFeatures.rows, referenceTime, 10)
+    : null;
+  const primaryReference = secondaryReference
+    ? nearestRowAt(primaryFeatures.rows, secondaryReference.obsTimeUtc, 3)
+    : null;
+  const currentDifference =
+    primaryAtSecondary && secondaryLatest
+      ? roundToTenth(secondaryLatest.tempC - primaryAtSecondary.tempC)
+      : null;
+  const referenceDifference =
+    primaryReference && secondaryReference
+      ? secondaryReference.tempC - primaryReference.tempC
+      : null;
+  return {
+    secondaryLatest,
+    observationAgeMinutes: secondaryLatest
+      ? roundToTenth(
+          Math.max(0, generatedAt - secondaryLatest.obsTimeUtc) /
+            MILLIS_PER_MINUTE,
+        )
+      : null,
+    differenceFrom15LC: currentDifference,
+    differenceChange30mC:
+      Number.isFinite(currentDifference) && Number.isFinite(referenceDifference)
+        ? roundToTenth(currentDifference - referenceDifference)
+        : null,
+  };
+}
+
+function weathercomVetoDiagnostics({
+  weathercom,
+  capture,
+  generatedAt,
+  targetC,
+}) {
+  const captureAgeMinutes = Number.isFinite(capture?.capturedAt)
+    ? roundToTenth(
+        Math.max(0, generatedAt - capture.capturedAt) / MILLIS_PER_MINUTE,
+      )
+    : null;
+  const fresh =
+    Number.isFinite(captureAgeMinutes) &&
+    captureAgeMinutes <= MAX_DECISION_WEATHERCOM_AGE_MS / MILLIS_PER_MINUTE;
+  const futureHourlyHigh = fresh
+    ? Math.max(
+        ...weathercom.rows
+          .filter(
+            (row) =>
+              row.forecastTimeUtc >= generatedAt - MILLIS_PER_MINUTE &&
+              Number.isFinite(row.tempC),
+          )
+          .map((row) => row.tempC),
+        Number.NEGATIVE_INFINITY,
+      )
+    : null;
+  const remainingHighC = Number.isFinite(futureHourlyHigh)
+    ? futureHourlyHigh
+    : null;
+  return {
+    remainingHighC: Number.isFinite(remainingHighC)
+      ? roundToTenth(remainingHighC)
+      : null,
+    capturedAt: capture?.capturedAt ?? null,
+    captureAgeMinutes,
+    vetoActive: Number.isFinite(remainingHighC) && remainingHighC >= targetC,
+  };
+}
+
+function solarSnapshotForPrediction(solar) {
+  if (!solar) {
+    return {};
+  }
+  const policyFields = {
+    ...(typeof solar.solarUsefulEnergyRemaining === "boolean"
+      ? {
+          solarUsefulEnergyRemaining: solar.solarUsefulEnergyRemaining,
+        }
+      : {}),
+    solarDecisionRequired: solar.solarUsefulEnergyRemaining !== false,
+  };
+  if (!hasApprovedNmscGk2aAccess() || solar.solarApprovalConfigured !== true) {
+    // These booleans come from the local Haurwitz model, not protected NMSC
+    // rows. Retaining them lets read-side revocation distinguish a legitimate
+    // low-solar decision from one that required GK2A evidence.
+    return policyFields;
+  }
+  const mapping = {
+    ...policyFields,
+    solarStatus: solar.solarStatus,
+    solarObservedAtUtc: solar.solarObservedAtUtc,
+    solarObservedAtLocal: solar.solarObservedAtLocal,
+    solarObservationAgeMinutes: solar.solarObservationAgeMinutes,
+    solarDsrWm2: solar.solarDsrWm2,
+    solarAsrWm2: solar.solarAsrWm2,
+    solarClearSkyDsrWm2: solar.solarClearSkyDsrWm2,
+    solarDsrChange30mWm2: solar.solarDsrChange30mWm2,
+    solarClearSkyDsrChange30mWm2: solar.solarModeledClearSkyDsrChange30mWm2,
+    solarTransmissionPct: solar.solarTransmissionPct,
+    solarTransmissionTrend: solar.solarTransmissionTrend,
+    solarTransmissionSlopePctPointsPerHour:
+      solar.solarTransmissionSlopePctPointsPerHour,
+    solarUpwindSignal: solar.solarUpwindSignal,
+    solarUpwindEtaMinutes: solar.solarUpwindEtaMinutes,
+    solarUpwindTransmissionPct: solar.solarUpwindMedianTransmissionPct,
+    solarUpwindDifferencePctPoints: solar.solarUpwindDifferencePctPoints,
+    solarUpwindPointCount: solar.solarUpwindPointCount,
+    solarWindObservedAtUtc: solar.solarWindObservedAtUtc,
+    solarWindDirectionFromDeg: solar.solarWindDirectionFromDeg,
+    solarWindSpeedKt: solar.solarWindSpeedKt,
+    solarLatitude: solar.solarLatitude,
+    solarLongitude: solar.solarLongitude,
+    solarSourceLatitude: solar.solarSourceLatitude,
+    solarSourceLongitude: solar.solarSourceLongitude,
+    solarSource: solar.solarSource,
+    solarSourceEndpoint: solar.solarSourceEndpoint,
+    solarSourceFileName: solar.solarSourceFileName,
+    solarSourceGridRow: solar.solarSourceGridRow,
+    solarSourceGridColumn: solar.solarSourceGridColumn,
+    solarSampleKey: solar.solarSampleKey,
+    solarProductCadenceMinutes: solar.solarProductCadenceMinutes,
+    solarCollectionRunAt: solar.solarCollectionRunAt,
+    solarDsrQualityFlag: solar.solarDsrQualityFlag,
+    solarAsrQualityFlag: solar.solarAsrQualityFlag,
+    solarShortwaveQualityFlag: solar.solarShortwaveQualityFlag,
+  };
+  return Object.fromEntries(
+    Object.entries(mapping).filter(([_field, value]) => value != null),
+  );
+}
+
+function solarInputsAtMutationBoundary(solar) {
+  if (hasApprovedNmscGk2aAccess()) {
+    return solar;
+  }
+  const usefulSolarEnergyRemaining =
+    solar?.solarUsefulEnergyRemaining === false ? false : true;
+  return {
+    stationIcao: solar?.stationIcao,
+    date: solar?.date,
+    evaluatedAtUtc: solar?.evaluatedAtUtc,
+    solarStatus: usefulSolarEnergyRemaining ? "approval_required" : "low_solar",
+    solarApprovalConfigured: false,
+    solarCollectionEligibleNow: false,
+    solarUsefulEnergyRemaining: usefulSolarEnergyRemaining,
+  };
+}
+
+function predictionKmaDailyHighC(prediction) {
+  const kma = (prediction?.providerDetails ?? []).find(
+    (provider) => provider.provider === "kma_amo",
+  );
+  return Number.isFinite(kma?.rawHighC) ? kma.rawHighC : null;
+}
+
+function decisionReason(
+  status,
+  targetC,
+  ceilingC,
+  consecutivePasses,
+  blockers,
+) {
+  if (status === "already_reached") {
+    return `The representative 15L AMOS temperature has reached ${targetC.toFixed(1)}°C.`;
+  }
+  if (status === "insufficient_data") {
+    return blockers[0] ?? "Critical decision input is unavailable or stale.";
+  }
+  if (status === "peak_candidate") {
+    return `The rule ceiling is ${ceilingC.toFixed(1)}°C, but the 15-minute confirmation has completed only ${consecutivePasses} of 3 follow-up checks.`;
+  }
+  if (status === "unlikely_to_reach") {
+    return `Unlikely to reach ${targetC.toFixed(1)}°C: the ${ceilingC.toFixed(1)}°C rule ceiling and all rebound checks passed ${consecutivePasses} consecutive evaluations.`;
+  }
+  if (blockers.length) {
+    return blockers[0];
+  }
+  return Number.isFinite(ceilingC)
+    ? `Still possible: the remaining rule ceiling is ${ceilingC.toFixed(1)}°C against a ${targetC.toFixed(1)}°C target.`
+    : "Still possible: no complete remaining-temperature ceiling is available.";
+}
+
+function kmaForecastSuggestsClearing(rows, generatedAt) {
+  return (rows ?? []).some((row) => {
+    if (
+      row.forecastTimeUtc < generatedAt - MILLIS_PER_MINUTE ||
+      row.forecastTimeUtc > generatedAt + 2 * MILLIS_PER_HOUR
+    ) {
+      return false;
+    }
+    return /clear|fair|sun|few|scattered|improv/i.test(
+      `${row.phrase ?? ""} ${row.conditionCode ?? ""}`,
+    );
+  });
+}
+
+function buildDecisionBlockers({
+  generatedAt,
+  targetC,
+  primaryFeatures,
+  observationAgeMinutes,
+  kmaCaptureAgeMinutes,
+  kmaPeakWindow,
+  kmaBias,
+  kmaCurve,
+  kmaRevision,
+  ceilings,
+  solar,
+  secondaryFeatures,
+  secondaryDiagnostics,
+  amosDiagnostics,
+  forecastWind,
+  kmaRows,
+  weathercomVeto,
+  previousDecisionState,
+}) {
+  const blockers = { codes: [], descriptions: [], criticalCodes: [] };
+  if (!primaryFeatures.latestRow) {
+    addBlocker(
+      blockers,
+      "amos_missing",
+      "No representative 15L AMOS temperature is available.",
+      true,
+    );
+  } else if (
+    !Number.isFinite(observationAgeMinutes) ||
+    observationAgeMinutes > MAX_DECISION_OBSERVATION_AGE_MS / MILLIS_PER_MINUTE
+  ) {
+    addBlocker(
+      blockers,
+      "amos_stale",
+      "The latest representative 15L AMOS observation is older than 3 minutes.",
+      true,
+    );
+  }
+  if (primaryFeatures.trailingHourCoverageMinutes < 45) {
+    addBlocker(
+      blockers,
+      "amos_coverage_weak",
+      "The trailing hour contains less than 45 minutes of representative AMOS coverage.",
+      true,
+    );
+  }
+  if (
+    !Number.isFinite(primaryFeatures.latestObservationGapMinutes) ||
+    primaryFeatures.latestObservationGapMinutes > 5
+  ) {
+    addBlocker(
+      blockers,
+      "amos_recent_gap",
+      "The representative AMOS series has a major gap at its latest edge.",
+      true,
+    );
+  }
+  for (const [minutes, slope] of [
+    [15, primaryFeatures.slope15mCPerHour],
+    [30, primaryFeatures.slope30mCPerHour],
+    [60, primaryFeatures.slope60mCPerHour],
+  ]) {
+    if (!Number.isFinite(slope)) {
+      addBlocker(
+        blockers,
+        `amos_trend_${minutes}m_unavailable`,
+        `The robust ${minutes}-minute AMOS trend lacks required coverage.`,
+        true,
+      );
+    }
+  }
+  if (
+    !Number.isFinite(kmaCaptureAgeMinutes) ||
+    kmaCaptureAgeMinutes > MAX_DECISION_KMA_AGE_MS / MILLIS_PER_MINUTE
+  ) {
+    addBlocker(
+      blockers,
+      "kma_stale",
+      "The KMA/AMO forecast capture is unavailable or older than 90 minutes.",
+      true,
+    );
+  }
+  if (!kmaPeakWindow) {
+    addBlocker(
+      blockers,
+      "kma_peak_window_unavailable",
+      "The complete tied KMA peak window is unavailable.",
+      true,
+    );
+  }
+  if (!Number.isFinite(kmaBias.liveBiasC)) {
+    addBlocker(
+      blockers,
+      "kma_live_bias_unavailable",
+      "The live KMA bias lacks 30 minutes of matched AMOS coverage.",
+      true,
+    );
+  }
+  if (!kmaCurve.complete) {
+    addBlocker(
+      blockers,
+      "kma_hourly_curve_incomplete",
+      "The KMA hourly curve does not provide continuous future coverage through the end of the Seoul day.",
+      true,
+    );
+  }
+  if (!kmaCurve.dailyHourlyConsistent) {
+    addBlocker(
+      blockers,
+      "kma_daily_hourly_inconsistent",
+      "The KMA daily maximum is more than 0.7°C above the captured hourly curve.",
+      true,
+    );
+  }
+  if (!Number.isFinite(ceilings.remainingRuleCeilingC)) {
+    addBlocker(
+      blockers,
+      "rule_ceiling_unavailable",
+      "The remaining rule ceiling cannot be calculated.",
+      true,
+    );
+  }
+
+  if (
+    kmaPeakWindow &&
+    generatedAt < kmaPeakWindow.peakWindowEndUtc + PEAK_CONFIRMATION_LAG_MS
+  ) {
+    addBlocker(
+      blockers,
+      "kma_peak_window_active",
+      "The last tied KMA peak hour plus its 30-minute safety lag has not ended.",
+    );
+  }
+  if (kmaRevision.upwardDetected) {
+    addBlocker(
+      blockers,
+      "kma_revised_upward",
+      "A new KMA capture revised the daily, hourly, or remaining upper temperature guidance upward.",
+    );
+  }
+  if (
+    Number.isFinite(primaryFeatures.slope15mCPerHour) &&
+    primaryFeatures.slope15mCPerHour > -0.2
+  ) {
+    addBlocker(
+      blockers,
+      "recent_warming_or_flat",
+      "The robust 15-minute trend is not cooling faster than 0.2°C/hour.",
+    );
+  }
+  if (
+    Number.isFinite(primaryFeatures.slope30mCPerHour) &&
+    primaryFeatures.slope30mCPerHour > -0.1
+  ) {
+    addBlocker(
+      blockers,
+      "medium_trend_not_cooling",
+      "The robust 30-minute trend is not cooling faster than 0.1°C/hour.",
+    );
+  }
+  if (
+    Number.isFinite(primaryFeatures.slope60mCPerHour) &&
+    primaryFeatures.slope60mCPerHour > 0
+  ) {
+    addBlocker(
+      blockers,
+      "hour_trend_positive",
+      "The robust 60-minute temperature trend is still positive.",
+    );
+  }
+  if (
+    Number.isFinite(primaryFeatures.dropFromHighC) &&
+    primaryFeatures.dropFromHighC < 0.2
+  ) {
+    addBlocker(
+      blockers,
+      "still_near_observed_high",
+      "The current smoothed temperature remains within 0.2°C of the observed high.",
+    );
+  }
+  if (
+    Number.isFinite(primaryFeatures.minutesSinceNearHigh) &&
+    primaryFeatures.minutesSinceNearHigh < 30
+  ) {
+    addBlocker(
+      blockers,
+      "recent_high_or_retie",
+      "The temperature was within 0.1°C of its observed high during the last 30 minutes.",
+    );
+  }
+
+  if (!solar || solar.solarStatus === "error") {
+    addBlocker(
+      blockers,
+      "solar_inputs_unavailable",
+      "The GK2A solar rebound check could not be evaluated.",
+    );
+  } else if (solar.solarUsefulEnergyRemaining === true) {
+    if (solar.solarApprovalConfigured !== true) {
+      addBlocker(
+        blockers,
+        "solar_approval_required",
+        `${NMSC_GK2A_APPROVAL_FLAG}=true approval is required while useful solar energy remains.`,
+      );
+    } else if (
+      solar.solarObservationFresh !== true ||
+      solar.solarQualityUsable !== true
+    ) {
+      addBlocker(
+        blockers,
+        "solar_observation_unavailable",
+        "A fresh, quality-usable GK2A observation is required while useful solar energy remains.",
+      );
+    } else {
+      if (solar.solarTransmissionTrend === "increasing") {
+        addBlocker(
+          blockers,
+          "solar_transmission_increasing",
+          "GK2A estimated solar transmission is increasing.",
+        );
+      } else if (solar.solarTransmissionTrend === "unavailable") {
+        addBlocker(
+          blockers,
+          "solar_transmission_trend_unavailable",
+          "GK2A transmission history is not yet long enough to rule out clearing.",
+        );
+      }
+      if (solar.solarUpwindSignal === "clearing") {
+        addBlocker(
+          blockers,
+          "solar_upwind_clearing",
+          `Clearer sky is approaching${
+            Number.isFinite(solar.solarUpwindEtaMinutes)
+              ? ` in approximately ${solar.solarUpwindEtaMinutes} minutes`
+              : ""
+          } according to GK2A upwind samples.`,
+        );
+      }
+      if (!Number.isFinite(solar.solarDsrChange30mWm2)) {
+        addBlocker(
+          blockers,
+          "solar_dsr_trend_unavailable",
+          "A 20–30-minute GK2A DSR comparison is unavailable.",
+        );
+      } else if (solar.solarDsrChange30mWm2 > 0) {
+        addBlocker(
+          blockers,
+          "solar_dsr_rising",
+          "Observed GK2A downward shortwave radiation has risen over the last 20–30 minutes.",
+        );
+      }
+      if (solar.solarModeledClearSkyDsrChange30mWm2 > 0) {
+        addBlocker(
+          blockers,
+          "clear_sky_irradiance_rising",
+          "Modeled clear-sky irradiance is still increasing.",
+        );
+      }
+    }
+  }
+
+  const secondaryFresh =
+    Number.isFinite(secondaryDiagnostics.observationAgeMinutes) &&
+    secondaryDiagnostics.observationAgeMinutes <=
+      MAX_DECISION_OBSERVATION_AGE_MS / MILLIS_PER_MINUTE;
+  const primaryCooling =
+    primaryFeatures.slope15mCPerHour <= -0.2 ||
+    primaryFeatures.slope30mCPerHour <= -0.1;
+  const secondaryWarming =
+    secondaryFeatures.slope15mCPerHour > 0 ||
+    secondaryFeatures.slope30mCPerHour > 0;
+  if (secondaryFresh && primaryCooling && secondaryWarming) {
+    addBlocker(
+      blockers,
+      "secondary_16l_warming",
+      "15L is cooling while the independent 16L temperature is warming.",
+    );
+  }
+  if (
+    secondaryFresh &&
+    Number.isFinite(secondaryFeatures.currentSmoothedC) &&
+    secondaryFeatures.currentSmoothedC >= targetC - 0.3
+  ) {
+    addBlocker(
+      blockers,
+      "secondary_16l_near_target",
+      "The independent 16L temperature remains within 0.3°C of the target.",
+    );
+  }
+  if (
+    secondaryFresh &&
+    Number.isFinite(secondaryDiagnostics.differenceChange30mC) &&
+    Math.abs(secondaryDiagnostics.differenceChange30mC) >= 0.4
+  ) {
+    addBlocker(
+      blockers,
+      "secondary_16l_divergence_changing",
+      "The 15L–16L temperature difference changed by at least 0.4°C in 30 minutes.",
+    );
+  }
+
+  const observedWindShift =
+    Number.isFinite(amosDiagnostics.windDirectionShift30mDeg) &&
+    amosDiagnostics.windDirectionShift30mDeg > 45;
+  const observedWindSpeedChange =
+    Number.isFinite(amosDiagnostics.windSpeedChange30mKt) &&
+    Math.abs(amosDiagnostics.windSpeedChange30mKt) >= 5;
+  const forecastWindShift =
+    Number.isFinite(forecastWind.forecastWindDirectionChange2hDeg) &&
+    forecastWind.forecastWindDirectionChange2hDeg > 45;
+  const forecastWindSpeedChange =
+    Number.isFinite(forecastWind.forecastWindSpeedChange2hKt) &&
+    forecastWind.forecastWindSpeedChange2hKt >= 5;
+  if (observedWindShift) {
+    addBlocker(
+      blockers,
+      "recent_wind_shift",
+      "AMOS wind direction shifted by more than 45° during the last 30 minutes.",
+    );
+  }
+  if (observedWindSpeedChange) {
+    addBlocker(
+      blockers,
+      "recent_wind_speed_change",
+      "AMOS wind speed changed sharply during the last 30 minutes.",
+    );
+  }
+  if (forecastWindShift) {
+    addBlocker(
+      blockers,
+      "forecast_wind_shift",
+      "KMA predicts a wind-direction change greater than 45° in the next two hours.",
+    );
+  }
+  if (forecastWindSpeedChange) {
+    addBlocker(
+      blockers,
+      "forecast_wind_speed_change",
+      "KMA predicts a sharp wind-speed change in the next two hours.",
+    );
+  }
+  if (
+    Number.isFinite(amosDiagnostics.dewpointChange30mC) &&
+    amosDiagnostics.dewpointChange30mC >= 0.5 &&
+    (observedWindShift || forecastWindShift)
+  ) {
+    addBlocker(
+      blockers,
+      "dewpoint_rising_with_wind_shift",
+      "Dew point rose by at least 0.5°C while the wind direction changed materially.",
+    );
+  }
+  const clearingSuggested =
+    solar?.solarUpwindSignal === "clearing" ||
+    solar?.solarTransmissionTrend === "increasing" ||
+    solar?.solarExpectedNextHour === "increasing" ||
+    kmaForecastSuggestsClearing(kmaRows, generatedAt);
+  if (amosDiagnostics.rainEndedRecently && clearingSuggested) {
+    addBlocker(
+      blockers,
+      "rain_ended_with_clearing",
+      "Recent rain has ended while KMA or GK2A indicates clearing and rebound risk.",
+    );
+  }
+  if (weathercomVeto.vetoActive) {
+    addBlocker(
+      blockers,
+      "secondary_forecast_reaches_target",
+      `Fresh Weather.com guidance still reaches ${targetC.toFixed(1)}°C; it is used only as a conservative veto.`,
+    );
+  }
+  if (
+    (previousDecisionState?.currentState === "peak_candidate" ||
+      previousDecisionState?.currentState === "unlikely_to_reach") &&
+    Number.isFinite(previousDecisionState.lastCurrentSmoothedC) &&
+    Number.isFinite(primaryFeatures.currentSmoothedC) &&
+    primaryFeatures.currentSmoothedC -
+      previousDecisionState.lastCurrentSmoothedC >=
+      0.2 - Number.EPSILON
+  ) {
+    addBlocker(
+      blockers,
+      "temperature_rebounded",
+      "The smoothed 15L temperature rose by at least 0.2°C since the preceding decision.",
+    );
+  }
+  return {
+    ...blockers,
+    observedWindShift,
+    observedWindSpeedChange,
+    forecastWindShift,
+    forecastWindSpeedChange,
+  };
 }
 
 function predictionState({
@@ -1329,14 +1939,140 @@ function predictionState({
   };
 }
 
-export const recomputeHighPredictionInternal = internalMutationGeneric({
+export const registerActiveHighPredictionTargetsInternal =
+  internalMutationGeneric({
+    args: {
+      stationIcao: v.string(),
+      date: v.string(),
+      targetCs: v.array(v.number()),
+    },
+    handler: async (ctx, args) => {
+      assertDateKey(args.date);
+      if (!hasApprovedKmaAmoAccess()) {
+        return {
+          status: "approval_required",
+          targetCs: [],
+          retiredTargetCs: [],
+        };
+      }
+      if (!args.targetCs.length || args.targetCs.length > 3) {
+        throw new Error(
+          "Register one to three Seoul decision targets at once.",
+        );
+      }
+      const now = Date.now();
+      const activeTargets = await ctx.db
+        .query("seoulPeakActiveTargets")
+        .withIndex("by_station_date_model_target", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("targetDate", args.date)
+            .eq("modelVersion", PREDICTION_MODEL_VERSION),
+        )
+        .collect();
+      const registration = planActiveDecisionTargetRegistration({
+        activeTargets,
+        requestedTargetCs: args.targetCs,
+        maxActiveTargets: MAX_ACTIVE_DECISION_TARGETS,
+      });
+      const retiredTargetCs = [];
+      for (const row of registration.retirementTargets) {
+        retiredTargetCs.push(normalizeDecisionTargetC(row.targetC));
+        await ctx.db.delete(row._id);
+      }
+      for (const row of registration.existingRequestedTargets) {
+        await ctx.db.patch(row._id, { updatedAt: now });
+      }
+      for (const targetC of registration.missingTargetCs) {
+        await ctx.db.insert("seoulPeakActiveTargets", {
+          stationIcao: args.stationIcao,
+          targetDate: args.date,
+          modelVersion: PREDICTION_MODEL_VERSION,
+          targetC,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      return {
+        status: "registered",
+        targetCs: [
+          ...(args.targetCs.some(
+            (targetC) =>
+              normalizeDecisionTargetC(targetC) === SEOUL_RAW_TARGET_C,
+          )
+            ? [SEOUL_RAW_TARGET_C]
+            : []),
+          ...registration.requestedTargetCs,
+        ],
+        retiredTargetCs,
+      };
+    },
+  });
+
+export const getActiveHighPredictionTargetsInternal = internalQueryGeneric({
   args: {
     stationIcao: v.string(),
     date: v.string(),
   },
   handler: async (ctx, args) => {
     assertDateKey(args.date);
-    const generatedAt = Date.now();
+    const rows = await ctx.db
+      .query("seoulPeakActiveTargets")
+      .withIndex("by_station_date_model_target", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("targetDate", args.date)
+          .eq("modelVersion", PREDICTION_MODEL_VERSION),
+      )
+      .collect();
+    return rows.map((row) => normalizeDecisionTargetC(row.targetC));
+  },
+});
+
+export const getHighPredictionStateTargetsInternal = internalQueryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    assertDateKey(args.date);
+    const rows = await ctx.db
+      .query("seoulPeakDecisionState")
+      .withIndex("by_station_date_model_target", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("targetDate", args.date)
+          .eq("modelVersion", PREDICTION_MODEL_VERSION),
+      )
+      .collect();
+    return rows.map((row) => normalizeDecisionTargetC(row.targetC));
+  },
+});
+
+export const recomputeHighPredictionInternal = internalMutationGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+    targetC: v.number(),
+    evaluatedAtUtc: v.optional(v.number()),
+    solarDecisionInputs: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    assertDateKey(args.date);
+    if (!hasApprovedKmaAmoAccess()) {
+      return {
+        prediction: null,
+        summary: null,
+        unavailable: {
+          status: "approval_required",
+          reason: "KMA/AMO airport forecast access approval is required.",
+        },
+      };
+    }
+    const targetC = normalizeDecisionTargetC(args.targetC);
+    const generatedAt = Number.isFinite(args.evaluatedAtUtc)
+      ? args.evaluatedAtUtc
+      : Date.now();
     const generatedAtLocal = formatDateTimeInTimezone(
       generatedAt,
       SEOUL_TIMEZONE,
@@ -1346,20 +2082,45 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
     const todayDate = formatDateInTimezone(generatedAt, SEOUL_TIMEZONE);
     const targetIsToday = args.date === todayDate;
 
-    const rawObservations = await ctx.db
-      .query("seoulAmosObservations")
-      .withIndex("by_station_date_rwy_ts", (query) =>
-        query
-          .eq("stationIcao", args.stationIcao)
-          .eq("date", args.date)
-          .eq("rwyNo", RKSI_REPRESENTATIVE_RUNWAY_NO)
-          .eq("rwyDir", RKSI_REPRESENTATIVE_RUNWAY_DIRECTION),
-      )
-      .collect();
+    const [rawObservations, rawSecondaryObservations] = await Promise.all([
+      ctx.db
+        .query("seoulAmosObservations")
+        .withIndex("by_station_date_rwy_ts", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("date", args.date)
+            .eq("rwyNo", RKSI_REPRESENTATIVE_RUNWAY_NO)
+            .eq("rwyDir", RKSI_REPRESENTATIVE_RUNWAY_DIRECTION),
+        )
+        .collect(),
+      ctx.db
+        .query("seoulAmosObservations")
+        .withIndex("by_station_date_rwy_ts", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("date", args.date)
+            .eq("rwyNo", RKSI_SECONDARY_RUNWAY_NO)
+            .eq("rwyDir", RKSI_SECONDARY_RUNWAY_DIRECTION),
+        )
+        .collect(),
+    ]);
     const observations = canonicalizeRepresentativeAmosRows(rawObservations);
-    const firstRow = observations[0] ?? null;
-    const latestRow = observations[observations.length - 1] ?? null;
-    const maxRow = selectExtremeRow(observations, "max");
+    const secondaryObservations = canonicalizeAmosRows(
+      rawSecondaryObservations,
+      RKSI_SECONDARY_RUNWAY_NO,
+      RKSI_SECONDARY_RUNWAY_DIRECTION,
+    );
+    const primaryFeatures = buildObservedTemperatureFeatures(
+      observations,
+      generatedAt,
+    );
+    const secondaryFeatures = buildObservedTemperatureFeatures(
+      secondaryObservations,
+      generatedAt,
+    );
+    const firstRow = primaryFeatures.rows[0] ?? null;
+    const latestRow = primaryFeatures.latestRow;
+    const maxRow = primaryFeatures.observedHighRow;
     const minRow = selectExtremeRow(observations, "min");
     const oneMinuteObsCount = observations.filter(
       (row) => row.collectionCadence === "one_minute",
@@ -1453,15 +2214,26 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
     const primaryCapture = kmaCapture;
     const previousPrediction = await ctx.db
       .query("seoulHighPredictions")
-      .withIndex("by_station_date_revision", (query) =>
-        query.eq("stationIcao", args.stationIcao).eq("targetDate", args.date),
+      .withIndex("by_station_date_model_target_revision", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("targetDate", args.date)
+          .eq("modelVersion", PREDICTION_MODEL_VERSION)
+          .eq("targetC", targetC),
       )
       .order("desc")
       .first();
-    const previousCanonicalPrediction =
-      previousPrediction?.modelVersion === PREDICTION_MODEL_VERSION
-        ? previousPrediction
-        : null;
+    const previousCanonicalPrediction = previousPrediction ?? null;
+    const previousDecisionState = await ctx.db
+      .query("seoulPeakDecisionState")
+      .withIndex("by_station_date_model_target", (query) =>
+        query
+          .eq("stationIcao", args.stationIcao)
+          .eq("targetDate", args.date)
+          .eq("modelVersion", PREDICTION_MODEL_VERSION)
+          .eq("targetC", targetC),
+      )
+      .first();
     const observationAgeMinutes = latestRow
       ? roundToTenth(
           Math.max(0, generatedAt - latestRow.obsTimeUtc) / MILLIS_PER_MINUTE,
@@ -1488,12 +2260,20 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
       targetIsToday,
       generatedAt,
     });
-    const providerDetails = [kma.detail, weathercom.detail];
-    const preferredDailyPeakProvider =
-      selectPreferredDailyPeakProvider(providerDetails);
-    const previousPreferredDailyPeakProvider = selectPreferredDailyPeakProvider(
-      previousCanonicalPrediction?.providerDetails ?? [],
+    const kmaBias = computeKmaLiveBias(
+      primaryFeatures.rows,
+      kma.rows,
+      generatedAt,
     );
+    const providerDetails = [
+      {
+        ...kma.detail,
+        ...(Number.isFinite(kmaBias.liveBiasC)
+          ? { liveBiasC: kmaBias.liveBiasC }
+          : {}),
+      },
+      weathercom.detail,
+    ];
     const hourlyEnsembleCurve =
       kma.detail.weight > 0
         ? buildHourlyEnsembleCurve([
@@ -1504,108 +2284,260 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
           ])
         : [];
 
-    const expectedCurrentC = kma.expectedCurrentC;
-    const ensemblePeak = findHighestForecastRow(
-      hourlyEnsembleCurve,
-      generatedAt,
-      targetIsToday,
-    );
     const forecastHighC = kma.adjustedHighC;
-    if (!Number.isFinite(forecastHighC)) {
+    const predictedHighCandidates = [forecastHighC, maxRow?.tempC].filter(
+      Number.isFinite,
+    );
+    const predictedHighC = predictedHighCandidates.length
+      ? roundToTenth(Math.max(...predictedHighCandidates))
+      : null;
+    const predictedHighF = Number.isFinite(predictedHighC)
+      ? toFahrenheit(predictedHighC)
+      : null;
+    const kmaPeakWindow = computeKmaPeakWindow(kma.rows);
+    const nextDate = addUtcDays(args.date, 1);
+    const endOfDayUtc = Date.parse(`${nextDate}T00:00:00+09:00`);
+    const ceilings = computeRemainingCeilings({
+      forecastRows: kma.rows,
+      evaluatedAt: generatedAt,
+      endOfDayUtc,
+      liveBiasC: kmaBias.liveBiasC,
+      currentSmoothedC: primaryFeatures.currentSmoothedC,
+      observedHighC: maxRow?.tempC,
+      slope15mCPerHour: primaryFeatures.slope15mCPerHour,
+      slope30mCPerHour: primaryFeatures.slope30mCPerHour,
+      targetC,
+    });
+    const kmaCurve = assessKmaHourlyCurve({
+      rows: kma.rows,
+      evaluatedAt: generatedAt,
+      endOfDayUtc,
+      dailyHighC: forecastHighC,
+    });
+    const kmaRevision = assessKmaUpwardRevision({
+      previousCaptureKey:
+        previousDecisionState?.lastKmaForecastCaptureId ??
+        previousCanonicalPrediction?.forecastCaptureId,
+      currentCaptureKey: primaryCapture?._id,
+      previousDailyHighC:
+        previousDecisionState?.lastKmaDailyHighC ??
+        predictionKmaDailyHighC(previousCanonicalPrediction),
+      currentDailyHighC: forecastHighC,
+      previousRemainingUpperC:
+        previousDecisionState?.lastKmaRemainingUpperC ??
+        previousCanonicalPrediction?.kmaRemainingUpperC,
+      currentRemainingUpperC: ceilings.kmaRemainingUpperC,
+      previousHourlyRows:
+        previousDecisionState?.lastKmaHourlyRows ??
+        previousCanonicalPrediction?.hourlyEnsembleCurve,
+      currentHourlyRows: kma.rows,
+      evaluatedAt: generatedAt,
+    });
+    const secondaryDiagnostics = secondaryTemperatureDiagnostics({
+      primaryFeatures,
+      secondaryFeatures,
+      generatedAt,
+    });
+    const amosDiagnostics = buildAmosChangeDiagnostics(
+      primaryFeatures.rows,
+      generatedAt,
+    );
+    const forecastWind = forecastWindDiagnostics(
+      kma.rows,
+      generatedAt,
+      amosDiagnostics.latest,
+    );
+    const weathercomVeto = weathercomVetoDiagnostics({
+      weathercom,
+      capture: weathercomCapture,
+      generatedAt,
+      targetC,
+    });
+    // Recheck NMSC approval in this mutation immediately before the decision
+    // state can be written. An approved snapshot passed by the action must not
+    // survive a flag removal that happened between the query and mutation.
+    const solarDecisionInputs = solarInputsAtMutationBoundary(
+      args.solarDecisionInputs,
+    );
+    const decisionBlockers = buildDecisionBlockers({
+      generatedAt,
+      targetC,
+      primaryFeatures,
+      observationAgeMinutes,
+      kmaCaptureAgeMinutes: Number.isFinite(primaryCapture?.capturedAt)
+        ? roundToTenth(
+            Math.max(0, generatedAt - primaryCapture.capturedAt) /
+              MILLIS_PER_MINUTE,
+          )
+        : null,
+      kmaPeakWindow,
+      kmaBias,
+      kmaCurve,
+      kmaRevision,
+      ceilings,
+      solar: solarDecisionInputs,
+      secondaryFeatures,
+      secondaryDiagnostics,
+      amosDiagnostics,
+      forecastWind,
+      kmaRows: kma.rows,
+      weathercomVeto,
+      previousDecisionState,
+    });
+    const decision = advanceDecisionState({
+      previousState: previousDecisionState,
+      evaluatedAt: generatedAt,
+      evaluationSlotUtc,
+      observedHighC: maxRow?.tempC,
+      targetC,
+      remainingRuleCeilingC: ceilings.remainingRuleCeilingC,
+      criticalBlockerCount: decisionBlockers.criticalCodes.length,
+      blockerCount: decisionBlockers.codes.length,
+    });
+    const persistedDecisionBlockers =
+      decision.currentState === "already_reached"
+        ? { codes: [], descriptions: [] }
+        : decisionBlockers;
+    // KMA guidance is also approval-gated. Do not persist its derived mutable
+    // state if approval changed after the capture was read.
+    if (!hasApprovedKmaAmoAccess()) {
       return {
         prediction: null,
         summary,
         unavailable: {
-          status: kmaAccessApproved ? "no_data" : "approval_required",
-          reason: kmaAccessApproved
-            ? `No fresh KMA/AMO airport forecast is available for ${args.date}.`
-            : "KMA/AMO airport forecast access approval is required.",
+          status: "approval_required",
+          reason: "KMA/AMO airport forecast access approval is required.",
         },
       };
     }
+    const currentKmaBaselineRows = (kma.rows ?? [])
+      .filter(
+        (row) =>
+          Number.isFinite(row?.forecastTimeUtc) && Number.isFinite(row?.tempC),
+      )
+      .map((row) => ({
+        forecastTimeUtc: row.forecastTimeUtc,
+        tempC: row.tempC,
+      }));
+    const decisionStateFields = {
+      stationIcao: args.stationIcao,
+      targetDate: args.date,
+      modelVersion: PREDICTION_MODEL_VERSION,
+      targetC,
+      consecutivePasses: decision.consecutivePasses,
+      lastEvaluationAt: generatedAt,
+      lastEvaluationSlotUtc: evaluationSlotUtc,
+      ...(Number.isFinite(ceilings.remainingRuleCeilingC)
+        ? { lastRuleCeilingC: ceilings.remainingRuleCeilingC }
+        : {}),
+      ...(Number.isFinite(primaryFeatures.currentSmoothedC)
+        ? { lastCurrentSmoothedC: primaryFeatures.currentSmoothedC }
+        : {}),
+      ...(primaryCapture?._id && currentKmaBaselineRows.length
+        ? {
+            lastKmaForecastCaptureId: primaryCapture._id,
+            lastKmaHourlyRows: currentKmaBaselineRows,
+          }
+        : {}),
+      ...(Number.isFinite(forecastHighC)
+        ? { lastKmaDailyHighC: forecastHighC }
+        : {}),
+      ...(Number.isFinite(ceilings.kmaRemainingUpperC)
+        ? { lastKmaRemainingUpperC: ceilings.kmaRemainingUpperC }
+        : {}),
+      solarDecisionRequired:
+        solarDecisionInputs?.solarUsefulEnergyRemaining !== false,
+      currentState: decision.currentState,
+      blockerCodes: persistedDecisionBlockers.codes,
+      blockerDescriptions: persistedDecisionBlockers.descriptions,
+      updatedAt: generatedAt,
+    };
+    let decisionStateId;
+    if (previousDecisionState) {
+      await ctx.db.patch(previousDecisionState._id, {
+        ...decisionStateFields,
+        candidateSinceUtc: Number.isFinite(decision.candidateSinceUtc)
+          ? decision.candidateSinceUtc
+          : undefined,
+        lastRuleCeilingC: Number.isFinite(ceilings.remainingRuleCeilingC)
+          ? ceilings.remainingRuleCeilingC
+          : undefined,
+        lastCurrentSmoothedC: Number.isFinite(primaryFeatures.currentSmoothedC)
+          ? primaryFeatures.currentSmoothedC
+          : undefined,
+      });
+      decisionStateId = previousDecisionState._id;
+    } else {
+      decisionStateId = await ctx.db.insert("seoulPeakDecisionState", {
+        ...decisionStateFields,
+        ...(Number.isFinite(decision.candidateSinceUtc)
+          ? { candidateSinceUtc: decision.candidateSinceUtc }
+          : {}),
+        createdAt: generatedAt,
+      });
+    }
 
-    const predictedHighC = roundToTenth(
-      Math.max(forecastHighC, maxRow?.tempC ?? Number.NEGATIVE_INFINITY),
-    );
-    const predictedHighF = toFahrenheit(predictedHighC);
-    const providerHighs = providerDetails
-      .filter((provider) => provider.weight > 0)
-      .map((provider) => provider.adjustedHighC)
-      .filter(Number.isFinite);
-    const uncertaintyC = clamp(
-      0.6 +
-        standardDeviation(providerHighs) +
-        (providerHighs.length < 2 ? 0.4 : 0) +
-        (!liveLatestRow ? 0.3 : 0),
-      0.7,
-      2.5,
-    );
-    const confidenceLowC = roundToTenth(
-      Math.max(
-        predictedHighC - uncertaintyC,
-        maxRow?.tempC ?? Number.NEGATIVE_INFINITY,
-      ),
-    );
-    const confidenceHighC = roundToTenth(predictedHighC + uncertaintyC);
-
-    const futureForecastHighC = ensemblePeak?.tempC ?? null;
-    const observedSetsPeak =
-      maxRow &&
-      (!kma.hourlyPeak || maxRow.tempC >= kma.hourlyPeak.tempC) &&
-      predictedHighC === maxRow.tempC;
-    const peakWindowStartUtc = observedSetsPeak
-      ? Math.floor(maxRow.obsTimeUtc / MILLIS_PER_HOUR) * MILLIS_PER_HOUR
-      : (kma.hourlyPeak?.forecastTimeUtc ??
-        Date.parse(`${args.date}T14:00:00+09:00`));
-    const peakWindowEndUtc = Number.isFinite(peakWindowStartUtc)
-      ? peakWindowStartUtc + MILLIS_PER_HOUR
+    const futureForecastHighC = Number.isFinite(ceilings.kmaRemainingBestHighC)
+      ? ceilings.kmaRemainingBestHighC
       : null;
-
-    const slope15mCPerHour = calculateSlopeCPerHour(observations, 15);
-    const slope30mCPerHour = calculateSlopeCPerHour(observations, 30);
-    const slope60mCPerHour = calculateSlopeCPerHour(observations, 60);
     const state = predictionState({
       previousPrediction: previousCanonicalPrediction,
       predictedHighC,
       observedHighC: maxRow?.tempC,
       observedCurrentC: liveLatestRow?.tempC,
-      expectedCurrentC,
-      slope60mCPerHour,
+      expectedCurrentC: ceilings.expectedCurrentC,
+      slope60mCPerHour: primaryFeatures.slope60mCPerHour,
       generatedAt,
-      peakWindowEndUtc,
+      peakWindowEndUtc: kmaPeakWindow?.peakWindowEndUtc,
       futureForecastHighC,
     });
+    const reason = decisionReason(
+      decision.currentState,
+      targetC,
+      ceilings.remainingRuleCeilingC,
+      decision.consecutivePasses,
+      persistedDecisionBlockers.descriptions,
+    );
     const materialChange =
       !previousCanonicalPrediction ||
-      Math.abs(
-        roundToTenth(
-          previousCanonicalPrediction.predictedHighC - predictedHighC,
-        ),
-      ) >= 0.1 ||
-      previousCanonicalPrediction.status !== state.status ||
-      previousCanonicalPrediction.peakWindowStartUtc !== peakWindowStartUtc ||
-      previousCanonicalPrediction.peakWindowEndUtc !== peakWindowEndUtc ||
-      previousPreferredDailyPeakProvider?.provider !==
-        preferredDailyPeakProvider?.provider ||
-      previousPreferredDailyPeakProvider?.dailyHighC !==
-        preferredDailyPeakProvider?.dailyHighC ||
-      previousPreferredDailyPeakProvider?.dailyPeakTimeUtc !==
-        preferredDailyPeakProvider?.dailyPeakTimeUtc ||
-      previousCanonicalPrediction.observedHighC !== maxRow?.tempC ||
-      (Number.isFinite(previousCanonicalPrediction.observedCurrentC) &&
-      Number.isFinite(latestRow?.tempC)
+      (Number.isFinite(previousCanonicalPrediction.predictedHighC) &&
+      Number.isFinite(predictedHighC)
         ? Math.abs(
             roundToTenth(
-              previousCanonicalPrediction.observedCurrentC - latestRow.tempC,
+              previousCanonicalPrediction.predictedHighC - predictedHighC,
             ),
-          ) >= 0.2
-        : previousCanonicalPrediction.observedCurrentC !== latestRow?.tempC) ||
-      String(previousCanonicalPrediction.forecastCaptureId ?? "") !==
-        String(primaryCapture?._id ?? "") ||
-      generatedAt - previousCanonicalPrediction.generatedAt >=
-        PREDICTION_HEARTBEAT_MS;
-    if (!materialChange) {
-      return { prediction: previousCanonicalPrediction, summary };
+          ) >= 0.1
+        : previousCanonicalPrediction.predictedHighC !== predictedHighC) ||
+      previousCanonicalPrediction.decisionStatus !== decision.currentState ||
+      previousCanonicalPrediction.remainingRuleCeilingC !==
+        ceilings.remainingRuleCeilingC ||
+      previousCanonicalPrediction.marginBelowTargetC !==
+        ceilings.marginBelowTargetC ||
+      previousCanonicalPrediction.solarDecisionRequired !==
+        (solarDecisionInputs?.solarUsefulEnergyRemaining !== false) ||
+      JSON.stringify(previousCanonicalPrediction.blockerCodes ?? []) !==
+        JSON.stringify(persistedDecisionBlockers.codes) ||
+      JSON.stringify(previousCanonicalPrediction.blockerDescriptions ?? []) !==
+        JSON.stringify(persistedDecisionBlockers.descriptions);
+    if (!Number.isFinite(predictedHighC) || !materialChange) {
+      const decisionState = await ctx.db.get(decisionStateId);
+      return {
+        prediction: Number.isFinite(predictedHighC)
+          ? previousCanonicalPrediction
+          : null,
+        summary,
+        decisionState,
+        ...(!Number.isFinite(forecastHighC)
+          ? {
+              unavailable: {
+                status: kmaAccessApproved ? "no_data" : "approval_required",
+                reason: kmaAccessApproved
+                  ? `No fresh KMA/AMO airport forecast is available for ${args.date}.`
+                  : "KMA/AMO airport forecast access approval is required.",
+              },
+            }
+          : {}),
+      };
     }
 
     // Recheck immediately before the KMA-derived write so revocation during a
@@ -1620,7 +2552,28 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
         },
       };
     }
-    const revision = (previousPrediction?.revision ?? 0) + 1;
+    const revision = (previousCanonicalPrediction?.revision ?? 0) + 1;
+    const trailingHourObservationCount = primaryFeatures.latestRow
+      ? primaryFeatures.rows.filter(
+          (row) =>
+            row.obsTimeUtc >=
+            primaryFeatures.latestRow.obsTimeUtc - 60 * MILLIS_PER_MINUTE,
+        ).length
+      : 0;
+    const recentPrecipRows = primaryFeatures.latestRow
+      ? primaryFeatures.rows.filter(
+          (row) =>
+            row.obsTimeUtc >=
+              primaryFeatures.latestRow.obsTimeUtc - 60 * MILLIS_PER_MINUTE &&
+            Number.isFinite(row.precipMm),
+        )
+      : [];
+    const precipObservedInLast60m = recentPrecipRows.some(
+      (row) => row.precipMm > 0,
+    );
+    const lastWetRow = [...recentPrecipRows]
+      .reverse()
+      .find((row) => row.precipMm > 0);
     const predictionId = await ctx.db.insert("seoulHighPredictions", {
       stationIcao: args.stationIcao,
       targetDate: args.date,
@@ -1639,8 +2592,8 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
             ),
           }
         : {}),
-      ...(previousPrediction
-        ? { previousPredictionId: previousPrediction._id }
+      ...(previousCanonicalPrediction
+        ? { previousPredictionId: previousCanonicalPrediction._id }
         : {}),
       observedCount: observations.length,
       ...(latestRow
@@ -1660,45 +2613,248 @@ export const recomputeHighPredictionInternal = internalMutationGeneric({
             observedHighAtLocal: maxRow.obsTimeLocal,
           }
         : {}),
-      ...(Number.isFinite(slope15mCPerHour) ? { slope15mCPerHour } : {}),
-      ...(Number.isFinite(slope30mCPerHour) ? { slope30mCPerHour } : {}),
-      ...(Number.isFinite(slope60mCPerHour) ? { slope60mCPerHour } : {}),
-      ...(Number.isFinite(expectedCurrentC)
-        ? { expectedCurrentC: roundToTenth(expectedCurrentC) }
+      ...(Number.isFinite(primaryFeatures.slope15mCPerHour)
+        ? {
+            slope15mCPerHour: primaryFeatures.slope15mCPerHour,
+            robustSlope15mCPerHour: primaryFeatures.slope15mCPerHour,
+          }
+        : {}),
+      ...(Number.isFinite(primaryFeatures.slope30mCPerHour)
+        ? {
+            slope30mCPerHour: primaryFeatures.slope30mCPerHour,
+            robustSlope30mCPerHour: primaryFeatures.slope30mCPerHour,
+          }
+        : {}),
+      ...(Number.isFinite(primaryFeatures.slope60mCPerHour)
+        ? {
+            slope60mCPerHour: primaryFeatures.slope60mCPerHour,
+            robustSlope60mCPerHour: primaryFeatures.slope60mCPerHour,
+          }
+        : {}),
+      ...(Number.isFinite(primaryFeatures.currentSmoothedC)
+        ? { currentSmoothedC: primaryFeatures.currentSmoothedC }
+        : {}),
+      ...(primaryFeatures.lastNearHighRow
+        ? {
+            lastNearHighAtUtc: primaryFeatures.lastNearHighRow.obsTimeUtc,
+            lastNearHighAtLocal: primaryFeatures.lastNearHighRow.obsTimeLocal,
+          }
+        : {}),
+      ...(Number.isFinite(primaryFeatures.minutesSinceNearHigh)
+        ? { minutesSinceNearHigh: primaryFeatures.minutesSinceNearHigh }
+        : {}),
+      ...(Number.isFinite(primaryFeatures.dropFromHighC)
+        ? { dropFromHighC: primaryFeatures.dropFromHighC }
+        : {}),
+      trend15mCoverageMinutes: primaryFeatures.trend15.coverageMinutes,
+      trend30mCoverageMinutes: primaryFeatures.trend30.coverageMinutes,
+      trend60mCoverageMinutes: primaryFeatures.trend60.coverageMinutes,
+      ...(Number.isFinite(primaryFeatures.latestObservationGapMinutes)
+        ? {
+            trendLatestGapMinutes: primaryFeatures.latestObservationGapMinutes,
+          }
+        : {}),
+      trailingHourObservationCount,
+      ...(Number.isFinite(ceilings.expectedCurrentC)
+        ? { expectedCurrentC: ceilings.expectedCurrentC }
+        : {}),
+      ...(Number.isFinite(kmaBias.liveBiasC)
+        ? {
+            liveBiasC: kmaBias.liveBiasC,
+            kmaLiveBiasC: kmaBias.liveBiasC,
+          }
+        : {}),
+      ...(Number.isFinite(ceilings.kmaRemainingBestHighC)
+        ? { kmaRemainingBestHighC: ceilings.kmaRemainingBestHighC }
+        : {}),
+      ...(Number.isFinite(ceilings.kmaRemainingUpperC)
+        ? { kmaRemainingUpperC: ceilings.kmaRemainingUpperC }
+        : {}),
+      kmaHourlyPointCount: kmaCurve.pointCount,
+      kmaFutureHourlyPointCount: kmaCurve.futurePointCount,
+      ...(Number.isFinite(kmaCurve.lastForecastTimeUtc)
+        ? { kmaHourlyCoverageEndUtc: kmaCurve.lastForecastTimeUtc }
+        : {}),
+      ...(Number.isFinite(kmaCurve.maxGapMinutes)
+        ? { kmaMaxHourlyGapMinutes: kmaCurve.maxGapMinutes }
+        : {}),
+      ...(Number.isFinite(kmaCurve.dailyHourlyHighGapC)
+        ? { kmaDailyHourlyHighGapC: kmaCurve.dailyHourlyHighGapC }
+        : {}),
+      kmaRevisionUpwardDetected: kmaRevision.upwardDetected,
+      ...(Number.isFinite(ceilings.nowcastUpperC)
+        ? { nowcastUpperC: ceilings.nowcastUpperC }
+        : {}),
+      ...(Number.isFinite(ceilings.remainingRuleCeilingC)
+        ? { remainingRuleCeilingC: ceilings.remainingRuleCeilingC }
         : {}),
       predictedHighC,
       predictedHighF,
-      confidenceLowC,
-      confidenceLowF: toFahrenheit(confidenceLowC),
-      confidenceHighC,
-      confidenceHighF: toFahrenheit(confidenceHighC),
-      ...(Number.isFinite(peakWindowStartUtc)
+      ...(Number.isFinite(kmaPeakWindow?.firstPeakTimeUtc)
         ? {
-            peakWindowStartUtc,
+            peakWindowStartUtc: kmaPeakWindow.firstPeakTimeUtc,
             peakWindowStartLocal: formatDateTimeInTimezone(
-              peakWindowStartUtc,
+              kmaPeakWindow.firstPeakTimeUtc,
+              SEOUL_TIMEZONE,
+            ),
+            firstKmaPeakTimeUtc: kmaPeakWindow.firstPeakTimeUtc,
+            firstKmaPeakTimeLocal: formatDateTimeInTimezone(
+              kmaPeakWindow.firstPeakTimeUtc,
               SEOUL_TIMEZONE,
             ),
           }
         : {}),
-      ...(Number.isFinite(peakWindowEndUtc)
+      ...(Number.isFinite(kmaPeakWindow?.peakWindowEndUtc)
         ? {
-            peakWindowEndUtc,
+            peakWindowEndUtc: kmaPeakWindow.peakWindowEndUtc,
             peakWindowEndLocal: formatDateTimeInTimezone(
-              peakWindowEndUtc,
+              kmaPeakWindow.peakWindowEndUtc,
+              SEOUL_TIMEZONE,
+            ),
+            kmaPeakWindowEndUtc: kmaPeakWindow.peakWindowEndUtc,
+            kmaPeakWindowEndLocal: formatDateTimeInTimezone(
+              kmaPeakWindow.peakWindowEndUtc,
               SEOUL_TIMEZONE,
             ),
           }
         : {}),
+      ...(Number.isFinite(kmaPeakWindow?.lastPeakTimeUtc)
+        ? {
+            lastKmaPeakTimeUtc: kmaPeakWindow.lastPeakTimeUtc,
+            lastKmaPeakTimeLocal: formatDateTimeInTimezone(
+              kmaPeakWindow.lastPeakTimeUtc,
+              SEOUL_TIMEZONE,
+            ),
+          }
+        : {}),
+      targetC,
+      ...(Number.isFinite(ceilings.marginBelowTargetC)
+        ? { marginBelowTargetC: ceilings.marginBelowTargetC }
+        : {}),
+      decisionStatus: decision.currentState,
+      ...(Number.isFinite(decision.candidateSinceUtc)
+        ? {
+            candidateSinceUtc: decision.candidateSinceUtc,
+            candidateSinceLocal: formatDateTimeInTimezone(
+              decision.candidateSinceUtc,
+              SEOUL_TIMEZONE,
+            ),
+          }
+        : {}),
+      consecutivePasses: decision.consecutivePasses,
+      blockerCodes: persistedDecisionBlockers.codes,
+      blockerDescriptions: persistedDecisionBlockers.descriptions,
+      ...solarSnapshotForPrediction(solarDecisionInputs),
+      ...(secondaryDiagnostics.secondaryLatest
+        ? {
+            secondary16LObservedAtUtc:
+              secondaryDiagnostics.secondaryLatest.obsTimeUtc,
+            secondary16LObservedAtLocal:
+              secondaryDiagnostics.secondaryLatest.obsTimeLocal,
+            secondary16LObservationAgeMinutes:
+              secondaryDiagnostics.observationAgeMinutes,
+            secondary16LCurrentC: secondaryFeatures.currentSmoothedC,
+            secondary16LCurrentF: toFahrenheit(
+              secondaryFeatures.currentSmoothedC,
+            ),
+          }
+        : {}),
+      ...(Number.isFinite(secondaryFeatures.slope15mCPerHour)
+        ? {
+            secondary16LSlope15mCPerHour: secondaryFeatures.slope15mCPerHour,
+          }
+        : {}),
+      ...(Number.isFinite(secondaryFeatures.slope30mCPerHour)
+        ? {
+            secondary16LSlope30mCPerHour: secondaryFeatures.slope30mCPerHour,
+          }
+        : {}),
+      ...(Number.isFinite(secondaryDiagnostics.differenceFrom15LC)
+        ? {
+            secondary16LDifferenceFrom15LC:
+              secondaryDiagnostics.differenceFrom15LC,
+          }
+        : {}),
+      ...(Number.isFinite(secondaryDiagnostics.differenceChange30mC)
+        ? {
+            secondary16LDifferenceChange30mC:
+              secondaryDiagnostics.differenceChange30mC,
+          }
+        : {}),
+      ...(amosDiagnostics.latest
+        ? {
+            windObservedAtUtc: amosDiagnostics.latest.obsTimeUtc,
+            ...(Number.isFinite(amosDiagnostics.latest.windDirAvg)
+              ? { windDirectionDeg: amosDiagnostics.latest.windDirAvg }
+              : {}),
+            ...(Number.isFinite(amosDiagnostics.latest.windSpeedAvg)
+              ? { windSpeedKt: amosDiagnostics.latest.windSpeedAvg }
+              : {}),
+            ...(Number.isFinite(amosDiagnostics.latest.dewpointC)
+              ? { currentDewpointC: amosDiagnostics.latest.dewpointC }
+              : {}),
+            ...(Number.isFinite(amosDiagnostics.latest.precipMm)
+              ? { currentPrecipMm: amosDiagnostics.latest.precipMm }
+              : {}),
+          }
+        : {}),
+      ...(Number.isFinite(amosDiagnostics.windDirectionShift30mDeg)
+        ? {
+            windDirectionChange30mDeg: amosDiagnostics.windDirectionShift30mDeg,
+          }
+        : {}),
+      ...(Number.isFinite(amosDiagnostics.windSpeedChange30mKt)
+        ? { windSpeedChange30mKt: amosDiagnostics.windSpeedChange30mKt }
+        : {}),
+      ...(Number.isFinite(forecastWind.forecastWindDirectionChange2hDeg)
+        ? {
+            forecastWindDirectionChange2hDeg:
+              forecastWind.forecastWindDirectionChange2hDeg,
+          }
+        : {}),
+      ...(Number.isFinite(forecastWind.forecastWindSpeedChange2hKt)
+        ? {
+            forecastWindSpeedChange2hKt:
+              forecastWind.forecastWindSpeedChange2hKt,
+          }
+        : {}),
+      materialWindShiftDetected:
+        decisionBlockers.observedWindShift ||
+        decisionBlockers.forecastWindShift,
+      ...(Number.isFinite(amosDiagnostics.dewpointChange30mC)
+        ? { dewpointChange30mC: amosDiagnostics.dewpointChange30mC }
+        : {}),
+      dewpointRisingWithWindShift: decisionBlockers.codes.includes(
+        "dewpoint_rising_with_wind_shift",
+      ),
+      precipObservedInLast60m,
+      ...(amosDiagnostics.rainEndedRecently && lastWetRow
+        ? { recentPrecipEndedAtUtc: lastWetRow.obsTimeUtc }
+        : {}),
+      rainEndedClearingRisk: decisionBlockers.codes.includes(
+        "rain_ended_with_clearing",
+      ),
+      ...(Number.isFinite(weathercomVeto.remainingHighC)
+        ? { weathercomRemainingHighC: weathercomVeto.remainingHighC }
+        : {}),
+      ...(Number.isFinite(weathercomVeto.capturedAt)
+        ? { weathercomForecastCapturedAt: weathercomVeto.capturedAt }
+        : {}),
+      ...(Number.isFinite(weathercomVeto.captureAgeMinutes)
+        ? { weathercomForecastAgeMinutes: weathercomVeto.captureAgeMinutes }
+        : {}),
+      weathercomVetoActive: weathercomVeto.vetoActive,
       status: state.status,
-      reason: state.reason,
+      reason,
       providerDetails,
       hourlyEnsembleCurve,
       createdAt: generatedAt,
     });
+    await ctx.db.patch(decisionStateId, { lastPredictionId: predictionId });
     return {
       prediction: await ctx.db.get(predictionId),
       summary,
+      decisionState: await ctx.db.get(decisionStateId),
     };
   },
 });
@@ -1707,6 +2863,11 @@ export const recomputeTodayHighPrediction = actionGeneric({
   args: {
     stationIcao: v.optional(v.string()),
     date: v.optional(v.string()),
+    targetC: v.optional(v.number()),
+    targetCs: v.optional(v.array(v.number())),
+    trigger: v.optional(
+      v.union(v.literal("interactive"), v.literal("scheduled")),
+    ),
   },
   handler: async (ctx, args) => {
     const stationIcao = String(
@@ -1723,11 +2884,106 @@ export const recomputeTodayHighPrediction = actionGeneric({
         `recomputeTodayHighPrediction only accepts Seoul today (${todayDate}).`,
       );
     }
-    const result = await ctx.runMutation(
-      "seoulWeather:recomputeHighPredictionInternal",
-      { stationIcao, date },
-    );
-    return result.prediction;
+    const trigger = args.trigger ?? "interactive";
+    if (!hasApprovedKmaAmoAccess()) {
+      if (trigger === "interactive" && args.targetCs === undefined) {
+        return null;
+      }
+      return {
+        trigger,
+        evaluatedAtUtc: Date.now(),
+        targetCount: 0,
+        targets: [],
+        unavailable: "approval_required",
+      };
+    }
+    let targetCs;
+    if (trigger === "scheduled") {
+      if (args.targetCs !== undefined) {
+        throw new Error("Scheduled Seoul evaluation does not accept targetCs.");
+      }
+      const activeTargets = await ctx.runQuery(
+        "seoulWeather:getActiveHighPredictionTargetsInternal",
+        { stationIcao, date },
+      );
+      targetCs = Array.from(
+        new Set([
+          SEOUL_RAW_TARGET_C,
+          ...activeTargets.map((targetC) => normalizeDecisionTargetC(targetC)),
+        ]),
+      );
+    } else {
+      if (args.targetCs !== undefined && args.targetC !== undefined) {
+        throw new Error("Pass either targetC or targetCs, not both.");
+      }
+      if (args.targetCs !== undefined) {
+        if (!args.targetCs.length || args.targetCs.length > 3) {
+          throw new Error(
+            "Interactive Seoul evaluation accepts one to three targets.",
+          );
+        }
+        targetCs = Array.from(
+          new Set(
+            args.targetCs.map((targetC) => normalizeDecisionTargetC(targetC)),
+          ),
+        );
+      } else {
+        targetCs = [normalizeDecisionTargetC(args.targetC)];
+      }
+      await ctx.runMutation(
+        "seoulWeather:registerActiveHighPredictionTargetsInternal",
+        { stationIcao, date, targetCs },
+      );
+    }
+    const evaluatedAtUtc = Date.now();
+    let solarDecisionInputs;
+    try {
+      solarDecisionInputs = await ctx.runQuery(
+        "seoulGk2a:getSolarDecisionInputs",
+        {
+          stationIcao,
+          date,
+          evaluatedAtUtc,
+        },
+      );
+    } catch (error) {
+      solarDecisionInputs = {
+        stationIcao,
+        date,
+        evaluatedAtUtc,
+        solarStatus: "error",
+        solarApprovalConfigured: hasApprovedNmscGk2aAccess(),
+      };
+    }
+    const results = [];
+    for (const targetC of targetCs) {
+      const result = await ctx.runMutation(
+        "seoulWeather:recomputeHighPredictionInternal",
+        {
+          stationIcao,
+          date,
+          targetC,
+          evaluatedAtUtc,
+          solarDecisionInputs,
+        },
+      );
+      results.push({
+        targetC,
+        prediction: toCanonicalPagePrediction(result.prediction),
+      });
+    }
+    if (trigger === "interactive" && args.targetCs === undefined) {
+      return results[0]?.prediction ?? null;
+    }
+    return {
+      trigger,
+      evaluatedAtUtc,
+      targetCount: results.length,
+      targets: results.map((result) => ({
+        targetC: result.targetC,
+        decisionStatus: result.prediction?.decisionStatus ?? null,
+      })),
+    };
   },
 });
 
@@ -1794,6 +3050,29 @@ function summarizeEvaluations(evaluations) {
         : null,
     };
   });
+  const thresholdRows = evaluations.filter((row) =>
+    Number.isFinite(row.thresholdTargetC),
+  );
+  const unlikelyDeclarationCount = thresholdRows.reduce(
+    (total, row) => total + (row.unlikelyDeclarationCount ?? 0),
+    0,
+  );
+  const evaluatedUnlikelyDeclarationCount = thresholdRows.reduce(
+    (total, row) =>
+      total +
+      (row.evaluatedUnlikelyDeclarationCount ??
+        row.unlikelyDeclarationCount ??
+        0),
+    0,
+  );
+  const censoredUnlikelyDeclarationCount = thresholdRows.reduce(
+    (total, row) => total + (row.censoredUnlikelyDeclarationCount ?? 0),
+    0,
+  );
+  const falseUnlikelyDeclarationCount = thresholdRows.reduce(
+    (total, row) => total + (row.falseUnlikelyDeclarationCount ?? 0),
+    0,
+  );
   return {
     completedDayCount: evaluations.length,
     initial: buildMetrics(initialErrors),
@@ -1809,6 +3088,27 @@ function summarizeEvaluations(evaluations) {
             100,
         )
       : null,
+    thresholdSafety: {
+      evaluatedDayCount: thresholdRows.length,
+      daysWithUnlikelyDeclaration: thresholdRows.filter(
+        (row) => (row.unlikelyDeclarationCount ?? 0) > 0,
+      ).length,
+      unlikelyDeclarationCount,
+      evaluatedUnlikelyDeclarationCount,
+      censoredUnlikelyDeclarationCount,
+      falseUnlikelyDeclarationCount,
+      falseDeclarationPct: evaluatedUnlikelyDeclarationCount
+        ? roundToTenth(
+            (falseUnlikelyDeclarationCount /
+              evaluatedUnlikelyDeclarationCount) *
+              100,
+          )
+        : null,
+      revocationCount: thresholdRows.reduce(
+        (total, row) => total + (row.unlikelyRevocationCount ?? 0),
+        0,
+      ),
+    },
   };
 }
 
@@ -1816,10 +3116,12 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
     date: v.string(),
+    targetC: v.number(),
   },
   handler: async (ctx, args) => {
     assertDateKey(args.date);
-    if (!hasApprovedKmaAmoAccess()) {
+    const targetC = normalizeDecisionTargetC(args.targetC);
+    if (!hasApprovedKmaAmoAccess() || !hasApprovedNmscGk2aAccess()) {
       return null;
     }
     const todayDate = formatDateInTimezone(Date.now(), SEOUL_TIMEZONE);
@@ -1827,16 +3129,44 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
       throw new Error("Only completed Seoul-local dates can be finalized.");
     }
 
+    const markDecisionStateFinal = async (finalizedAt) => {
+      const decisionState = await ctx.db
+        .query("seoulPeakDecisionState")
+        .withIndex("by_station_date_model_target", (query) =>
+          query
+            .eq("stationIcao", args.stationIcao)
+            .eq("targetDate", args.date)
+            .eq("modelVersion", PREDICTION_MODEL_VERSION)
+            .eq("targetC", targetC),
+        )
+        .first();
+      if (decisionState) {
+        await ctx.db.patch(decisionState._id, {
+          currentState: "final",
+          candidateSinceUtc: undefined,
+          blockerCodes: [],
+          blockerDescriptions: [],
+          lastEvaluationAt: finalizedAt,
+          lastEvaluationSlotUtc:
+            Math.floor(finalizedAt / PREDICTION_INTERVAL_MS) *
+            PREDICTION_INTERVAL_MS,
+          updatedAt: finalizedAt,
+        });
+      }
+    };
+
     const existingEvaluation = await ctx.db
       .query("seoulHighEvaluations")
-      .withIndex("by_station_model_date", (query) =>
+      .withIndex("by_station_model_date_target", (query) =>
         query
           .eq("stationIcao", args.stationIcao)
           .eq("modelVersion", PREDICTION_MODEL_VERSION)
-          .eq("targetDate", args.date),
+          .eq("targetDate", args.date)
+          .eq("thresholdTargetC", targetC),
       )
       .first();
     if (existingEvaluation) {
+      await markDecisionStateFinal(existingEvaluation.finalizedAt);
       return existingEvaluation;
     }
 
@@ -1900,19 +3230,16 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
     }
 
     const predictions = hasApprovedKmaAmoAccess()
-      ? (
-          await ctx.db
-            .query("seoulHighPredictions")
-            .withIndex("by_station_date_revision", (query) =>
-              query
-                .eq("stationIcao", args.stationIcao)
-                .eq("targetDate", args.date),
-            )
-            .collect()
-        ).filter(
-          (prediction) =>
-            prediction.modelVersion === PREDICTION_MODEL_VERSION,
-        )
+      ? await ctx.db
+          .query("seoulHighPredictions")
+          .withIndex("by_station_date_model_target_revision", (query) =>
+            query
+              .eq("stationIcao", args.stationIcao)
+              .eq("targetDate", args.date)
+              .eq("modelVersion", PREDICTION_MODEL_VERSION)
+              .eq("targetC", targetC),
+          )
+          .collect()
       : [];
     predictions.sort((a, b) => a.revision - b.revision);
     const initialPrediction = predictions[0] ?? null;
@@ -1971,8 +3298,58 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
         ? maxRow.obsTimeUtc >= finalPrediction.peakWindowStartUtc &&
           maxRow.obsTimeUtc < finalPrediction.peakWindowEndUtc
         : null;
+    const unlikelyDeclarations = predictions.filter(
+      (prediction, index) =>
+        prediction.decisionStatus === "unlikely_to_reach" &&
+        predictions[index - 1]?.decisionStatus !== "unlikely_to_reach",
+    );
+    const thresholdEndOfDayUtc = Date.parse(
+      `${addUtcDays(args.date, 1)}T00:00:00+09:00`,
+    );
+    const declarationOutcomes = unlikelyDeclarations.map((prediction) => {
+      const coverage = assessFutureObservationCoverage(
+        observations,
+        prediction.generatedAt,
+        thresholdEndOfDayUtc,
+      );
+      const futureHighRow = selectExtremeRow(coverage.futureRows, "max");
+      const targetReachedRow = coverage.futureRows.find(
+        (row) => row.tempC >= targetC,
+      );
+      const assessable = Boolean(targetReachedRow) || coverage.complete;
+      return {
+        prediction,
+        futureHighRow,
+        assessable,
+        wasFalse: assessable ? Boolean(targetReachedRow) : null,
+        targetReachedRow: targetReachedRow ?? null,
+        coverage,
+      };
+    });
+    const firstUnlikelyOutcome = declarationOutcomes[0] ?? null;
+    const firstCorrectUnlikelyOutcome = declarationOutcomes.find(
+      (outcome) => outcome.wasFalse === false,
+    );
+    const evaluatedUnlikelyDeclarationCount = declarationOutcomes.filter(
+      (outcome) => outcome.assessable,
+    ).length;
+    const censoredUnlikelyDeclarationCount =
+      declarationOutcomes.length - evaluatedUnlikelyDeclarationCount;
+    const thresholdMaxFutureGapMinutes = declarationOutcomes.length
+      ? Math.max(
+          ...declarationOutcomes.map(
+            (outcome) => outcome.coverage.maxGapMinutes,
+          ),
+        )
+      : null;
+    const unlikelyRevocationCount = predictions.filter(
+      (prediction, index) =>
+        index > 0 &&
+        predictions[index - 1].decisionStatus === "unlikely_to_reach" &&
+        prediction.decisionStatus !== "unlikely_to_reach",
+    ).length;
     const finalizedAt = Date.now();
-    if (!hasApprovedKmaAmoAccess()) {
+    if (!hasApprovedKmaAmoAccess() || !hasApprovedNmscGk2aAccess()) {
       return null;
     }
     const evaluationId = await ctx.db.insert("seoulHighEvaluations", {
@@ -1986,6 +3363,84 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
       actualHighAtUtc: maxRow.obsTimeUtc,
       actualHighAtLocal: maxRow.obsTimeLocal,
       obsCount: observations.length,
+      thresholdTargetC: targetC,
+      unlikelyDeclarationCount: declarationOutcomes.length,
+      evaluatedUnlikelyDeclarationCount,
+      censoredUnlikelyDeclarationCount,
+      unlikelyRevocationCount,
+      falseUnlikelyDeclarationCount: declarationOutcomes.filter(
+        (outcome) => outcome.wasFalse === true,
+      ).length,
+      ...(firstUnlikelyOutcome
+        ? {
+            thresholdObservationCoverageComplete:
+              firstUnlikelyOutcome.coverage.complete,
+            ...(Number.isFinite(firstUnlikelyOutcome.coverage.coverageEndUtc)
+              ? {
+                  thresholdObservationCoverageEndUtc:
+                    firstUnlikelyOutcome.coverage.coverageEndUtc,
+                }
+              : {}),
+            ...(Number.isFinite(thresholdMaxFutureGapMinutes)
+              ? { thresholdMaxFutureGapMinutes }
+              : {}),
+          }
+        : {}),
+      ...(firstUnlikelyOutcome
+        ? {
+            firstUnlikelyPredictionId: firstUnlikelyOutcome.prediction._id,
+            firstUnlikelyAtUtc: firstUnlikelyOutcome.prediction.generatedAt,
+            firstUnlikelyAtLocal: formatDateTimeInTimezone(
+              firstUnlikelyOutcome.prediction.generatedAt,
+              SEOUL_TIMEZONE,
+            ),
+            ...(Number.isFinite(
+              firstUnlikelyOutcome.prediction.remainingRuleCeilingC,
+            )
+              ? {
+                  firstUnlikelyRuleCeilingC:
+                    firstUnlikelyOutcome.prediction.remainingRuleCeilingC,
+                }
+              : {}),
+            ...(Number.isFinite(firstUnlikelyOutcome.futureHighRow?.tempC)
+              ? {
+                  firstUnlikelyFutureHighC:
+                    firstUnlikelyOutcome.futureHighRow.tempC,
+                }
+              : {}),
+            ...(Number.isFinite(
+              firstUnlikelyOutcome.prediction.marginBelowTargetC,
+            )
+              ? {
+                  firstUnlikelyMarginBelowTargetC:
+                    firstUnlikelyOutcome.prediction.marginBelowTargetC,
+                }
+              : {}),
+            ...(typeof firstUnlikelyOutcome.wasFalse === "boolean"
+              ? {
+                  firstUnlikelyWasFalse: firstUnlikelyOutcome.wasFalse,
+                  targetReachedAfterFirstUnlikely:
+                    firstUnlikelyOutcome.wasFalse,
+                }
+              : {}),
+            ...(firstUnlikelyOutcome.targetReachedRow
+              ? {
+                  targetReachedAfterFirstUnlikelyAtUtc:
+                    firstUnlikelyOutcome.targetReachedRow.obsTimeUtc,
+                }
+              : {}),
+          }
+        : {}),
+      ...(firstCorrectUnlikelyOutcome
+        ? {
+            firstCorrectUnlikelyAtUtc:
+              firstCorrectUnlikelyOutcome.prediction.generatedAt,
+            firstCorrectUnlikelyAtLocal: formatDateTimeInTimezone(
+              firstCorrectUnlikelyOutcome.prediction.generatedAt,
+              SEOUL_TIMEZONE,
+            ),
+          }
+        : {}),
       ...(initialPrediction
         ? {
             initialPredictionId: initialPrediction._id,
@@ -2019,6 +3474,7 @@ export const finalizeHighPredictionInternal = internalMutationGeneric({
       revisionCount: predictions.length,
       createdAt: finalizedAt,
     });
+    await markDecisionStateFinal(finalizedAt);
     return await ctx.db.get(evaluationId);
   },
 });
@@ -2038,10 +3494,28 @@ export const finalizeCompletedDay = internalActionGeneric({
     const todayDate = formatDateInTimezone(Date.now(), SEOUL_TIMEZONE);
     const date = args.date ?? addUtcDays(todayDate, -1);
     assertDateKey(date);
-    return await ctx.runMutation(
-      "seoulWeather:finalizeHighPredictionInternal",
+    const stateTargets = await ctx.runQuery(
+      "seoulWeather:getHighPredictionStateTargetsInternal",
       { stationIcao, date },
     );
+    const targetCs = Array.from(
+      new Set(
+        (stateTargets.length ? stateTargets : [SEOUL_RAW_TARGET_C]).map(
+          (targetC) => normalizeDecisionTargetC(targetC),
+        ),
+      ),
+    );
+    const evaluations = [];
+    for (const targetC of targetCs) {
+      evaluations.push(
+        await ctx.runMutation("seoulWeather:finalizeHighPredictionInternal", {
+          stationIcao,
+          date,
+          targetC,
+        }),
+      );
+    }
+    return evaluations;
   },
 });
 
@@ -2049,6 +3523,7 @@ export const getHighPredictionAccuracy = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
     trailingDays: v.optional(v.number()),
+    targetC: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const stationIcao = String(
@@ -2057,18 +3532,27 @@ export const getHighPredictionAccuracy = queryGeneric({
     if (stationIcao !== SEOUL_STATION.stationIcao) {
       throw new Error("The Seoul high accuracy query supports RKSI only.");
     }
+    const targetC = normalizeDecisionTargetC(args.targetC);
     const trailingDays = clamp(Math.trunc(args.trailingDays ?? 30), 1, 365);
     const todayDate = formatDateInTimezone(Date.now(), SEOUL_TIMEZONE);
     const earliestDate = addUtcDays(todayDate, -trailingDays);
-    if (!hasApprovedKmaAmoAccess()) {
+    const kmaApproved = hasApprovedKmaAmoAccess();
+    const nmscApproved = hasApprovedNmscGk2aAccess();
+    if (!kmaApproved || !nmscApproved) {
+      const missingFlags = [
+        !kmaApproved ? KMA_AMO_APPROVAL_FLAG : null,
+        !nmscApproved ? NMSC_GK2A_APPROVAL_FLAG : null,
+      ].filter(Boolean);
       return {
         status: "approval_required",
         approval: {
           approved: false,
           status: "approval_required",
-          flagName: KMA_AMO_APPROVAL_FLAG,
+          flagName: missingFlags[0],
+          flagNames: missingFlags,
         },
         stationIcao,
+        targetC,
         trailingDays,
         earliestDate,
         todayDate,
@@ -2078,10 +3562,11 @@ export const getHighPredictionAccuracy = queryGeneric({
     }
     const rows = await ctx.db
       .query("seoulHighEvaluations")
-      .withIndex("by_station_model_finalizedAt", (query) =>
+      .withIndex("by_station_model_target_finalizedAt", (query) =>
         query
           .eq("stationIcao", stationIcao)
-          .eq("modelVersion", PREDICTION_MODEL_VERSION),
+          .eq("modelVersion", PREDICTION_MODEL_VERSION)
+          .eq("thresholdTargetC", targetC),
       )
       .order("desc")
       .take(365);
@@ -2090,6 +3575,7 @@ export const getHighPredictionAccuracy = queryGeneric({
     );
     return {
       stationIcao,
+      targetC,
       trailingDays,
       earliestDate,
       todayDate,
@@ -2099,6 +3585,43 @@ export const getHighPredictionAccuracy = queryGeneric({
   },
 });
 
+function isNmscDerivedBlockerCode(code) {
+  return (
+    String(code ?? "").startsWith("solar_") ||
+    code === "rain_ended_with_clearing"
+  );
+}
+
+function sanitizeNmscBlockers(codes = [], descriptions = []) {
+  const keptCodes = [];
+  const keptDescriptions = [];
+  let removed = false;
+  for (let index = 0; index < codes.length; index += 1) {
+    if (isNmscDerivedBlockerCode(codes[index])) {
+      removed = true;
+      continue;
+    }
+    keptCodes.push(codes[index]);
+    if (descriptions[index]) {
+      keptDescriptions.push(descriptions[index]);
+    }
+  }
+  return { codes: keptCodes, descriptions: keptDescriptions, removed };
+}
+
+function solarWasRequiredForStoredDecision(row) {
+  if (typeof row?.solarDecisionRequired === "boolean") {
+    return row.solarDecisionRequired;
+  }
+  // Rows created before solarDecisionRequired existed fail closed.
+  return (
+    row?.currentState === "peak_candidate" ||
+    row?.currentState === "unlikely_to_reach" ||
+    row?.decisionStatus === "peak_candidate" ||
+    row?.decisionStatus === "unlikely_to_reach"
+  );
+}
+
 function toCanonicalPagePrediction(prediction) {
   if (
     !prediction ||
@@ -2107,15 +3630,100 @@ function toCanonicalPagePrediction(prediction) {
   ) {
     return null;
   }
-  return {
+  const canonical = {
     ...prediction,
     providerDetails: (prediction.providerDetails ?? []).filter(
       (provider) =>
-        provider.provider === "kma_amo" ||
-        provider.provider === "weathercom",
+        provider.provider === "kma_amo" || provider.provider === "weathercom",
     ),
     hourlyEnsembleCurve: prediction.hourlyEnsembleCurve,
   };
+  if (!hasApprovedNmscGk2aAccess()) {
+    const solarDecisionRequired = solarWasRequiredForStoredDecision(prediction);
+    const sanitizedBlockers = sanitizeNmscBlockers(
+      canonical.blockerCodes ?? [],
+      canonical.blockerDescriptions ?? [],
+    );
+    for (const field of Object.keys(canonical)) {
+      if (field.startsWith("solar")) {
+        delete canonical[field];
+      }
+    }
+    delete canonical.rainEndedClearingRisk;
+    canonical.blockerCodes = sanitizedBlockers.codes;
+    canonical.blockerDescriptions = sanitizedBlockers.descriptions;
+    if (
+      solarDecisionRequired &&
+      (canonical.decisionStatus === "peak_candidate" ||
+        canonical.decisionStatus === "unlikely_to_reach")
+    ) {
+      canonical.decisionStatus = "still_possible";
+      delete canonical.candidateSinceUtc;
+      delete canonical.candidateSinceLocal;
+      canonical.consecutivePasses = 0;
+    }
+    if (
+      solarDecisionRequired &&
+      canonical.decisionStatus !== "already_reached" &&
+      canonical.decisionStatus !== "final"
+    ) {
+      canonical.blockerCodes.push("solar_approval_required");
+      canonical.blockerDescriptions.push(
+        `${NMSC_GK2A_APPROVAL_FLAG}=true approval is required before a GK2A-backed decision can be shown.`,
+      );
+    }
+    if (solarDecisionRequired || sanitizedBlockers.removed) {
+      canonical.reason =
+        canonical.decisionStatus === "already_reached"
+          ? `The representative 15L AMOS temperature has reached ${(canonical.targetC ?? SEOUL_RAW_TARGET_C).toFixed(1)}°C.`
+          : (canonical.blockerDescriptions[0] ??
+            "Stored GK2A-derived decision details are hidden while NMSC approval is inactive.");
+    }
+  }
+  return canonical;
+}
+
+function toCanonicalPageDecisionState(decisionState) {
+  if (!decisionState) {
+    return null;
+  }
+  const solarDecisionRequired =
+    solarWasRequiredForStoredDecision(decisionState);
+  const publicState = { ...decisionState };
+  delete publicState.solarDecisionRequired;
+  delete publicState.lastKmaForecastCaptureId;
+  delete publicState.lastKmaDailyHighC;
+  delete publicState.lastKmaRemainingUpperC;
+  delete publicState.lastKmaHourlyRows;
+  if (hasApprovedNmscGk2aAccess()) {
+    return publicState;
+  }
+  const sanitizedBlockers = sanitizeNmscBlockers(
+    decisionState.blockerCodes ?? [],
+    decisionState.blockerDescriptions ?? [],
+  );
+  const shouldDowngrade =
+    solarDecisionRequired &&
+    (decisionState.currentState === "peak_candidate" ||
+      decisionState.currentState === "unlikely_to_reach");
+  if (shouldDowngrade) {
+    publicState.currentState = "still_possible";
+    publicState.candidateSinceUtc = undefined;
+    publicState.consecutivePasses = 0;
+  }
+  publicState.blockerCodes = sanitizedBlockers.codes;
+  publicState.blockerDescriptions = sanitizedBlockers.descriptions;
+  if (
+    solarDecisionRequired &&
+    publicState.currentState !== "already_reached" &&
+    publicState.currentState !== "final"
+  ) {
+    publicState.blockerCodes.push("solar_approval_required");
+    publicState.blockerDescriptions.push(
+      `${NMSC_GK2A_APPROVAL_FLAG}=true approval is required before a GK2A-backed decision can be shown.`,
+    );
+  }
+  return publicState;
 }
 
 function toFahrenheitDelta(celsiusDelta) {
@@ -2671,8 +4279,7 @@ function buildKmaForecastView({
   const isStale =
     !canonicalCapture ||
     !Number.isFinite(latestSuccessAgeMinutes) ||
-    latestSuccessAgeMinutes >
-      MAX_KMA_CAPTURE_AGE_MS / MILLIS_PER_MINUTE;
+    latestSuccessAgeMinutes > MAX_KMA_CAPTURE_AGE_MS / MILLIS_PER_MINUTE;
   const latestAttemptStatus = latestAttempt?.status ?? "no_data";
   const status =
     latestAttemptStatus === WEATHER_STATUS.ERROR
@@ -2720,10 +4327,98 @@ function buildKmaForecastView({
   };
 }
 
+export const getHighPredictionDecisionSummaries = queryGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    date: v.string(),
+    targetCs: v.array(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = String(
+      args.stationIcao ?? SEOUL_STATION.stationIcao,
+    ).toUpperCase();
+    if (stationIcao !== SEOUL_STATION.stationIcao) {
+      throw new Error("The Seoul decision summary supports RKSI only.");
+    }
+    assertDateKey(args.date);
+    if (args.targetCs.length > 3) {
+      throw new Error(
+        "At most three Seoul decision targets can be summarized.",
+      );
+    }
+    const targetCs = Array.from(
+      new Set(
+        args.targetCs.map((targetC) => normalizeDecisionTargetC(targetC)),
+      ),
+    );
+    if (!hasApprovedKmaAmoAccess()) {
+      return {
+        stationIcao,
+        date: args.date,
+        targets: [],
+      };
+    }
+
+    const targets = await Promise.all(
+      targetCs.map(async (targetC) => {
+        const [decisionState, prediction] = await Promise.all([
+          ctx.db
+            .query("seoulPeakDecisionState")
+            .withIndex("by_station_date_model_target", (query) =>
+              query
+                .eq("stationIcao", stationIcao)
+                .eq("targetDate", args.date)
+                .eq("modelVersion", PREDICTION_MODEL_VERSION)
+                .eq("targetC", targetC),
+            )
+            .first(),
+          ctx.db
+            .query("seoulHighPredictions")
+            .withIndex("by_station_date_model_target_revision", (query) =>
+              query
+                .eq("stationIcao", stationIcao)
+                .eq("targetDate", args.date)
+                .eq("modelVersion", PREDICTION_MODEL_VERSION)
+                .eq("targetC", targetC),
+            )
+            .order("desc")
+            .first(),
+        ]);
+        const publicDecisionState = toCanonicalPageDecisionState(decisionState);
+        const publicPrediction = toCanonicalPagePrediction(prediction);
+        return {
+          targetC,
+          decisionState: publicDecisionState
+            ? {
+                targetC: publicDecisionState.targetC,
+                currentState: publicDecisionState.currentState,
+                lastEvaluationAt: publicDecisionState.lastEvaluationAt,
+              }
+            : null,
+          latestPrediction: publicPrediction
+            ? {
+                targetC: publicPrediction.targetC,
+                decisionStatus: publicPrediction.decisionStatus,
+                status: publicPrediction.status,
+                generatedAt: publicPrediction.generatedAt,
+              }
+            : null,
+        };
+      }),
+    );
+    return {
+      stationIcao,
+      date: args.date,
+      targets,
+    };
+  },
+});
+
 export const getHighPredictionDashboard = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
     date: v.optional(v.string()),
+    targetC: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const stationIcao = String(
@@ -2732,6 +4427,7 @@ export const getHighPredictionDashboard = queryGeneric({
     if (stationIcao !== SEOUL_STATION.stationIcao) {
       throw new Error("The Seoul forecast dashboard supports RKSI only.");
     }
+    const selectedTargetC = normalizeDecisionTargetC(args.targetC);
     const now = Date.now();
     const todayDate = formatDateInTimezone(now, SEOUL_TIMEZONE);
     const date = args.date ?? todayDate;
@@ -2739,9 +4435,11 @@ export const getHighPredictionDashboard = queryGeneric({
     const nextDate = addUtcDays(date, 1);
     const nextMidnightUtc = Date.parse(`${nextDate}T00:00:00+09:00`);
     const kmaAccessApproved = hasApprovedKmaAmoAccess();
+    const nmscDecisionAccessApproved = hasApprovedNmscGk2aAccess();
 
     const [
       summary,
+      decisionState,
       revisionRows,
       kmaForecastCaptureRows,
       kmaForecastCollectorState,
@@ -2760,9 +4458,25 @@ export const getHighPredictionDashboard = queryGeneric({
         .first(),
       kmaAccessApproved
         ? ctx.db
+            .query("seoulPeakDecisionState")
+            .withIndex("by_station_date_model_target", (query) =>
+              query
+                .eq("stationIcao", stationIcao)
+                .eq("targetDate", date)
+                .eq("modelVersion", PREDICTION_MODEL_VERSION)
+                .eq("targetC", selectedTargetC),
+            )
+            .first()
+        : Promise.resolve(null),
+      kmaAccessApproved
+        ? ctx.db
             .query("seoulHighPredictions")
-            .withIndex("by_station_date_revision", (query) =>
-              query.eq("stationIcao", stationIcao).eq("targetDate", date),
+            .withIndex("by_station_date_model_target_revision", (query) =>
+              query
+                .eq("stationIcao", stationIcao)
+                .eq("targetDate", date)
+                .eq("modelVersion", PREDICTION_MODEL_VERSION)
+                .eq("targetC", selectedTargetC),
             )
             .order("desc")
             .take(MAX_DASHBOARD_REVISIONS)
@@ -2791,24 +4505,26 @@ export const getHighPredictionDashboard = queryGeneric({
         )
         .order("desc")
         .take(MAX_FORECAST_CAPTURES_FOR_DAY),
-      kmaAccessApproved
+      kmaAccessApproved && nmscDecisionAccessApproved
         ? ctx.db
             .query("seoulHighEvaluations")
-            .withIndex("by_station_model_date", (query) =>
+            .withIndex("by_station_model_date_target", (query) =>
               query
                 .eq("stationIcao", stationIcao)
                 .eq("modelVersion", PREDICTION_MODEL_VERSION)
-                .eq("targetDate", date),
+                .eq("targetDate", date)
+                .eq("thresholdTargetC", selectedTargetC),
             )
             .first()
         : Promise.resolve(null),
-      kmaAccessApproved
+      kmaAccessApproved && nmscDecisionAccessApproved
         ? ctx.db
             .query("seoulHighEvaluations")
-            .withIndex("by_station_model_finalizedAt", (query) =>
+            .withIndex("by_station_model_target_finalizedAt", (query) =>
               query
                 .eq("stationIcao", stationIcao)
-                .eq("modelVersion", PREDICTION_MODEL_VERSION),
+                .eq("modelVersion", PREDICTION_MODEL_VERSION)
+                .eq("thresholdTargetC", selectedTargetC),
             )
             .order("desc")
             .take(30)
@@ -2873,14 +4589,13 @@ export const getHighPredictionDashboard = queryGeneric({
     const latestAttemptedForecastCapture = forecastCaptureRows[0] ?? null;
     const latestPrediction = toCanonicalPagePrediction(
       revisionRows.find(
-        (prediction) =>
-          prediction.modelVersion === PREDICTION_MODEL_VERSION,
+        (prediction) => prediction.modelVersion === PREDICTION_MODEL_VERSION,
       ) ?? null,
     );
+    const publicDecisionState = toCanonicalPageDecisionState(decisionState);
     const revisions = [...revisionRows]
       .filter(
-        (prediction) =>
-          prediction.modelVersion === PREDICTION_MODEL_VERSION,
+        (prediction) => prediction.modelVersion === PREDICTION_MODEL_VERSION,
       )
       .reverse()
       .map(toCanonicalPagePrediction)
@@ -2963,14 +4678,21 @@ export const getHighPredictionDashboard = queryGeneric({
       stationIcao,
       stationName: SEOUL_STATION.stationName,
       date,
+      selectedTargetC,
       todayDate,
       isToday: date === todayDate,
       summary,
+      decisionState: publicDecisionState,
       kmaAccess: {
         approved: kmaAccessApproved,
         status: kmaAccessApproved ? "approved" : "approval_required",
         flagName: KMA_AMO_APPROVAL_FLAG,
         sourceUrl: KMA_AMO_AIRPORT_FORECAST_URL,
+      },
+      nmscDecisionAccess: {
+        approved: nmscDecisionAccessApproved,
+        status: nmscDecisionAccessApproved ? "approved" : "approval_required",
+        flagName: NMSC_GK2A_APPROVAL_FLAG,
       },
       kmaForecast,
       kmaCollector: kmaForecast.collector,
@@ -2987,8 +4709,7 @@ export const getHighPredictionDashboard = queryGeneric({
         selectedDateForecast: kmaForecast.selectedDateForecast,
         ...(Number.isFinite(kmaForecast.latestSuccessAgeMinutes)
           ? {
-              latestSuccessAgeMinutes:
-                kmaForecast.latestSuccessAgeMinutes,
+              latestSuccessAgeMinutes: kmaForecast.latestSuccessAgeMinutes,
             }
           : {}),
         ...(kmaForecast.latestAttemptError
@@ -3000,7 +4721,9 @@ export const getHighPredictionDashboard = queryGeneric({
       secondaryWeathercomForecastCapture,
       weathercomHourlyDiagnostics,
       evaluation,
-      accuracy: summarizeEvaluations(accuracyRows),
+      accuracy: nmscDecisionAccessApproved
+        ? summarizeEvaluations(accuracyRows)
+        : null,
     };
   },
 });

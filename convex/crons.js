@@ -133,6 +133,75 @@ crons.cron(
   { stationIcao: "LEMD" },
 );
 
+// The scheduled action fails closed before any Airframes request unless the
+// dedicated LEMD D-ATIS approval flag is the exact string "true". A shared
+// backend cooldown also prevents this job and manual refreshes from doubling
+// the provider request rate.
+crons.cron(
+  "madrid_airframes_datis_every_minute",
+  "* * * * *",
+  internal.madridDatis.pollScheduledAirframesDatis,
+  { stationIcao: "LEMD" },
+);
+
+// Supervises the separately gated sampled Airframes Socket.IO listener.
+// AIRFRAMES_LEMD_STREAM_APPROVED and
+// AIRFRAMES_LEMD_STREAM_CONNECT_ENABLED must both be the exact string "true"
+// before this mutation schedules a Node action or opens a socket. A generation
+// lease prevents duplicate listeners.
+crons.cron(
+  "madrid_airframes_datis_stream_supervisor_every_minute",
+  "* * * * *",
+  internal.madridDatisStream.superviseScheduledStream,
+  { stationIcao: "LEMD" },
+);
+
+// Sample the public Aviation Weather Center feed every minute so firstSeenAt
+// records the MMMX METAR publication boundary as closely as the source allows.
+crons.cron(
+  "mexico_awc_metar_every_minute",
+  "* * * * *",
+  api.mexico.pollAwcMetars,
+  { stationIcao: "MMMX" },
+);
+
+// Use a one-minute offset from the METAR job and refresh the public MMMX TAF
+// every five minutes, including its TX/TN maximum and peak-time groups.
+crons.cron(
+  "mexico_awc_taf_every_5_minutes",
+  "1,6,11,16,21,26,31,36,41,46,51,56 * * * *",
+  api.mexico.pollAwcTaf,
+  { stationIcao: "MMMX" },
+);
+
+// SMN documents its municipal forecast as updating at minute 15. Collect the
+// public gzip at :20 to leave a small publication margin.
+crons.cron(
+  "mexico_smn_hourly_forecast_minute_20",
+  "20 * * * *",
+  api.mexicoForecastNode.pollSmnHourlyForecast,
+  { stationIcao: "MMMX" },
+);
+
+// The action resolves the current recurring Mexico City daily-high event and
+// fetches one public Gamma probability snapshot per minute. Its server-side
+// America/Mexico_City guard returns before any request outside 11:00-18:00.
+crons.cron(
+  "mexico_polymarket_daily_high_every_minute",
+  "* * * * *",
+  internal.mexicoPolymarket.pollScheduledDailyHighProbabilities,
+  { stationIcao: "MMMX" },
+);
+
+// This mutation checks the exact CAPMA access and retention approval flags
+// before it can queue either one-minute TDZ image worker.
+crons.cron(
+  "mexico_capma_tdz_images_every_minute",
+  "* * * * *",
+  internal.mexicoCapma.queueScheduledCapmaRefresh,
+  { stationIcao: "MMMX" },
+);
+
 // Runs every minute so the public MeteoAM Deda LIMC endpoint is sampled
 // continuously. The Italian public publication lag is wide enough that a
 // narrow half-hour watch window is less useful than steady minute polling.
@@ -240,11 +309,11 @@ crons.cron(
 );
 
 // GK2A SWRAD frames are produced on a ten-minute cadence and commonly appear
-// about twelve minutes later. Queue one download every twenty minutes from
-// 11:16 through 15:56 KST so the 11:00 through 15:40 frames are available.
+// about twelve minutes later. Queue at a sixteen-minute offset for every frame;
+// the server-side Haurwitz gate skips work below 50 W/m² modeled clear-sky DSR.
 crons.cron(
-  "seoul_gk2a_solar_peak_window",
-  "16,36,56 2-6 * * *",
+  "seoul_gk2a_solar_daylight_window",
+  "6,16,26,36,46,56 * * * *",
   internal.seoulGk2aCollector.queueScheduledSolarHeatingRefresh,
   { stationIcao: "RKSI" },
 );
@@ -279,12 +348,13 @@ crons.cron(
 );
 
 // Re-evaluates the Seoul-local day's likely 15L maximum against live AMOS
-// observations. Each run is an immutable numbered prediction revision.
+// observations. Mutable confirmation advances every run; immutable revisions
+// are written only when the decision, ceiling, margin, or blockers change.
 crons.cron(
   "seoul_15l_high_prediction_every_5_min",
   "*/5 * * * *",
   api.seoulWeather.recomputeTodayHighPrediction,
-  { stationIcao: "RKSI" },
+  { stationIcao: "RKSI", trigger: "scheduled" },
 );
 
 // 15:10 UTC is 00:10 KST. Freeze yesterday's truth and prediction accuracy

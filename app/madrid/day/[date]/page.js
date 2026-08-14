@@ -30,6 +30,7 @@ const MADRID_TIMEZONE = "Europe/Madrid";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ROUTINE_METAR_INTERVAL_MS = 30 * 60 * 1000;
 const ROUTINE_METAR_FALLBACK_LAG_MS = 4 * 60 * 1000 + 20 * 1000;
+const DATIS_INTERVAL_MS = 10 * 60 * 1000;
 const STATION_OBSERVATION_INTERVAL_MS = 60 * 60 * 1000;
 const STATION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
 const MADRID_DATE_KEY_FORMATTER = new Intl.DateTimeFormat("en-US", {
@@ -329,6 +330,90 @@ function formatCountdown(expectedAt, nowMs) {
     .join(":");
 }
 
+function isDatisStreamConnectionPaused(streamData) {
+  return (
+    streamData?.connection?.enabled === false ||
+    streamData?.connection?.status === "connection_disabled" ||
+    streamData?.listener?.status === "connection_disabled" ||
+    streamData?.status === "connection_disabled"
+  );
+}
+
+function buildDatisStreamDisplay(streamData, nowMs) {
+  if (streamData === undefined) {
+    return {
+      state: "Loading live stream status…",
+      detail: null,
+    };
+  }
+  if (streamData?.approval?.status === "approval_required") {
+    return {
+      state: "Live stream off — approval required",
+      detail: null,
+    };
+  }
+  if (isDatisStreamConnectionPaused(streamData)) {
+    return {
+      state: "Live stream paused — Airframes unavailable",
+      detail: "Automatic reconnect disabled by Convex kill switch.",
+    };
+  }
+
+  const listener = streamData?.listener;
+  if (listener?.status === "queued") {
+    return {
+      state: "Live stream queued",
+      detail: "Waiting for the supervised listener to start",
+    };
+  }
+  if (listener?.status === "listening") {
+    const lastMatchAge = formatObservationAge(listener.lastMatchAt, nowMs);
+    return {
+      state: "Live stream listening",
+      detail: lastMatchAge
+        ? `Last LEMD reply captured ${lastMatchAge}`
+        : "No LEMD reply captured yet",
+    };
+  }
+  if (listener?.status === "backoff") {
+    return {
+      state: "Live stream unavailable",
+      detail: Number.isFinite(listener.retryAfterAt)
+        ? `Retry in ${formatCountdown(listener.retryAfterAt, nowMs)}`
+        : "Automatic recovery pending",
+    };
+  }
+  if (listener?.status === "stale") {
+    return {
+      state: "Live stream disconnected",
+      detail: "Automatic recovery pending",
+    };
+  }
+  return {
+    state: "Live stream connecting…",
+    detail: "Waiting for the Airframes subscription acknowledgement",
+  };
+}
+
+function buildDatisLookupDisplay(datisData) {
+  if (datisData === undefined) {
+    return "1-min lookup loading…";
+  }
+  if (datisData?.approval?.status === "approval_required") {
+    return "1-min lookup off";
+  }
+  if (datisData?.collector?.status === "fetching") {
+    return "1-min lookup checking";
+  }
+  if (datisData?.collector?.status === "rate_limited") {
+    return "1-min lookup paused";
+  }
+  if (datisData?.collector?.status === "error") {
+    return "1-min lookup unavailable";
+  }
+  return "1-min lookup active";
+}
+
 function formatElapsedDuration(durationMs) {
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
     return "less than a minute";
@@ -353,6 +438,24 @@ function latestByTimestamp(rows, timestampKey) {
       continue;
     }
     if (!latest || row[timestampKey] > latest[timestampKey]) {
+      latest = row;
+    }
+  }
+  return latest;
+}
+
+function latestDatisByReportTime(rows) {
+  let latest = null;
+  for (const row of rows) {
+    if (!Number.isFinite(row?.reportTsUtc)) {
+      continue;
+    }
+    if (
+      !latest ||
+      row.reportTsUtc > latest.reportTsUtc ||
+      (row.reportTsUtc === latest.reportTsUtc &&
+        row.receivedAtUtc < latest.receivedAtUtc)
+    ) {
       latest = row;
     }
   }
@@ -478,10 +581,92 @@ function mergeMetarRows(storedRows, raceRows) {
   return [...merged.values()].sort((a, b) => a.obsTimeUtc - b.obsTimeUtc);
 }
 
-function buildFreshestAirportReading(metarRows, stationRows) {
+function mergeDatisRows(lookupRows, streamRows) {
+  const canonical = new Map();
+  for (const [deliveryPath, rows] of [
+    ["lookup", lookupRows],
+    ["stream", streamRows],
+  ]) {
+    for (const row of rows) {
+      if (!Number.isFinite(row?.reportTsUtc)) {
+        continue;
+      }
+      const reportIdentity = `${row.reportKind}:${row.designator}:${row.reportTsUtc}`;
+      const candidate = {
+        ...row,
+        deliveryPath: row.deliveryPath ?? deliveryPath,
+      };
+      const existing = canonical.get(reportIdentity);
+      if (!existing) {
+        canonical.set(reportIdentity, {
+          ...candidate,
+          deliveryPaths: [candidate.deliveryPath],
+          firstSeenVia: candidate.deliveryPath,
+          transportConflict: false,
+        });
+        continue;
+      }
+
+      const deliveryPaths = [
+        ...new Set([
+          ...(existing.deliveryPaths ?? [existing.deliveryPath]),
+          candidate.deliveryPath,
+        ]),
+      ];
+      const candidateWins =
+        candidate.receivedAtUtc < existing.receivedAtUtc ||
+        (candidate.receivedAtUtc === existing.receivedAtUtc &&
+          candidate.reportKind === "ARR" &&
+          existing.reportKind !== "ARR") ||
+        (candidate.receivedAtUtc === existing.receivedAtUtc &&
+          candidate.reportKind === existing.reportKind &&
+          candidate.designator.localeCompare(existing.designator) < 0);
+      const winner = candidateWins ? candidate : existing;
+      canonical.set(reportIdentity, {
+        ...winner,
+        deliveryPaths,
+        firstSeenVia: candidateWins
+          ? candidate.deliveryPath
+          : existing.firstSeenVia,
+        transportConflict:
+          existing.transportConflict ||
+          candidate.tempC !== existing.tempC ||
+          candidate.dewPointC !== existing.dewPointC,
+      });
+    }
+  }
+  return [...canonical.values()].sort(
+    (a, b) =>
+      a.reportTsUtc - b.reportTsUtc ||
+      a.receivedAtUtc - b.receivedAtUtc,
+  );
+}
+
+function buildFreshestAirportReading(metarRows, stationRows, latestDatis) {
   const latestMetar = latestByTimestamp(metarRows, "obsTimeUtc");
   const latestStation = latestByTimestamp(stationRows, "obsTimeUtc");
   const candidates = [
+    latestDatis
+      ? {
+          kind: "datis",
+          source:
+            latestDatis.firstSeenVia === "stream"
+              ? "D-ATIS via Airframes live stream"
+              : "D-ATIS via Airframes lookup",
+          cadence: "Nominal 10-minute cycle; relay capture is not guaranteed",
+          precision: "Whole-degree operational report",
+          priority: 3,
+          observedAt: latestDatis.reportTsUtc,
+          observedAtLocal: latestDatis.reportTimeLocal,
+          receivedAt: latestDatis.receivedAtUtc,
+          deliveryLagMs: latestDatis.deliveryLagMs,
+          reportKind: latestDatis.reportKind,
+          designator: latestDatis.designator,
+          firstSeenVia: latestDatis.firstSeenVia,
+          tempC: latestDatis.tempC,
+          tempF: latestDatis.tempF,
+        }
+      : null,
     latestMetar
       ? {
           kind: "metar",
@@ -527,6 +712,7 @@ function buildFreshestAirportReading(metarRows, stationRows) {
 
   return {
     freshest: candidates[0] ?? null,
+    latestDatis,
     latestMetar,
     latestStation,
   };
@@ -700,6 +886,51 @@ function buildMetarDataset(rows, unit) {
     : null;
 }
 
+function buildDatisDataset(rows, unit) {
+  const points = rows
+    .map((row) => {
+      const x = madridMinuteNow(row.reportTsUtc);
+      const y = temperatureForUnit(row, unit);
+      return x === null || !Number.isFinite(y)
+        ? null
+        : {
+            x,
+            y,
+            kind: "datis",
+            source:
+              row.firstSeenVia === "stream"
+                ? "D-ATIS first seen via live stream"
+                : "D-ATIS first seen via one-minute lookup",
+            reportKind: row.reportKind,
+            designator: row.designator,
+            receivedAtUtc: row.receivedAtUtc,
+            deliveryLagMs: row.deliveryLagMs,
+            firstSeenVia: row.firstSeenVia,
+            deliveryPaths: row.deliveryPaths,
+            transportConflict: row.transportConflict,
+          };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
+
+  return points.length
+    ? {
+        label: "D-ATIS operational temp",
+        data: points,
+        borderColor: "#7c3aed",
+        backgroundColor: "#7c3aed",
+        pointBorderColor: "#5b21b6",
+        pointBorderWidth: 1.5,
+        pointRadius: 6,
+        pointHoverRadius: 8,
+        pointHitRadius: 20,
+        pointStyle: "star",
+        showLine: false,
+        order: 1,
+      }
+    : null;
+}
+
 function buildPeakDataset(peak, unit) {
   if (!peak) {
     return null;
@@ -757,6 +988,7 @@ export default function MadridDayPage() {
   const isToday = isDateValid && today !== null && date === today;
 
   const pollLatestNoaaMetar = useAction("madrid:pollLatestNoaaPublishRace");
+  const pollAirframesDatis = useAction("madridDatis:pollAirframesDatis");
 
   const dayData = useQuery(
     "madrid:getDayStationRows",
@@ -785,12 +1017,38 @@ export default function MadridDayPage() {
       ? { stationIcao: STATION_ICAO, limit: 48, routineOnly: false }
       : "skip",
   );
+  const datisData = useQuery(
+    "madridDatis:getDatisObservations",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
+  );
+  const datisStreamData = useQuery(
+    "madridDatisStream:getStreamObservations",
+    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
+  );
 
   const storedMetarRows = dayData?.rows ?? [];
   const forecastRows = forecastData?.rows ?? [];
   const stationRows = stationData?.rows ?? [];
   const previousStationRows = previousStationData?.rows ?? [];
   const raceRows = raceData?.rows ?? [];
+  const datisLookupRows = datisData?.rows ?? [];
+  const datisStreamRows = datisStreamData?.rows ?? [];
+  const datisAccessStatus = datisData?.approval?.status;
+  const datisReady = datisAccessStatus === "approved";
+  const datisStreamAccessStatus = datisStreamData?.approval?.status;
+  const datisStreamReady = datisStreamAccessStatus === "approved";
+  const datisStreamConnectionPaused =
+    isDatisStreamConnectionPaused(datisStreamData);
+  const datisStreamCollecting =
+    datisStreamReady && !datisStreamConnectionPaused;
+  const datisAccessLoading =
+    datisData === undefined || datisStreamData === undefined;
+  const datisAvailable = datisReady || datisStreamReady;
+  const datisCaptureAvailable = datisReady || datisStreamCollecting;
+  const datisRows = useMemo(
+    () => mergeDatisRows(datisLookupRows, datisStreamRows),
+    [datisLookupRows, datisStreamRows],
+  );
   const raceMetarRows = useMemo(
     () => buildRaceMetarRows(raceRows, date),
     [date, raceRows],
@@ -803,7 +1061,9 @@ export default function MadridDayPage() {
     dayData === undefined ||
     forecastData === undefined ||
     stationData === undefined ||
-    raceData === undefined;
+    raceData === undefined ||
+    datisData === undefined ||
+    datisStreamData === undefined;
   const isTimingLoading =
     isLoading || (isToday && previousStationData === undefined);
 
@@ -811,9 +1071,26 @@ export default function MadridDayPage() {
     () => buildForecastPeak(forecastRows),
     [forecastRows],
   );
+  const latestDatis = useMemo(
+    () =>
+      isToday
+        ? latestDatisByReportTime(
+            mergeDatisRows(
+              datisData?.latest ? [datisData.latest] : [],
+              datisStreamData?.latest ? [datisStreamData.latest] : [],
+            ),
+          )
+        : latestDatisByReportTime(datisRows),
+    [
+      datisData?.latest,
+      datisRows,
+      datisStreamData?.latest,
+      isToday,
+    ],
+  );
   const airportReading = useMemo(
-    () => buildFreshestAirportReading(metarRows, stationRows),
-    [metarRows, stationRows],
+    () => buildFreshestAirportReading(metarRows, stationRows, latestDatis),
+    [latestDatis, metarRows, stationRows],
   );
   const latestRoutineMetar = useMemo(
     () =>
@@ -850,8 +1127,20 @@ export default function MadridDayPage() {
     airportReading.latestMetar,
     unit,
   );
+  const latestDatisTemperature = temperatureForUnit(
+    airportReading.latestDatis,
+    unit,
+  );
   const forecastMax = celsiusForUnit(forecastPeak?.maxTempC, unit);
   const observationAge = formatObservationAge(freshest?.observedAt, nowMs);
+  const latestDatisReportAge = formatObservationAge(
+    airportReading.latestDatis?.reportTsUtc,
+    nowMs,
+  );
+  const latestDatisReceiptAge = formatObservationAge(
+    airportReading.latestDatis?.receivedAtUtc,
+    nowMs,
+  );
   const isFresh =
     isToday &&
     Number.isFinite(nowMs) &&
@@ -887,6 +1176,22 @@ export default function MadridDayPage() {
   const nextStationCheckAt = isToday
     ? nextIntervalBoundary(nowMs, STATION_CHECK_INTERVAL_MS)
     : null;
+  const nextDatisCycleAt = isToday
+    ? nextIntervalBoundary(nowMs, DATIS_INTERVAL_MS)
+    : null;
+  const datisCountdownLabel =
+    datisData === undefined || datisStreamData === undefined
+      ? "Loading…"
+      : !datisAvailable
+        ? "Approval required"
+        : !datisCaptureAvailable
+          ? "Connection paused"
+        : formatCountdown(nextDatisCycleAt, nowMs);
+  const datisStreamDisplay = buildDatisStreamDisplay(
+    datisStreamData,
+    nowMs,
+  );
+  const datisLookupDisplay = buildDatisLookupDisplay(datisData);
   const metarFeedDelayed =
     isToday &&
     Number.isFinite(nowMs) &&
@@ -919,25 +1224,48 @@ export default function MadridDayPage() {
   }, []);
 
   useEffect(() => {
-    if (!isToday || autoRefreshDateRef.current === date) {
+    if (
+      !isToday ||
+      datisData === undefined ||
+      autoRefreshDateRef.current === date
+    ) {
       return;
     }
     autoRefreshDateRef.current = date;
     let cancelled = false;
 
     async function refreshOnOpen() {
-      setSyncMessage("Checking the latest airport METAR…");
-      try {
-        await pollLatestNoaaMetar({ stationIcao: STATION_ICAO });
-        if (!cancelled) {
+      setSyncMessage(
+        datisReady
+          ? "Checking the latest airport METAR and D-ATIS lookup…"
+          : "Checking the latest airport METAR…",
+      );
+      const [metarResult, datisResult] = await Promise.allSettled([
+        pollLatestNoaaMetar({ stationIcao: STATION_ICAO }),
+        ...(datisReady
+          ? [pollAirframesDatis({ stationIcao: STATION_ICAO })]
+          : []),
+      ]);
+      if (!cancelled) {
+        const datisFailed =
+          datisReady &&
+          (datisResult?.status === "rejected" ||
+            !["ok", "no_data", "cooldown", "rate_limited"].includes(
+              datisResult?.value?.status,
+            ));
+        if (metarResult.status === "fulfilled" && !datisFailed) {
           setSyncMessage(
-            `Live METAR checked at ${formatMadridTime(Date.now())} Madrid time.`,
+            datisReady
+              ? `Live METAR and D-ATIS lookup checked at ${formatMadridTime(Date.now())} Madrid time.`
+              : `Live METAR checked at ${formatMadridTime(Date.now())} Madrid time; the one-minute D-ATIS lookup remains approval-gated.`,
           );
-        }
-      } catch {
-        if (!cancelled) {
+        } else if (metarResult.status === "fulfilled") {
           setSyncMessage(
-            "Live METAR check failed; showing the latest stored readings.",
+            "Live METAR checked; the D-ATIS lookup failed and stored readings remain on screen.",
+          );
+        } else {
+          setSyncMessage(
+            "Live source check failed; showing the latest stored readings.",
           );
         }
       }
@@ -947,22 +1275,62 @@ export default function MadridDayPage() {
     return () => {
       cancelled = true;
     };
-  }, [date, isToday, pollLatestNoaaMetar]);
+  }, [
+    date,
+    datisAccessStatus,
+    datisData,
+    datisReady,
+    isToday,
+    pollAirframesDatis,
+    pollLatestNoaaMetar,
+  ]);
 
   async function handleRefresh() {
     if (!isToday || isRefreshing) {
       return;
     }
     setIsRefreshing(true);
-    setSyncMessage("Refreshing the latest airport METAR…");
+    setSyncMessage(
+      datisReady
+        ? "Refreshing the latest airport METAR and D-ATIS lookup…"
+        : "Refreshing the latest airport METAR…",
+    );
     try {
-      await pollLatestNoaaMetar({ stationIcao: STATION_ICAO });
+      const [metarResult, datisResult] = await Promise.allSettled([
+        pollLatestNoaaMetar({ stationIcao: STATION_ICAO }),
+        ...(datisReady
+          ? [pollAirframesDatis({ stationIcao: STATION_ICAO })]
+          : []),
+      ]);
+      const datisFailed =
+        datisReady &&
+        (datisResult?.status === "rejected" ||
+          !["ok", "no_data", "cooldown", "rate_limited"].includes(
+            datisResult?.value?.status,
+          ));
+      const datisSucceeded =
+        datisReady &&
+        datisResult?.status === "fulfilled" &&
+        ["ok", "no_data", "cooldown", "rate_limited"].includes(
+          datisResult.value?.status,
+        );
+      if (metarResult.status === "rejected" && !datisSucceeded) {
+        throw new Error("Live refresh failed.");
+      }
       setSyncMessage(
-        `Live METAR checked at ${formatMadridTime(Date.now())} Madrid time.`,
+        metarResult.status === "fulfilled" && !datisFailed
+          ? datisReady
+            ? `Live METAR and D-ATIS lookup checked at ${formatMadridTime(Date.now())} Madrid time.`
+            : `Live METAR checked at ${formatMadridTime(Date.now())} Madrid time; the one-minute D-ATIS lookup remains approval-gated.`
+          : metarResult.status === "fulfilled"
+            ? "METAR refreshed; the D-ATIS lookup failed."
+            : datisSucceeded
+              ? "D-ATIS lookup refreshed; the METAR check failed."
+              : "Live refresh failed; stored readings remain on screen.",
       );
     } catch {
       setSyncMessage(
-        "Live METAR refresh failed; the latest stored reading remains on screen.",
+        "Live refresh failed; the latest stored readings remain on screen.",
       );
     } finally {
       setIsRefreshing(false);
@@ -980,11 +1348,12 @@ export default function MadridDayPage() {
     const datasets = [
       buildForecastDataset(forecastRows, unit),
       buildStationDataset(stationRows, unit),
+      buildDatisDataset(datisRows, unit),
       buildMetarDataset(metarRows, unit),
       buildPeakDataset(forecastPeak, unit),
     ].filter(Boolean);
     return { datasets };
-  }, [forecastPeak, forecastRows, metarRows, stationRows, unit]);
+  }, [datisRows, forecastPeak, forecastRows, metarRows, stationRows, unit]);
 
   const chartOptions = useMemo(() => {
     const annotations = {};
@@ -1046,7 +1415,7 @@ export default function MadridDayPage() {
       responsive: true,
       maintainAspectRatio: false,
       parsing: false,
-      normalized: true,
+      normalized: false,
       interaction: {
         mode: "nearest",
         axis: "x",
@@ -1088,7 +1457,11 @@ export default function MadridDayPage() {
             },
             label(item) {
               const source = item.raw?.source ?? item.dataset.label;
-              return `${source}: ${formatTemperature(item.parsed.y, unit)}`;
+              const temperature = formatTemperature(item.parsed.y, unit);
+              if (item.raw?.kind === "datis") {
+                return `${source}: ${temperature} · ${item.raw.reportKind} ${item.raw.designator} · relayed in ${formatElapsedDuration(item.raw.deliveryLagMs)}${item.raw.transportConflict ? " · transport values differed" : ""}`;
+              }
+              return `${source}: ${temperature}`;
             },
           },
         },
@@ -1205,8 +1578,9 @@ export default function MadridDayPage() {
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-white/65 sm:text-base">
                 Airport temperature outlook with the hourly AEMET forecast,
-                the precise station 3129 observations, and official METAR
-                actuals on one Madrid-time timeline.
+                station 3129 observations, official METAR actuals, and a
+                separately labelled D-ATIS operational temperature relay on
+                one Madrid-time timeline.
               </p>
             </div>
 
@@ -1265,7 +1639,7 @@ export default function MadridDayPage() {
         >
           <div
             className={`grid ${
-              isToday ? "lg:grid-cols-3" : "lg:grid-cols-1"
+              isToday ? "md:grid-cols-2 xl:grid-cols-4" : "lg:grid-cols-1"
             }`}
           >
             <div className="flex items-center justify-between gap-4 px-5 py-4 sm:px-7 lg:block lg:py-5">
@@ -1298,12 +1672,79 @@ export default function MadridDayPage() {
             </div>
 
             {isToday && isTimingLoading ? (
-              <div className="border-t border-white/10 px-5 py-5 text-sm font-semibold text-white/60 sm:px-7 lg:col-span-2 lg:border-l lg:border-t-0">
-                Loading the latest METAR and station schedules…
+              <div className="border-t border-white/10 px-5 py-5 text-sm font-semibold text-white/60 sm:px-7 md:col-span-1 md:border-l md:border-t-0 xl:col-span-3">
+                Loading D-ATIS, METAR, and station schedules…
               </div>
             ) : isToday ? (
               <>
-                <div className="border-t border-white/10 px-5 py-4 sm:px-7 lg:border-l lg:border-t-0 lg:py-5">
+                <div
+                  data-testid="datis-access-status"
+                  className="border-t border-white/10 px-5 py-4 sm:px-7 md:border-l md:border-t-0 lg:py-5"
+                >
+                  <div className="flex items-start justify-between gap-4 lg:block">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-200/80">
+                        Next nominal D-ATIS bulletin
+                      </p>
+                      <span className="hidden rounded-full border border-violet-200/20 bg-violet-200/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-violet-100/75 sm:inline-flex">
+                        Airframes D-ATIS
+                      </span>
+                    </div>
+                    <p
+                      data-testid="datis-countdown"
+                      className={`shrink-0 font-mono font-semibold tabular-nums tracking-[-0.04em] lg:mt-3 ${
+                        datisCaptureAvailable
+                          ? "text-2xl text-white sm:text-3xl lg:text-4xl"
+                          : "max-w-[15rem] text-right text-lg text-violet-200 sm:text-xl lg:text-left"
+                      }`}
+                      aria-label={`D-ATIS access and nominal-bulletin status: ${datisCountdownLabel}`}
+                    >
+                      {datisCountdownLabel}
+                    </p>
+                  </div>
+                  <p className="mt-2 break-words text-xs leading-5 text-white/65 lg:text-sm">
+                    {!datisAvailable ? (
+                      <>
+                        Both Airframes delivery paths require approval.
+                      </>
+                    ) : !datisCaptureAvailable ? (
+                      <>
+                        Streaming is approved, but the Airframes provider
+                        connection is paused. No automatic reconnect is
+                        scheduled.
+                      </>
+                    ) : (
+                      <>
+                        Next nominal bulletin boundary{" "}
+                        {formatMadridScheduleTime(nextDatisCycleAt)} · community
+                        capture can arrive later or not at all.
+                      </>
+                    )}
+                  </p>
+                  <p
+                    data-testid="datis-stream-status"
+                    className="mt-1 text-xs leading-5 text-white/60"
+                  >
+                    <span>{datisLookupDisplay}</span>
+                    <span aria-hidden="true"> · </span>
+                    <span aria-live="polite" aria-atomic="true">
+                      {datisStreamDisplay.state}
+                    </span>
+                    {datisStreamDisplay.detail ? (
+                      <span>
+                        {" "}
+                        · {datisStreamDisplay.detail}
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="mt-1 hidden text-xs text-white/60 lg:block">
+                    D-ATIS normally cycles every ten minutes or on significant
+                    change; aircraft-demand replies and the sampled stream are
+                    not guaranteed.
+                  </p>
+                </div>
+
+                <div className="border-t border-white/10 px-5 py-4 sm:px-7 xl:border-l xl:border-t-0 xl:py-5">
                   <div className="flex items-start justify-between gap-4 lg:block">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-200/75">
@@ -1359,7 +1800,7 @@ export default function MadridDayPage() {
                   </p>
                 </div>
 
-                <div className="border-t border-white/10 px-5 py-4 sm:px-7 lg:border-l lg:border-t-0 lg:py-5">
+                <div className="border-t border-white/10 px-5 py-4 sm:px-7 md:border-l xl:border-t-0 xl:py-5">
                   <div className="flex items-start justify-between gap-4 lg:block">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-xs font-bold uppercase tracking-[0.2em] text-sky-200/75">
@@ -1454,6 +1895,16 @@ export default function MadridDayPage() {
                 <p className="mt-2 text-xs font-semibold text-emerald-900/45">
                   Feed received {formatMadridTime(freshest.receivedAt)} Madrid
                   time
+                  {isToday
+                    ? ` · ${formatObservationAge(freshest.receivedAt, nowMs)}`
+                    : ""}
+                  {freshest.kind === "datis" &&
+                  Number.isFinite(freshest.deliveryLagMs)
+                    ? ` · ${freshest.reportKind} ${freshest.designator} relayed ${formatElapsedDuration(freshest.deliveryLagMs)} after report time`
+                    : ""}
+                  {freshest.kind === "datis" && freshest.firstSeenVia
+                    ? ` · first seen via ${freshest.firstSeenVia === "stream" ? "live stream" : "one-minute lookup"}`
+                    : ""}
                 </p>
               ) : null}
             </div>
@@ -1537,8 +1988,9 @@ export default function MadridDayPage() {
             <p id="madrid-chart-summary" className="sr-only">
               Temperature chart for {formatDateHeading(date)} with{" "}
               {forecastRows.length} hourly forecast points, {stationRows.length}{" "}
-              station 3129 observations, and {metarRows.length} METAR or SPECI
-              actuals. The forecast maximum is{" "}
+              station 3129 observations, {datisRows.length} D-ATIS operational
+              temperature points, and {metarRows.length} METAR or SPECI actuals.
+              The forecast maximum is{" "}
               {formatTemperature(forecastMax, unit)} at{" "}
               {forecastPeak?.peakTimeLabel ?? "an unavailable time"}.
             </p>
@@ -1555,7 +2007,7 @@ export default function MadridDayPage() {
                     data={chartData}
                     options={chartOptions}
                     role="img"
-                    aria-label="Madrid forecast and airport temperature actuals"
+                    aria-label="Madrid forecast, D-ATIS operational temperatures, and airport actuals"
                   />
                 ) : (
                   <div className="grid h-full place-items-center rounded-3xl border border-dashed border-slate-300 bg-slate-50/70 px-6 text-center text-sm text-slate-500">
@@ -1568,8 +2020,8 @@ export default function MadridDayPage() {
             </div>
           </div>
 
-          <div className="grid border-t border-slate-900/8 sm:grid-cols-3">
-            <div className="border-b border-slate-900/8 px-5 py-4 sm:border-b-0 sm:border-r sm:px-7">
+          <div className="grid border-t border-slate-900/8 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="border-b border-slate-900/8 px-5 py-4 sm:border-r sm:px-7 xl:border-b-0">
               <p className="text-xs font-bold uppercase tracking-[0.15em] text-amber-700">
                 Forecast
               </p>
@@ -1577,13 +2029,33 @@ export default function MadridDayPage() {
                 AEMET hourly municipal forecast, with every tied maximum marked.
               </p>
             </div>
-            <div className="border-b border-slate-900/8 px-5 py-4 sm:border-b-0 sm:border-r sm:px-7">
+            <div className="border-b border-slate-900/8 px-5 py-4 sm:border-r sm:px-7 xl:border-b-0">
               <p className="text-xs font-bold uppercase tracking-[0.15em] text-teal-700">
                 Airport station
               </p>
               <p className="mt-1 text-sm leading-5 text-slate-600">
                 AEMET 3129 is airport-based and precise to 0.1°C, but reported
                 hourly.
+              </p>
+            </div>
+            <div className="border-b border-slate-900/8 px-5 py-4 sm:border-b-0 sm:border-r sm:px-7 xl:border-r">
+              <p className="text-xs font-bold uppercase tracking-[0.15em] text-violet-700">
+                D-ATIS operational temp
+              </p>
+              <p className="mt-1 text-sm leading-5 text-slate-600">
+                {datisAccessLoading
+                  ? "Loading D-ATIS access and transport status…"
+                  : !datisAvailable
+                  ? "Neither separately gated Airframes delivery path is approved. No protected D-ATIS rows are exposed."
+                  : datisStreamReady && datisStreamConnectionPaused
+                    ? datisReady
+                      ? `Whole-degree LEMD ARR/DEP values remain available through the one-minute lookup. Streaming is approved, but the Airframes connection and automatic reconnects are paused by ${datisStreamData?.connection?.flagName ?? "the Convex connection kill switch"}.`
+                      : `Previously stored, approved stream values may remain visible, but new streaming capture and automatic reconnects are paused by ${datisStreamData?.connection?.flagName ?? "the Convex connection kill switch"}. The one-minute lookup remains off pending ${datisData?.approval?.flagName ?? "Convex approval"}.`
+                    : datisReady && !datisStreamReady
+                    ? `Whole-degree LEMD ARR/DEP values from the one-minute lookup. The sampled live stream remains off pending ${datisStreamData?.approval?.flagName ?? "Convex approval"}.`
+                    : !datisReady && datisStreamReady
+                      ? `Whole-degree LEMD ARR/DEP values from the sampled live stream. The one-minute lookup remains off pending ${datisData?.approval?.flagName ?? "Convex approval"}.`
+                      : "One-minute lookup and sampled live-stream receipts are deduplicated into this single D-ATIS series. Report time is plotted; capture is not guaranteed."}
               </p>
             </div>
             <div className="px-5 py-4 sm:px-7">
@@ -1596,23 +2068,61 @@ export default function MadridDayPage() {
               </p>
             </div>
           </div>
+          <div className="border-t border-slate-900/8 px-5 py-3 text-xs leading-5 text-slate-500 sm:px-7">
+            This Airframes D-ATIS mirror is non-operational, not a direct
+            sensor or guaranteed feed. Its one-minute lookup and optional
+            sampled stream are delivery paths for the same chart series. Data
+            provided by{" "}
+            <a
+              href="https://airframes.io"
+              target="_blank"
+              rel="noreferrer"
+              className="font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2"
+            >
+              Airframes.io
+            </a>{" "}
+            and its community of feeders. Official voice/controller information
+            prevails.
+          </div>
         </section>
 
         <footer className="flex flex-col gap-2 px-2 pb-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <p aria-live="polite">
             {syncMessage ||
               (isToday
-                ? "Live Convex subscriptions will update this chart as new rows arrive."
+                ? "Chart updates automatically when Convex stores a new observation."
                 : "Showing stored forecast and observations for the selected date.")}
           </p>
-          <p>
-            Latest METAR on chart:{" "}
-            <span className="font-bold text-slate-700">
-              {formatTemperature(latestMetarTemperature, unit)}
+          <p className="flex flex-wrap gap-x-3">
+            <span data-testid="latest-datis">
+              Latest D-ATIS:{" "}
+              <span className="font-bold text-violet-700">
+                {datisAccessLoading
+                  ? "Loading…"
+                  : datisAvailable
+                  ? formatTemperature(latestDatisTemperature, unit)
+                  : "Approval required"}
+              </span>
+              {datisAvailable && airportReading.latestDatis
+                ? ` at ${formatLocalTime(airportReading.latestDatis.reportTimeLocal)}`
+                : ""}
+              {datisAvailable &&
+              isToday &&
+              airportReading.latestDatis &&
+              latestDatisReportAge &&
+              latestDatisReceiptAge
+                ? ` · report ${latestDatisReportAge} · relay received ${latestDatisReceiptAge} · first seen via ${airportReading.latestDatis.firstSeenVia === "stream" ? "live stream" : "one-minute lookup"}`
+                : ""}
             </span>
-            {airportReading.latestMetar
-              ? ` at ${formatLocalTime(airportReading.latestMetar.obsTimeLocal)}`
-              : ""}
+            <span>
+              Latest METAR:{" "}
+              <span className="font-bold text-slate-700">
+                {formatTemperature(latestMetarTemperature, unit)}
+              </span>
+              {airportReading.latestMetar
+                ? ` at ${formatLocalTime(airportReading.latestMetar.obsTimeLocal)}`
+                : ""}
+            </span>
           </p>
         </footer>
       </div>

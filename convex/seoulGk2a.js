@@ -17,12 +17,11 @@ const RKSI_REPRESENTATIVE_RUNWAY_DIRECTION = "15L";
 const KMA_SOURCE_ENDPOINT = "selectImgDown.do";
 const PRODUCT_CADENCE_MINUTES = 10;
 const MILLIS_PER_MINUTE = 60 * 1000;
-const COLLECTION_WINDOW_START_MINUTES = 11 * 60;
-const COLLECTION_WINDOW_END_MINUTES = 16 * 60;
 const COLLECTION_LOCK_TIMEOUT_MS = 15 * 60 * 1000;
 const OBSERVATION_RETENTION_MS = 48 * 60 * 60 * 1000;
 const TRANSMISSION_MIN_CLEAR_SKY_WM2 = 50;
 const FRESH_OBSERVATION_AGE_MINUTES = 35;
+const DECISION_FRESH_OBSERVATION_AGE_MINUTES = 30;
 
 const COLLECTOR_STATUS = {
   OK: "ok",
@@ -44,18 +43,6 @@ const seoulDateFormatter = new Intl.DateTimeFormat("en-CA", {
   year: "numeric",
   month: "2-digit",
   day: "2-digit",
-});
-
-const seoulDateTimeFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: SEOUL_TIMEZONE,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
-  hourCycle: "h23",
 });
 
 function getDateParts(formatter, date) {
@@ -118,16 +105,10 @@ function hasApprovedNmscAccess() {
   return process.env.NMSC_GK2A_ACCESS_APPROVED === "true";
 }
 
-function seoulMinuteOfDay(epochMs) {
-  const parts = getDateParts(seoulDateTimeFormatter, new Date(epochMs));
-  return Number(parts.hour) * 60 + Number(parts.minute);
-}
-
-function isWithinCollectionWindow(epochMs) {
-  const minuteOfDay = seoulMinuteOfDay(epochMs);
+function hasUsefulSolarEnergy(epochMs) {
   return (
-    minuteOfDay >= COLLECTION_WINDOW_START_MINUTES &&
-    minuteOfDay < COLLECTION_WINDOW_END_MINUTES
+    haurwitzClearSkyDsr(epochMs, RKSI_LATITUDE, RKSI_LONGITUDE)
+      .clearSkyDsrWm2 >= TRANSMISSION_MIN_CLEAR_SKY_WM2
   );
 }
 
@@ -359,6 +340,18 @@ export const upsertSolarObservations = internalMutationGeneric({
     rows: v.array(solarObservationValidator),
   },
   handler: async (ctx, args) => {
+    // Retained for compatibility with the original collector, but it must
+    // obey the same fail-closed storage boundary as the active collector.
+    if (!hasApprovedNmscAccess()) {
+      return {
+        status: "access_not_approved",
+        insertedCount: 0,
+        patchedCount: 0,
+        unchangedCount: 0,
+        rowCount: 0,
+        latestObsTimeUtc: null,
+      };
+    }
     const now = Date.now();
     let insertedCount = 0;
     let patchedCount = 0;
@@ -425,6 +418,7 @@ export const recordCollectorStatus = internalMutationGeneric({
     lastSuccessAtLocal: v.optional(v.string()),
     latestObsTimeUtc: v.optional(v.number()),
     latestObsTimeLocal: v.optional(v.string()),
+    lastResolvedFrameTimeUtc: v.optional(v.number()),
     lastError: v.optional(v.string()),
     requestedPointCount: v.optional(v.number()),
     storedRowCount: v.optional(v.number()),
@@ -434,16 +428,16 @@ export const recordCollectorStatus = internalMutationGeneric({
     windSpeedKt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    if (!hasApprovedNmscAccess()) {
+      return { status: "access_not_approved", configured: false };
+    }
     const existing = await ctx.db
       .query("seoulGk2aCollectorStatus")
       .withIndex("by_station", (query) =>
         query.eq("stationIcao", args.stationIcao),
       )
       .first();
-    const patch = {
-      ...args,
-      updatedAt: Date.now(),
-    };
+    const patch = { ...args, updatedAt: Date.now() };
     if (
       !args.lastError &&
       (args.status === COLLECTOR_STATUS.OK ||
@@ -465,12 +459,9 @@ export const pollLatestSolarHeating = actionGeneric({
     stationIcao: v.optional(v.string()),
   },
   handler: async (ctx, args) =>
-    await ctx.runMutation(
-      api.seoulGk2aCollector.requestSolarHeatingRefresh,
-      {
-        stationIcao: args.stationIcao,
-      },
-    ),
+    await ctx.runMutation(api.seoulGk2aCollector.requestSolarHeatingRefresh, {
+      stationIcao: args.stationIcao,
+    }),
 });
 
 function median(values) {
@@ -610,7 +601,7 @@ function dashboardStatusMessage(status, collector, latest, ageMinutes) {
     return "NMSC approval is required before automated GK2A NetCDF access can be enabled.";
   }
   if (status === "window_closed") {
-    return "Scheduled and manual GK2A sampling are paused outside 11:00–16:00 KST.";
+    return "Scheduled and manual GK2A sampling are paused while modeled clear-sky irradiance is below 50 W/m².";
   }
   if (status === "night") {
     return "Solar transmission is not calculated while modeled clear-sky irradiance is below 50 W/m².";
@@ -632,6 +623,355 @@ function dashboardStatusMessage(status, collector, latest, ageMinutes) {
   return "GK2A surface shortwave radiation is current.";
 }
 
+function nullableNumber(value) {
+  return Number.isFinite(value) ? Number(value) : null;
+}
+
+function findDecisionReferenceRow(rows, latest) {
+  if (!latest) {
+    return null;
+  }
+  return (
+    rows
+      .filter((row) => {
+        const ageMinutes =
+          (latest.obsTimeUtc - row.obsTimeUtc) / MILLIS_PER_MINUTE;
+        return (
+          ageMinutes >= 20 &&
+          ageMinutes <= 35 &&
+          Number.isFinite(row.dsrWm2) &&
+          Number.isFinite(row.clearSkyDsrWm2)
+        );
+      })
+      .sort((left, right) => {
+        const leftAge =
+          (latest.obsTimeUtc - left.obsTimeUtc) / MILLIS_PER_MINUTE;
+        const rightAge =
+          (latest.obsTimeUtc - right.obsTimeUtc) / MILLIS_PER_MINUTE;
+        return (
+          Math.abs(leftAge - 30) - Math.abs(rightAge - 30) ||
+          right.obsTimeUtc - left.obsTimeUtc
+        );
+      })[0] ?? null
+  );
+}
+
+function summarizeDecisionUpwind(upwindRowGroups, latest) {
+  const matchingRows = latest
+    ? upwindRowGroups
+        .map(
+          (rows) =>
+            rows.find(
+              (row) =>
+                row.collectionRunAt === latest.collectionRunAt &&
+                Math.abs(row.obsTimeUtc - latest.obsTimeUtc) <=
+                  15 * MILLIS_PER_MINUTE,
+            ) ?? null,
+        )
+        .filter(Boolean)
+    : [];
+  const transmissionRows = matchingRows.filter((row) =>
+    Number.isFinite(row.transmissionPct),
+  );
+  const medianTransmissionPct = median(
+    transmissionRows.map((row) => row.transmissionPct),
+  );
+  const differenceFromAirportPctPoints =
+    Number.isFinite(medianTransmissionPct) &&
+    Number.isFinite(latest?.transmissionPct)
+      ? round(medianTransmissionPct - latest.transmissionPct, 1)
+      : null;
+  const signal = !Number.isFinite(differenceFromAirportPctPoints)
+    ? "unavailable"
+    : differenceFromAirportPctPoints >= 10
+      ? "clearing"
+      : differenceFromAirportPctPoints <= -10
+        ? "cloudier"
+        : "similar";
+  const etaMinutes =
+    signal === "clearing" || signal === "cloudier"
+      ? ([...transmissionRows]
+          .filter((row) =>
+            signal === "clearing"
+              ? row.transmissionPct - latest.transmissionPct >= 10
+              : row.transmissionPct - latest.transmissionPct <= -10,
+          )
+          .sort(
+            (left, right) =>
+              (left.upwindMinutes ?? Number.POSITIVE_INFINITY) -
+              (right.upwindMinutes ?? Number.POSITIVE_INFINITY),
+          )[0]?.upwindMinutes ?? null)
+      : null;
+  return {
+    status:
+      matchingRows.length === 3
+        ? "available"
+        : matchingRows.length
+          ? "partial"
+          : "unavailable",
+    signal,
+    etaMinutes,
+    pointCount: matchingRows.length,
+    transmissionPointCount: transmissionRows.length,
+    medianTransmissionPct: Number.isFinite(medianTransmissionPct)
+      ? round(medianTransmissionPct, 1)
+      : null,
+    differenceFromAirportPctPoints,
+  };
+}
+
+export const getSolarDecisionInputs = internalQueryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+    evaluatedAtUtc: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = normalizeStationIcao(args.stationIcao);
+    if (!isValidDateKey(args.date)) {
+      throw new Error("Date must be a real YYYY-MM-DD calendar date.");
+    }
+    if (formatSeoulDate(args.evaluatedAtUtc) !== args.date) {
+      throw new Error(
+        "The solar decision date must match evaluatedAtUtc in Asia/Seoul.",
+      );
+    }
+
+    const modeledNow = haurwitzClearSkyDsr(
+      args.evaluatedAtUtc,
+      RKSI_LATITUDE,
+      RKSI_LONGITUDE,
+    );
+    const modeled30MinutesAgo = haurwitzClearSkyDsr(
+      args.evaluatedAtUtc - 30 * MILLIS_PER_MINUTE,
+      RKSI_LATITUDE,
+      RKSI_LONGITUDE,
+    );
+    const usefulSolarEnergyRemaining =
+      modeledNow.clearSkyDsrWm2 >= TRANSMISSION_MIN_CLEAR_SKY_WM2;
+    const configured = hasApprovedNmscAccess();
+    const modeledClearSkyChange30mWm2 = round(
+      modeledNow.clearSkyDsrWm2 - modeled30MinutesAgo.clearSkyDsrWm2,
+      1,
+    );
+
+    // Do not even query retained NMSC-derived rows after approval is removed.
+    // The Haurwitz fields are locally modeled and remain sufficient to decide
+    // whether the disabled solar input is still an active blocker.
+    if (!configured) {
+      return {
+        stationIcao,
+        date: args.date,
+        evaluatedAtUtc: args.evaluatedAtUtc,
+        solarStatus: usefulSolarEnergyRemaining
+          ? "approval_required"
+          : "low_solar",
+        solarApprovalConfigured: false,
+        solarCollectionEligibleNow: false,
+        solarUsefulEnergyRemaining: usefulSolarEnergyRemaining,
+        solarFreshnessLimitMinutes: DECISION_FRESH_OBSERVATION_AGE_MINUTES,
+        solarModeledClearSkyDsrNowWm2: modeledNow.clearSkyDsrWm2,
+        solarModeledSolarElevationNowDeg: modeledNow.solarElevationDeg,
+        solarModeledClearSkyDsr30mAgoWm2: modeled30MinutesAgo.clearSkyDsrWm2,
+        solarModeledClearSkyDsrChange30mWm2: modeledClearSkyChange30mWm2,
+        solarObservationFresh: false,
+        solarTransmissionTrend: "unavailable",
+        solarTransmissionTrendSampleCount: 0,
+        solarTransmissionTrendCoverageMinutes: 0,
+        solarExpectedNextHour: "unavailable",
+        solarUpwindStatus: "unavailable",
+        solarUpwindSignal: "unavailable",
+        solarUpwindPointCount: 0,
+        solarUpwindTransmissionPointCount: 0,
+        solarQualityUsable: false,
+      };
+    }
+
+    const [collector, airportRows, ...upwindRowGroups] = await Promise.all([
+      ctx.db
+        .query("seoulGk2aCollectorStatus")
+        .withIndex("by_station", (query) =>
+          query.eq("stationIcao", stationIcao),
+        )
+        .first(),
+      ctx.db
+        .query("seoulGk2aSolarObservations")
+        .withIndex("by_station_date_point_ts", (query) =>
+          query
+            .eq("stationIcao", stationIcao)
+            .eq("date", args.date)
+            .eq("pointKind", POINT_KIND.AIRPORT),
+        )
+        .collect(),
+      ...[
+        POINT_KIND.UPWIND_20M,
+        POINT_KIND.UPWIND_40M,
+        POINT_KIND.UPWIND_60M,
+      ].map((pointKind) =>
+        ctx.db
+          .query("seoulGk2aSolarObservations")
+          .withIndex("by_station_date_point_ts", (query) =>
+            query
+              .eq("stationIcao", stationIcao)
+              .eq("date", args.date)
+              .eq("pointKind", pointKind),
+          )
+          .order("desc")
+          .take(24),
+      ),
+    ]);
+
+    const orderedAirportRows = airportRows
+      .filter(
+        (row) =>
+          row.obsTimeUtc >= args.evaluatedAtUtc - OBSERVATION_RETENTION_MS &&
+          row.obsTimeUtc <=
+            args.evaluatedAtUtc + PRODUCT_CADENCE_MINUTES * MILLIS_PER_MINUTE,
+      )
+      .sort((left, right) => left.obsTimeUtc - right.obsTimeUtc);
+    const latest =
+      [...orderedAirportRows]
+        .reverse()
+        .find((row) => Number.isFinite(row.dsrWm2)) ??
+      orderedAirportRows.at(-1) ??
+      null;
+    const reference30Minutes = findDecisionReferenceRow(
+      orderedAirportRows,
+      latest,
+    );
+    const observationAgeMinutes = latest
+      ? Math.max(0, args.evaluatedAtUtc - latest.obsTimeUtc) / MILLIS_PER_MINUTE
+      : null;
+    const observationFresh =
+      Number.isFinite(latest?.dsrWm2) &&
+      Number.isFinite(observationAgeMinutes) &&
+      observationAgeMinutes <= DECISION_FRESH_OBSERVATION_AGE_MINUTES;
+    const trend = transmissionTrend(orderedAirportRows, latest);
+    const upwind = summarizeDecisionUpwind(upwindRowGroups, latest);
+    const change30mActualMinutes = reference30Minutes
+      ? round(
+          (latest.obsTimeUtc - reference30Minutes.obsTimeUtc) /
+            MILLIS_PER_MINUTE,
+          1,
+        )
+      : null;
+    const dsrChange30mWm2 =
+      Number.isFinite(latest?.dsrWm2) &&
+      Number.isFinite(reference30Minutes?.dsrWm2)
+        ? round(latest.dsrWm2 - reference30Minutes.dsrWm2, 1)
+        : null;
+    const observedClearSkyChange30mWm2 =
+      Number.isFinite(latest?.clearSkyDsrWm2) &&
+      Number.isFinite(reference30Minutes?.clearSkyDsrWm2)
+        ? round(latest.clearSkyDsrWm2 - reference30Minutes.clearSkyDsrWm2, 1)
+        : null;
+    const transmissionChange30mPctPoints =
+      Number.isFinite(latest?.transmissionPct) &&
+      Number.isFinite(reference30Minutes?.transmissionPct)
+        ? round(latest.transmissionPct - reference30Minutes.transmissionPct, 1)
+        : null;
+    let status;
+    if (!usefulSolarEnergyRemaining) {
+      status = "low_solar";
+    } else if (!configured) {
+      status = "approval_required";
+    } else if (!Number.isFinite(latest?.dsrWm2)) {
+      status = "no_data";
+    } else if (!observationFresh) {
+      status = "stale";
+    } else if (collector?.status === COLLECTOR_STATUS.ERROR) {
+      status = "error";
+    } else if (collector?.status === COLLECTOR_STATUS.PARTIAL) {
+      status = "partial";
+    } else {
+      status = "ok";
+    }
+
+    return {
+      stationIcao,
+      date: args.date,
+      evaluatedAtUtc: args.evaluatedAtUtc,
+      solarStatus: status,
+      solarApprovalConfigured: configured,
+      solarCollectionEligibleNow: configured && usefulSolarEnergyRemaining,
+      solarUsefulEnergyRemaining: usefulSolarEnergyRemaining,
+      solarFreshnessLimitMinutes: DECISION_FRESH_OBSERVATION_AGE_MINUTES,
+      solarModeledClearSkyDsrNowWm2: modeledNow.clearSkyDsrWm2,
+      solarModeledSolarElevationNowDeg: modeledNow.solarElevationDeg,
+      solarModeledClearSkyDsr30mAgoWm2: modeled30MinutesAgo.clearSkyDsrWm2,
+      solarModeledClearSkyDsrChange30mWm2: modeledClearSkyChange30mWm2,
+      solarObservedAtUtc: nullableNumber(latest?.obsTimeUtc),
+      solarObservedAtLocal: latest?.obsTimeLocal ?? null,
+      solarObservationAgeMinutes: Number.isFinite(observationAgeMinutes)
+        ? round(observationAgeMinutes, 1)
+        : null,
+      solarObservationFresh: observationFresh,
+      solarDsrWm2: nullableNumber(latest?.dsrWm2),
+      solarAsrWm2: nullableNumber(latest?.asrWm2),
+      solarClearSkyDsrWm2: nullableNumber(latest?.clearSkyDsrWm2),
+      solarElevationDeg: nullableNumber(latest?.solarElevationDeg),
+      solarTransmissionPct: nullableNumber(latest?.transmissionPct),
+      solarReferenceObservedAtUtc: nullableNumber(
+        reference30Minutes?.obsTimeUtc,
+      ),
+      solarChange30mActualMinutes: change30mActualMinutes,
+      solarDsrChange30mWm2: dsrChange30mWm2,
+      solarObservedClearSkyDsrChange30mWm2: observedClearSkyChange30mWm2,
+      solarTransmissionChange30mPctPoints: transmissionChange30mPctPoints,
+      solarTransmissionTrend: trend.state,
+      solarTransmissionSlopePctPointsPerHour: trend.slopePctPointsPerHour,
+      solarTransmissionTrendSampleCount: trend.sampleCount,
+      solarTransmissionTrendCoverageMinutes: trend.coverageMinutes,
+      solarExpectedNextHour:
+        upwind.signal === "clearing"
+          ? "increasing"
+          : upwind.signal === "cloudier"
+            ? "decreasing"
+            : trend.state,
+      solarUpwindStatus: upwind.status,
+      solarUpwindSignal: upwind.signal,
+      solarUpwindEtaMinutes: nullableNumber(upwind.etaMinutes),
+      solarUpwindPointCount: upwind.pointCount,
+      solarUpwindTransmissionPointCount: upwind.transmissionPointCount,
+      solarUpwindMedianTransmissionPct: upwind.medianTransmissionPct,
+      solarUpwindDifferencePctPoints: upwind.differenceFromAirportPctPoints,
+      solarWindObservedAtUtc: nullableNumber(latest?.windObservedAtUtc),
+      solarWindDirectionFromDeg: nullableNumber(
+        latest?.windDirectionFromDeg ?? collector?.windDirectionFromDeg,
+      ),
+      solarWindSpeedKt: nullableNumber(
+        latest?.windSpeedKt ?? collector?.windSpeedKt,
+      ),
+      solarWindSpeedMps: nullableNumber(latest?.windSpeedMps),
+      solarSource: latest?.source ?? null,
+      solarSourceEndpoint: latest?.sourceEndpoint ?? null,
+      solarSourceFileName: latest?.sourceFileName ?? null,
+      solarLatitude: nullableNumber(latest?.latitude),
+      solarLongitude: nullableNumber(latest?.longitude),
+      solarSourceLatitude: nullableNumber(latest?.sourceLatitude),
+      solarSourceLongitude: nullableNumber(latest?.sourceLongitude),
+      solarSourceGridRow: nullableNumber(latest?.sourceGridRow),
+      solarSourceGridColumn: nullableNumber(latest?.sourceGridColumn),
+      solarSampleKey: latest?.sampleKey ?? null,
+      solarDsrQualityFlag: nullableNumber(latest?.dsrQualityFlag),
+      solarAsrQualityFlag: nullableNumber(latest?.asrQualityFlag),
+      solarShortwaveQualityFlag: nullableNumber(latest?.shortwaveQualityFlag),
+      solarQualityUsable:
+        Number.isFinite(latest?.dsrWm2) &&
+        latest?.dsrQualityFlag === 1 &&
+        latest?.shortwaveQualityFlag === 1,
+      solarProductCadenceMinutes: nullableNumber(latest?.productCadenceMinutes),
+      solarCollectionRunAt: nullableNumber(latest?.collectionRunAt),
+      solarFirstSeenAt: nullableNumber(latest?.firstSeenAt),
+      solarUpdatedAt: nullableNumber(latest?.updatedAt),
+      solarCollectorStatus: collector?.status ?? null,
+      solarCollectorUpwindStatus: collector?.upwindStatus ?? null,
+      solarCollectorLastAttemptAt: nullableNumber(collector?.lastAttemptAt),
+      solarCollectorLastSuccessAt: nullableNumber(collector?.lastSuccessAt),
+    };
+  },
+});
+
 export const getSolarHeatingDashboard = queryGeneric({
   args: {
     stationIcao: v.optional(v.string()),
@@ -644,6 +984,61 @@ export const getSolarHeatingDashboard = queryGeneric({
     const date = args.date ?? today;
     if (!isValidDateKey(date)) {
       throw new Error("Date must be a real YYYY-MM-DD calendar date.");
+    }
+
+    const configured = hasApprovedNmscAccess();
+    const currentClearSky = haurwitzClearSkyDsr(
+      now,
+      RKSI_LATITUDE,
+      RKSI_LONGITUDE,
+    );
+    const collectionWindowOpen = date === today && hasUsefulSolarEnergy(now);
+    if (!configured) {
+      const status = COLLECTOR_STATUS.UNCONFIGURED;
+      return {
+        stationIcao,
+        date,
+        today,
+        configured: false,
+        collectionWindowOpen,
+        status,
+        statusMessage: dashboardStatusMessage(status, null, null, null),
+        source: {
+          provider: "KMA/NMSC public satellite viewer",
+          satellite: "GK2A",
+          endpoint: KMA_SOURCE_ENDPOINT,
+          productCadenceMinutes: PRODUCT_CADENCE_MINUTES,
+          clearSkyModel: "Haurwitz",
+        },
+        collector: null,
+        latest: null,
+        observationAgeMinutes: null,
+        currentDsrWm2: null,
+        currentAsrWm2: null,
+        currentClearSkyDsrWm2: null,
+        currentSolarTransmissionPct: null,
+        reference30Minutes: null,
+        change30MinutesPctPoints: null,
+        change30mPctPoints: null,
+        change30mActualMinutes: null,
+        trend: transmissionTrend([], null),
+        expectedNextHour: "unavailable",
+        cloudClearingUpstream: null,
+        upstreamClearing: null,
+        upstreamEtaMinutes: null,
+        windDirectionDeg: null,
+        windSpeedKt: null,
+        sourceAgeMinutes: null,
+        upstream: {
+          status: "unavailable",
+          signal: "unavailable",
+          medianTransmissionPct: null,
+          differenceFromAirportPctPoints: null,
+          points: [],
+        },
+        samples: [],
+        history: [],
+      };
     }
 
     const [collector, airportRows, ...upwindRowGroups] = await Promise.all([
@@ -679,7 +1074,6 @@ export const getSolarHeatingDashboard = queryGeneric({
           .take(24),
       ),
     ]);
-    const configured = hasApprovedNmscAccess();
     const orderedAirportRows = airportRows
       .filter(
         (row) =>
@@ -699,14 +1093,9 @@ export const getSolarHeatingDashboard = queryGeneric({
         : null;
     const isNight =
       date === today &&
-      haurwitzClearSkyDsr(now, RKSI_LATITUDE, RKSI_LONGITUDE).clearSkyDsrWm2 <
-        TRANSMISSION_MIN_CLEAR_SKY_WM2;
-    const collectionWindowOpen =
-      date === today && isWithinCollectionWindow(now);
+      currentClearSky.clearSkyDsrWm2 < TRANSMISSION_MIN_CLEAR_SKY_WM2;
     let status;
-    if (!configured) {
-      status = COLLECTOR_STATUS.UNCONFIGURED;
-    } else if (isNight) {
+    if (isNight) {
       status = "night";
     } else if (date === today && !collectionWindowOpen) {
       status = "window_closed";
@@ -853,8 +1242,7 @@ export const getSolarHeatingDashboard = queryGeneric({
               : {}),
             ...(Number.isFinite(collector.collectionInFlightSince)
               ? {
-                  collectionInFlightSince:
-                    collector.collectionInFlightSince,
+                  collectionInFlightSince: collector.collectionInFlightSince,
                   collectionMode: collector.collectionMode ?? "unknown",
                   collectionActive:
                     now - collector.collectionInFlightSince <

@@ -58,6 +58,10 @@ Defined in `convex/crons.js` and `convex/kordPhone.js`.
    - Optional shared-secret check via `TWILIO_WEBHOOK_TOKEN`.
    - Accepts Twilio form payload.
    - Schedules `internal.kordPhoneNode.processRecording` and returns quickly.
+   - The same router also serves the independently approval-gated read-only
+     `/mexico/capma/latest-image` route. That GET route does not share Twilio
+     credentials, parsing, scheduling, or phone-call state and does not change
+     `/twilio/recording` behavior.
 3. `internal.kordPhoneNode.processRecording`
    - Validates Twilio + OpenAI env vars.
    - Saves recording metadata via `upsertRecordingFromWebhook` (`status: "recorded"`).
@@ -124,3 +128,15 @@ Update this document when changing any of:
 - `convex/http.js` Twilio recording webhook behavior.
 - `convex/crons.js` phone-call scheduling behavior.
 - `kordPhoneCalls` schema fields or indexes.
+
+## Shared Cron Inventory Note
+
+`convex/crons.js` also contains unrelated city collectors. The Madrid
+`madrid_airframes_datis_every_minute` entry invokes an approval-gated internal
+D-ATIS action and does not enqueue, alter, or share credentials with KORD phone
+calls. The separate
+`madrid_airframes_datis_stream_supervisor_every_minute` entry supervises the
+Madrid Airframes stream only when its independent approval and operational
+connection flags are both exact `true`; it likewise has no KORD phone path,
+data, or credentials. KORD phone-call scheduling behavior is unchanged by
+either job.

@@ -13,6 +13,16 @@
 # testing
 /coverage
 
+# Approval-gated CAPMA research fixtures must never be committed.
+/tmp/capma-metar-test/
+/tmp/capma-p05-current.jpg
+/tmp/capma-p23-current.jpg
+
+# Local agent, IDE, and temporary research state.
+/.ai/
+/.idea/
+/tmp/
+
 # next.js
 /.next/
 /out/

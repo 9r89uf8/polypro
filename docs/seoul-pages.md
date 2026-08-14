@@ -18,7 +18,8 @@ Example: `/seoul/day/2026-07-27`.
 The route is a focused RKSI representative-temperature timeline. It starts with
 live-source status cards, a compact maximum outlook, and one horizontally
 scrollable full-day chart. Large provider-card and high-prediction revision
-panels are not rendered.
+panels are not rendered. A compact remaining-ceiling decision block is rendered
+inside the maximum outlook; it is not a revision-history browser.
 
 Forecast-capture machinery remains connected because it supplies KMA/AMO's
 official RKSI daily high, hourly temperatures and peak-time estimate, exact
@@ -26,7 +27,9 @@ condition phrases, ceilings, and the compact outlook. Weather.com history
 remains visible only as an explicitly secondary comparison. The backend still
 stores internal prediction revisions for historical retention and evaluation,
 but the route derives its displayed expected maximum directly from the KMA
-capture plus the observed floor and does not plot a tracker curve.
+capture plus the observed floor and does not plot a tracker curve. Separately,
+it renders the backend `rksi15l-remaining-ceiling-v2` decision for a selected
+raw-tenths Celsius target.
 
 The maximum outlook has six concise readings:
 
@@ -38,17 +41,134 @@ The maximum outlook has six concise readings:
 - KMA's hottest hourly temperature and its first-to-last tied-hour window;
 - a robust 60-minute AMOS trend in degrees per hour.
 
+Below those six readings, the v2 decision block shows the mutable current
+state, target, rule ceiling, target margin, candidate time, confirmation count,
+and current mutable blocker descriptions, plus immutable ceiling components,
+robust 15/30/60-minute slopes, AMOS/KMA/GK2A evaluation freshness, 16L
+corroboration, and model version. The UI labels the mutable state-check time separately from
+the latest material snapshot time, so a no-op evaluation does not imply that
+the immutable trend/source snapshot was refreshed. The expected maximum and
+rule ceiling remain separate: the
+former is the KMA published high floored by the observed high; the latter is a
+conservative threshold policy value rather than a statistical confidence
+interval.
+
+The remaining-ceiling header always exposes three target controls:
+
+- `Use KMA published high` captures the currently displayed raw KMA daily high
+  once for the selected date. The captured value remains fixed while selected;
+  a later reactive KMA revision does not silently move the threshold.
+- `Next +0.1°C` captures the current representative raw observed maximum plus
+  `0.1°C` once. It switches to custom mode but does not keep advancing as new
+  observations arrive.
+- `Custom raw target (°C)` accepts an explicit target in `0.1°C` steps. The
+  server rounds to one decimal and accepts only `-20.0°C` through `45.0°C`,
+  inclusive.
+
+The custom input is always Celsius even when the page's display toggle is
+Fahrenheit. The browser retains only the selected `kma` or `custom` mode and
+the applied custom value under `polypro:seoul:remaining-target:v1`; it does not
+persist a resolved KMA or `Next` value as if it were a new provider forecast.
+Applying another target switches to that target's independent mutable state
+and immutable revision lineage.
+
+`already_reached` is target-relative. It appears as soon as the raw
+representative observed high is greater than or equal to the selected target,
+even at 10:00 KST and even when KMA forecasts a much higher daily maximum. It
+does not mean that the forecast daily high has already occurred.
+
+### Plain-language maximum summary
+
+The maximum outlook also condenses the existing detailed values into three
+plain-language questions. This is a presentation layer, not another forecast
+model, and it does not replace the selected-target decision or its blockers.
+
+#### Is today's high locked?
+
+For the live day, the lock check uses its own raw AMOS target exactly `0.1°C`
+above the observed high. That is the smallest possible new high in the
+one-decimal series. It says `Yes` or `likely locked` only after this independent
+next-tenth target reaches `unlikely_to_reach`, including the full blocker-free
+15-minute confirmation. An arbitrary custom target being unlikely is not proof
+that the current high is locked because the series could still rise without
+reaching that farther target.
+
+If the next-tenth decision becomes `already_reached`, a new high was detected;
+the lock answer returns to unconfirmed and its target advances to the new
+observed high plus `0.1°C`. `still_possible` means only that the deterministic
+rules have not ruled out another tenth. It does **not** mean that another rise
+is likely. Missing, stale, candidate, or insufficient states remain `awaiting`
+or `not confirmed`. For a completed archived day, the card reports the highest
+available stored observation rather than presenting a live lock inference or
+claiming complete observation coverage that has not been finalized.
+
+#### Is KMA's forecast high too low, on track, or too high?
+
+This answer compares the observed high with the current published
+`kma.dailyHighC` and keeps raw-tenths semantics explicit. Unlike the stable KMA
+target captured by the selector, this forecast assessment follows a new
+current KMA revision:
+
+- A strict exceed is detected when the observed high is at least the current
+  KMA high plus `0.1°C`. Differences below `0.5°C` are labeled as slightly low
+  but within KMA's whole-degree publication resolution; `too low` is reserved
+  for a difference of at least `0.5°C`.
+- When the observed high equals the KMA high, the forecast has been `met`; it
+  has not yet been strictly exceeded.
+- KMA is `likely too high` or `likely to fall short` only when a decision whose
+  target is the current published KMA high reaches `unlikely_to_reach`.
+- Otherwise the forecast remains `on track` or tentative. Existing
+  `running_warm`, `running_cool`, and `on_track` values describe direction
+  relative to the hourly curve; they are not final verdicts on the daily high.
+
+The strict exceed test deliberately compares integer raw tenths against the
+current `KMA high + 0.1°C`, rather than using a floating-point greater-than
+shortcut. Missing or stale KMA guidance produces an unavailable/tentative
+answer instead of promoting Weather.com or guessing. If a stale stored KMA
+value has already been met or exceeded, the card names it as a stored value and
+does not relabel it as current guidance. Archived comparisons likewise say
+`stored KMA value`; they are not forecast-skill scores because the available
+capture may contain a later revision.
+
+#### Is warming slowing?
+
+This answer requires fresh, valid robust 15-, 30-, and 60-minute AMOS slopes.
+The 15-minute slope describes the most recent rate, while the longer windows
+show whether that rate is changing consistently. A `0.2°C/hour` band prevents
+small quantized changes from being presented as meaningful acceleration:
+
+- a 15-minute slope at or below `-0.2°C/hour` is `cooling`;
+- a 15-minute slope strictly between `-0.2` and `+0.2°C/hour` is nearly steady;
+- while still warming, rates stepping down by at least `0.2°C/hour` from 60 to
+  30 to 15 minutes are `slowing`;
+- a recent rate inside the steady band after that step-down is `leveled off`;
+- positive 15-minute warming after a sub-`0.2°C/hour` 30-minute rate is
+  `resumed`; other positive but non-monotonic sequences remain `still warming`
+  or unresolved; and
+- positive rates, each at least `+0.2°C/hour`, stepping up by at least
+  `0.2°C/hour` from 60 to 30 to 15 minutes are `accelerating`.
+
+Unavailable or stale slopes produce `awaiting data`. `Slowing` describes a
+change in the warming rate only. It is not a locked high, a passed peak, or an
+`unlikely_to_reach` decision; cloud clearing, advection, wind changes, or a
+later rebound can still reverse the short trend.
+
+On archived routes, the three questions use `final` or `last observed` wording
+where applicable. A completed actual maximum may be called locked, but the
+last stored slope is never presented as if it were a live trend.
+
 The panel accepts only an approved KMA capture as forecast guidance; an older
 Weather.com-only or multi-provider prediction revision cannot be relabeled as
 official KMA guidance. A fresh query cannot make stale provider input look
 fresh. When KMA collection is approval-gated or no stored KMA daily maximum is
 available, the expected maximum falls back to the observed maximum and
 Weather.com never fills the gap. A stale stored KMA daily maximum may remain
-visible only with the stale label described below. The trend uses the median
-of pairwise slopes separated by at least ten minutes and requires at least 45
-minutes of coverage in the trailing hour, which reduces sensitivity to one
-quantized or anomalous minute. On today's page the trend is suppressed whenever
-the newest AMOS row is delayed or stale; an old trailing hour is never
+visible only with the stale label described below. The trends use median
+pairwise slopes with minimum pair separations of 3.75, 7.5, and 10 minutes for
+the 15-, 30-, and 60-minute windows. Each requires at least 75 percent distinct
+minute coverage and no latest gap over five minutes, which reduces sensitivity
+to one quantized or anomalous minute. On today's page the trend is suppressed
+whenever the newest AMOS row is delayed or stale; an old window is never
 presented as current warming or cooling.
 
 The primary visualization has two observed series:
@@ -89,6 +209,12 @@ Peak timing has two deliberately separate visual references:
 - a violet historical reference shows the median first occurrence of the daily
   15L maximum at `13:44 KST`, with a low-opacity middle-50% band from
   `12:20–14:39 KST`, only for March-through-July dates.
+
+The rose marker intentionally remains on the first tied KMA hour. The v2 safety
+decision instead uses the whole tied interval from the first tied hour through
+the last tied hour plus one forecast interval, followed by another 30-minute
+lag. A first-tie marker must not be interpreted as permission to confirm that
+the peak window has ended.
 
 The marker is KMA-only. Its vertical value is KMA/AMO's published daily maximum
 for RKSI, floored by the observed AMOS maximum only in the separate expected-max
@@ -252,9 +378,10 @@ modeled clear-sky DSR is below 50 W/m², including night and very low sun, rathe
 than rendering a misleading zero percent.
 
 `Current` and next-hour/upstream guidance are shown only for a fresh sample
-inside the active collection window. At night, after `16:00 KST`, or when a
-sample is stale, the panel labels the value as the latest retained transmission,
-shows its age, and suppresses future guidance.
+while modeled Haurwitz clear-sky DSR is at least 50 W/m². Once it falls below
+that solar threshold, or when a sample is stale, the panel labels the value as
+the latest retained transmission, shows its age, and suppresses future
+guidance. There is no longer a fixed 16:00 cutoff.
 
 The collector projects 20-, 40-, and 60-minute upstream sample points from the
 latest representative 15L AMOS wind direction and speed. These are spatial
@@ -278,15 +405,23 @@ reachability is not treated as usage approval. The downloaded NetCDF declares
 that access is restricted to approved users, and KMA's copyright policy
 requires prior consultation for material without an applicable KOGL mark.
 Collection therefore remains disabled unless Convex has
-`NMSC_GK2A_ACCESS_APPROVED=true` after NMSC confirms this use. There is no API
+`NMSC_GK2A_ACCESS_APPROVED=true` after NMSC confirms this use, including the
+ten-minute solar-window cadence, persisted derived decision snapshots,
+threshold evaluation, and display scope. There is no API
 Hub, cloud-category, or image-derived numerical fallback. Once enabled, a
 failed viewer discovery, NetCDF download, or grid extraction is shown as source
 failure while any still-retained observation remains visible with its age. The
 downloaded NetCDF exists only in a temporary directory during extraction and
 is deleted in a `finally` path; the application stores extracted samples, not
-the raw file. Dashboard queries hide numerical observations at 48 hours, and a
-database-only cleanup runs every 30 minutes. Historical routes never trigger a
-satellite backfill.
+the raw file. Dashboard queries and a database-only cleanup limit raw numerical
+observations to 48 hours. The compact derived GK2A inputs used by a material v2
+decision revision remain in that immutable prediction so the decision is
+auditable later. Approval revocation redacts copied `solar*` fields,
+GK2A-derived blocker/reason text, clearing-risk fields, raw dashboard values,
+and threshold evaluation/accuracy output. Confirmed or candidate decisions are
+downgraded only if their local `solarDecisionRequired` snapshot was true, so a
+low-solar decision remains usable without NMSC data. Historical routes never
+trigger a satellite backfill.
 
 ## Secondary Weather.com hourly revision diagnostics
 
@@ -358,17 +493,25 @@ mark it stale and expose the latest attempt error/time. Historical pages do not
 become stale merely because the current collector is old. Missing baseline,
 forecast, or AMOS data stays unavailable rather than being fabricated.
 
-Weather.com hourly history is diagnostic-only. It does not change KMA inputs,
-model calculations, predicted values, immutable high revisions, primary cloud
-guidance, or evaluation behavior.
+Weather.com hourly history does not change KMA inputs, the expected maximum,
+the primary curve/peak/condition/ceiling, or primary cloud guidance. One narrow
+exception is deliberate: when a Weather.com capture no older than 90 minutes
+still has a future hourly temperature at or above the selected target, v2 records
+`secondary_forecast_reaches_target` and withholds the strongest threshold
+state. The source remains a zero-weight disagreement veto, not a blended
+forecast.
 
 ## Forecast-capture data dependency
 
 The page subscribes to
-`seoulWeather:getHighPredictionDashboard({ stationIcao: "RKSI", date })`. The
-route consumes:
+`seoulWeather:getHighPredictionDashboard({ stationIcao: "RKSI", date, targetC })`.
+The server normalizes `targetC` before indexed reads, and the route never
+renders a stored prediction or mutable state whose target differs from the
+currently selected value while a target switch is loading. The route consumes:
 
 - `kmaAccess` for approval, flag, and source-URL state
+- `nmscDecisionAccess` for the independent solar-decision/evaluation approval
+  state; evaluation and accuracy are `null` while it is inactive
 - `kmaForecast.latestCapture`, `selectedDateForecast`, `hourlyRows`,
   `latestSuccessAgeMinutes`, `latestAttemptStatus`,
   `latestAttemptError`, and `sourceUrl` for the latest successful stored
@@ -377,10 +520,26 @@ route consumes:
   can be present while `kmaForecast.isStale` is true
 - `kmaHourlyDiagnostics`, a KMA-only diagnostic/safety alias over the same
   hourly guidance
+- `latestPrediction` for the last material v2 immutable snapshot: ceiling
+  components, robust slopes, copied GK2A/16L/wind/rain/Weather.com evidence,
+  target margin, and blockers
+- `decisionState` for the mutable current state, most recent rule ceiling,
+  candidate time, and consecutive-pass count even when no immutable revision
+  was necessary; the read boundary uses its internal solar-required flag before
+  removing that flag from the public object
 - `weathercomHourlyDiagnostics` for immutable latest/baseline curves,
   per-hour revisions, matched AMOS departures, the secondary strictly pre-hour
   cloud-cover comparison for completed hours, running states, stale health,
   and the live pre-observation comparison
+
+Today's two auxiliary plain-language checks do not duplicate that heavy
+dashboard query. One bounded
+`seoulWeather:getHighPredictionDecisionSummaries({ stationIcao, date, targetCs })`
+subscription reads only the exact mutable state and latest revision for up to
+three normalized targets. The page uses it for the current KMA high and the
+observed-high-plus-`0.1°C` lock target, deduplicating either value when it is
+already the selected target. Archived routes skip this auxiliary query because
+their cards use stored observations rather than live decision state.
 
 `latestKmaForecastCapture` and the compatibility alias
 `latestForecastCapture` both refer to KMA. Weather.com's latest capture is
@@ -389,15 +548,21 @@ reinterpret the compatibility alias as Weather.com.
 
 The compatibility action `seoulWeather:getDayPageWeather` delegates to that
 dashboard and returns stored KMA data; it no longer makes a Weather.com request.
+`seoulWeather:getHighPredictionAccuracy({ stationIcao, trailingDays, targetC })`
+uses the same normalized target and returns only that threshold's finalized
+rows and safety metrics. It never aggregates declarations from another target.
 
 All of those inputs are optional. Observed temperatures and observed cloud
 cover still render when KMA is unavailable, and missing future guidance remains
 explicit. Revoking approval also causes the dashboard/query boundary to hide
-previously stored protected KMA rows. The route renders the prediction only as
-the compact expected maximum, KMA published high, and KMA hourly peak; it does
-not render a tracker, provider-card grid, evaluation panel, or high-prediction
-revision history. Weather.com fields are returned only for the separately
-labeled secondary diagnostic layer.
+previously stored protected KMA rows. The route renders the expected maximum,
+KMA published high/hourly peak, and a compact current v2 decision. It does not
+render a tracker, provider-card grid, evaluation panel, or high-prediction
+revision history. Persisted decision evidence comes from `latestPrediction`,
+while state/confirmation comes from `decisionState`, so a no-op immutable write
+cannot make the confirmation count stale. Weather.com fields remain separately
+labeled secondary diagnostics, apart from the conservative veto described
+above.
 
 ## KMA/AMO forecast approval and disabled state
 
@@ -506,10 +671,12 @@ The protected entry points are:
   `seoulKmaForecast:storeForecastCapture`
 - prediction/finalization:
   `seoulWeather:recomputeTodayHighPrediction`,
+  `seoulWeather:registerActiveHighPredictionTargetsInternal`,
   `seoulWeather:recomputeHighPredictionInternal`,
   `seoulWeather:finalizeCompletedDay`, and
   `seoulWeather:finalizeHighPredictionInternal`
 - reads: `seoulWeather:getHighPredictionDashboard`,
+  `seoulWeather:getHighPredictionDecisionSummaries`,
   `seoulWeather:getDayPageWeather`, and
   `seoulWeather:getHighPredictionAccuracy`
 
@@ -536,6 +703,23 @@ For the current Seoul date, the first page load and `Sync now` request:
 The page no longer calls `seoulWeather:recomputeTodayHighPrediction` from the
 observation-refresh path. The status message reports partial
 observation-source failures.
+For today's date, opening the page or changing any relevant target calls that
+action once with a bounded, deduplicated batch containing the selected target,
+the current KMA high, and observed-high-plus-`0.1°C`. One atomic mutation
+refreshes existing members, protects every requested member from LRU eviction,
+retires only a non-requested oldest target when space is needed, and registers
+the missing station/date/model/target tuples in `seoulPeakActiveTargets`. The
+action then evaluates the batch with one shared solar snapshot. The page does
+not create a per-tab five-minute recomputation loop. The server cron evaluates
+the legacy-compatible `27.0°C` target plus up to eight registered custom or
+semantic targets every five minutes, so confirmation does not depend on
+leaving a browser open.
+Registering `27.0°C` does not consume a custom slot. Selecting a ninth distinct
+target—including an automatic semantic target—retires the
+least-recently-selected registry entry from recurring checks while retaining
+its prediction and decision history.
+Switching targets never reuses the other target's candidate time or pass count;
+switching back after missed slots restarts the 15-minute confirmation.
 The manual AMOS request is a single immediate fetch, while the scheduled
 rollover watch remains the lowest-latency path. Initial load and `Sync now`
 remain observation-only and do not invoke the KMA forecast collector. The
@@ -543,17 +727,20 @@ separate `Collect KMA now` button calls the bounded public queue mutation; its
 internal worker and collector-state updates flow back through the reactive
 dashboard query. The current-day solar panel
 provides a separate `Refresh GK2A` button that calls
-`seoulGk2aCollector:requestSolarHeatingRefresh` during the same daytime window
-and shows its own queued/in-flight/final state. The server enforces a ten-minute
-minimum interval, deduplicates already-resolved frames, and serializes work
+`seoulGk2aCollector:requestSolarHeatingRefresh` during the server-reported
+useful-solar window
+and shows its own queued/in-flight/final state. The server permits one attempt
+per ten-minute UTC slot, deduplicates already-resolved frames, and serializes work
 with a run-owned lock. The button is the only client-triggered GK2A collection
 path; the initial load and combined `Sync now` do not download the SWRAD
-NetCDF. It is disabled outside `11:00–16:00 KST` and until NMSC access is
-approved. A GK2A failure therefore does not make the METAR or AMOS refresh look
-failed, and there is no alternate numerical solar source. Forecast collectors
-continue on their independent schedules. An approved KMA capture updates the
-primary high, curve, timing, condition, and ceiling reactively; Weather.com
-updates only its secondary diagnostic history.
+NetCDF. It is disabled when the server-reported Haurwitz clear-sky DSR is below
+50 W/m² and until NMSC access is approved; the browser does not duplicate a
+fixed clock window. A GK2A failure therefore does not make the METAR or AMOS
+refresh look failed, and there is no alternate numerical solar source.
+Forecast collectors continue on their independent schedules. An approved KMA
+capture updates the primary high, curve, timing, condition, ceiling, and v2
+decision reactively; Weather.com updates its secondary diagnostic history and
+may only add the independent-forecast veto.
 
 Historical routes only display already-captured rows. There is no historical
 backfill from these latest-value endpoints, and the historical page does not
@@ -562,12 +749,15 @@ trigger recomputation.
 ## Backend forecast and prediction collectors
 
 - After NMSC access is approved, the GK2A solar collector runs at
-  `11:16`, `11:36`, ... `15:56 KST`, accounting for the observed product
-  publication delay while staying inside `11:00–16:00 KST`. Each run discovers
-  the newest NMSC viewer frame, downloads one SWRAD NetCDF, samples RKSI and
-  the available wind-projected upstream points from that grid, and
-  idempotently skips a frame already resolved. `Refresh GK2A` provides an
-  explicit on-demand run inside the same window. A separate database-only
+  minutes `:06`, `:16`, `:26`, `:36`, `:46`, and `:56` every hour. The
+  server-side Haurwitz gate queues external work only while RKSI modeled
+  clear-sky DSR is at least 50 W/m²; the sixteen-minute offset accommodates the
+  measured publication delay for each ten-minute product frame. Each run
+  discovers the newest NMSC viewer frame, downloads one SWRAD NetCDF, samples
+  RKSI and the available wind-projected upstream points from that grid, and
+  idempotently skips a frame already resolved. During the first 30 minutes of
+  a UTC day, discovery merges the prior UTC date so a publishable 23:50 frame
+  is not missed. `Refresh GK2A` uses the same gate. A separate database-only
   cleanup runs every 30 minutes; it does not contact NMSC.
 - `seoul_kma_amo_airport_forecast_every_30_min` runs at minutes `:05` and
   `:35` and invokes the internal
@@ -583,6 +773,9 @@ trigger recomputation.
   hourly temperature for the selected date. Its daily high, primary hourly
   curve, conditions, ceilings, peak, and source time all come from one capture;
   hours are not merged across KMA revisions.
+  The six-hour limit is the general stored-display limit; the v2 threshold
+  decision independently blocks confirmation once the capture is older than
+  90 minutes.
 - `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
   `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
   and errors together. Both requests use the explicit `icaoCode=RKSI`
@@ -592,13 +785,24 @@ trigger recomputation.
   capture can remain visible in the secondary diagnostic for at most twelve
   hours; it is not a KMA fallback.
 - `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
-  date with model version `rksi15l-kma-amo-v1`. KMA has weight `1`,
-  Weather.com has weight `0`, and missing KMA guidance creates no prediction.
-  Material changes create immutable revisions; no-op runs retain the preceding
-  revision, with a 30-minute heartbeat.
+  date for the always-scheduled `27.0°C` compatibility target plus up to eight
+  rows in `seoulPeakActiveTargets`, using model version
+  `rksi15l-remaining-ceiling-v2`. KMA has weight `1` for the expected maximum
+  and primary curve; Weather.com has weight `0` and can only veto
+  `unlikely_to_reach`. The decision requires AMOS no older than 3 minutes, KMA
+  no older than 90 minutes, and, while useful solar remains, a quality-usable
+  GK2A sample no older than 30 minutes. Each target updates its own
+  `seoulPeakDecisionState`; material changes to that target's expected maximum,
+  decision state, ceiling/margin, blockers, or solar-required policy flag
+  create revisions in that target's immutable lineage. There is no
+  heartbeat-only revision. Candidate entry starts a 15-minute clock at zero;
+  three following consecutive five-minute slots are required for confirmation.
 - `seoul_15l_high_finalize_after_midnight` runs at `00:10 KST` and freezes the
-  previous day's canonical truth, closing tracker result, and fixed-cutoff
-  scores.
+  previous day's canonical truth and independently finalizes every target with
+  a stored mutable decision state for that date, falling back to `27.0°C` only
+  when no state exists. Closing tracker results, fixed-cutoff scores, and
+  threshold declaration/revocation/false-declaration outcomes remain
+  target-scoped.
 
 These scheduled jobs retain immutable KMA official captures, secondary
 Weather.com history, and backend evaluations. The displayed outlook reads KMA
@@ -816,19 +1020,58 @@ captures and prediction revisions remain valid without them.
 
 ### `seoulHighPredictions`
 
-Immutable, numbered prediction revisions containing the predicted high,
-confidence interval, peak window, warming rates, primary KMA/AMO provider
-detail, peak-hour source capture time, status/reason, and the stored KMA hourly
-curve. Weather.com may remain in older revisions for schema compatibility but
-has zero weight in current KMA-primary revisions.
+Immutable, model-versioned material revisions. V2 keeps `predictedHighC` as the
+KMA-published/observed expected maximum and separately stores the normalized
+raw-tenths target, current smoothed temperature, last near-high time, robust 15/30/60
+slopes and coverage, live KMA bias, remaining best/upper curve values, nowcast
+upper, rule ceiling, margin, complete tied KMA window, hourly-curve
+completeness and daily/hourly consistency, upward-revision detection, decision state, blocker
+codes/descriptions, and confirmation snapshot. It also copies the GK2A
+source/QC/upwind values, 16L corroboration, AMOS wind/dew-point/precipitation
+diagnostics, and fresh Weather.com veto used by that decision. The former
+confidence-band fields are optional legacy fields and are not statistical v2
+confidence intervals. `by_station_date_model_target_revision` prevents model
+versions and target lineages from mixing; revision numbers and
+`previousPredictionId` advance only within that exact target.
+
+### `seoulPeakDecisionState`
+
+One mutable row per station/date/model/target. It records candidate start,
+consecutive passes (capped at three), the last distinct five-minute evaluation
+slot, last ceiling/current smoothed temperature, the last evaluated KMA capture
+and curve used for immediate upward-revision comparison, whether solar evidence
+was required, current state, blockers, and
+latest immutable prediction ID. It updates even when the immutable material
+snapshot is unchanged, so retries in one slot cannot manufacture confirmation
+and a missing slot resets the candidate. A row from another target is never a
+valid predecessor, even if it was evaluated in the immediately prior slot.
+
+### `seoulPeakActiveTargets`
+
+One bounded registry row per station/date/model/target. A current-day selected,
+current-KMA, or next-high target is registered when the page initializes it.
+The five-minute cron processes the
+legacy-compatible `27.0°C` target plus no more than eight registry targets for
+a date/model; registering `27.0°C` does not consume a custom slot. A ninth
+custom value replaces the least-recently-selected registry entry but does not
+delete that target's stored history. The registry preserves
+target-specific recurring evaluation without requiring an open browser and
+without allowing unbounded unauthenticated cron work.
 
 ### `seoulHighEvaluations`
 
 Finalized actual high, peak time, revision count, lifecycle opening/closing
 tracker diagnostics, and honest 09:00/12:00/15:00 KST checkpoint temperature
-and peak-window scores. New rows store `modelVersion`; model-aware date and
-finalization-time indexes exclude legacy Weather.com evaluations from KMA
-accuracy/history while preserving those older rows for migration compatibility.
+and peak-window scores. V2 also stores the first `unlikely_to_reach`
+declaration, its ceiling/future high/margin, whether and when that row's target
+was later reached, the first correct declaration, and declaration, revocation, and false
+declaration counts. A no-target outcome is counted only with continuous future
+AMOS coverage through midnight with no gap greater than three minutes;
+otherwise it is stored as censored and omitted
+from the false-rate denominator. Current rows store one exact
+`thresholdTargetC`; target-aware date and finalized-time indexes keep
+finalization and accuracy from combining two thresholds. Older rows retain
+optional model/target fields for migration compatibility.
 
 ### `seoulPublishRaceReports`
 
@@ -859,10 +1102,16 @@ though the redesigned page no longer renders the diagnostic table.
 - GK2A numerical collection remains server-side. The viewer is anonymously
   reachable and requires no API key, but its NetCDF embeds a restricted-access
   license. `NMSC_GK2A_ACCESS_APPROVED=true` must not be set until NMSC confirms
-  the intended automated use. Once enabled, Convex performs the bounded NetCDF
-  download, HDF5 validation, quality filtering, coordinate conversion, and
-  temporary-file cleanup; the browser receives only extracted dashboard
-  values.
+  the intended automated use, including the ten-minute solar-threshold cadence
+  and retained derived threshold-decision/evaluation/display scope. This change
+  does not activate that environment value. Once enabled, Convex performs the
+  bounded NetCDF download, HDF5 validation, quality filtering, coordinate
+  conversion, and temporary-file cleanup; the browser receives only extracted
+  dashboard values. The worker rechecks approval before download, after the
+  Node action, and in the database upsert; the decision query and mutation have
+  their own read/write checks. Removing the flag stops new work, redacts raw
+  and copied solar values plus derived blocker text, and hides NMSC-backed
+  evaluation/accuracy output at the read boundary.
 - The NMSC viewer NetCDF is the sole numerical solar source. Failures remain
   explicit and do not fall back to API Hub, the optional imagery loop, or
   cloud-cover categories.

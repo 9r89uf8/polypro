@@ -21,11 +21,27 @@ const KOREA_LCC =
   "+proj=lcc +lat_1=30 +lat_2=60 +lat_0=38 +lon_0=126 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs";
 const HDF5_SIGNATURE = [0x89, 0x48, 0x44, 0x46, 0x0d, 0x0a, 0x1a, 0x0a];
 const REQUEST_HEADERS = {
-  Accept: "application/json, application/x-netcdf, application/octet-stream, */*",
+  Accept:
+    "application/json, application/x-netcdf, application/octet-stream, */*",
   "User-Agent": "polypro-gk2a-solar/1.0",
 };
+const ACCESS_REVOKED_CODE = "NMSC_ACCESS_REVOKED";
 
 let h5wasmPromise;
+
+function hasApprovedNmscAccess() {
+  return process.env.NMSC_GK2A_ACCESS_APPROVED === "true";
+}
+
+function assertApprovedNmscAccess() {
+  if (!hasApprovedNmscAccess()) {
+    const error = new Error(
+      "NMSC approval was removed before the protected request.",
+    );
+    error.code = ACCESS_REVOKED_CODE;
+    throw error;
+  }
+}
 
 function round(value, digits = 1) {
   const factor = 10 ** digits;
@@ -96,6 +112,7 @@ function buildDownloadUrl(observationTime) {
 }
 
 async function fetchJson(url, timeoutMs) {
+  assertApprovedNmscAccess();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -123,21 +140,32 @@ async function fetchJson(url, timeoutMs) {
 }
 
 async function discoverCandidateFrames(requestedAt, latestStoredObsTimeUtc) {
-  const payload = await fetchJson(
-    buildDiscoveryUrl(requestedAt),
-    DISCOVERY_TIMEOUT_MS,
+  const discoveryTimes = [requestedAt];
+  const previousCandidateTime = requestedAt - 30 * 60_000;
+  if (utcDateKey(previousCandidateTime) !== utcDateKey(requestedAt)) {
+    discoveryTimes.push(previousCandidateTime);
+  }
+  const payloads = await Promise.all(
+    discoveryTimes.map((discoveryTime) =>
+      fetchJson(buildDiscoveryUrl(discoveryTime), DISCOVERY_TIMEOUT_MS),
+    ),
   );
-  const fileList = Array.isArray(payload?.data?.fileList)
-    ? payload.data.fileList
-    : [];
-  return fileList
-    .map((item) => {
+  const candidatesByObservationTime = new Map();
+  for (const payload of payloads) {
+    const fileList = Array.isArray(payload?.data?.fileList)
+      ? payload.data.fileList
+      : [];
+    for (const item of fileList) {
       const observationTime = String(item?.observationTime ?? "");
-      return {
-        observationTime,
-        observationTimeUtc: parseObservationTime(observationTime),
-      };
-    })
+      if (!candidatesByObservationTime.has(observationTime)) {
+        candidatesByObservationTime.set(observationTime, {
+          observationTime,
+          observationTimeUtc: parseObservationTime(observationTime),
+        });
+      }
+    }
+  }
+  return [...candidatesByObservationTime.values()]
     .filter(
       (item) =>
         Number.isFinite(item.observationTimeUtc) &&
@@ -183,12 +211,17 @@ async function selectNetcdfFrame(requestedAt, latestStoredObsTimeUtc) {
   const resolved = await Promise.all(
     candidates.map((candidate) => resolveNetcdfFrame(candidate)),
   );
-  return resolved.filter(Boolean).sort(
-    (left, right) => right.observationTimeUtc - left.observationTimeUtc,
-  )[0] ?? null;
+  return (
+    resolved
+      .filter(Boolean)
+      .sort(
+        (left, right) => right.observationTimeUtc - left.observationTimeUtc,
+      )[0] ?? null
+  );
 }
 
 async function downloadNetcdf(frame) {
+  assertApprovedNmscAccess();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
   try {
@@ -211,9 +244,7 @@ async function downloadNetcdf(frame) {
     if (!bytes.length || bytes.length > MAX_NETCDF_BYTES) {
       throw new Error("NMSC NetCDF download had an invalid size.");
     }
-    if (
-      HDF5_SIGNATURE.some((expected, index) => bytes[index] !== expected)
-    ) {
+    if (HDF5_SIGNATURE.some((expected, index) => bytes[index] !== expected)) {
       throw new Error("NMSC NetCDF download was not a valid HDF5 file.");
     }
     return bytes;
@@ -274,15 +305,12 @@ function gridCell(latitude, longitude) {
   ) {
     return null;
   }
-  const cellEasting =
-    GRID_UPPER_LEFT_EASTING + column * GRID_PIXEL_SIZE_METERS;
-  const cellNorthing =
-    GRID_UPPER_LEFT_NORTHING - row * GRID_PIXEL_SIZE_METERS;
-  const [sourceLongitude, sourceLatitude] = proj4(
-    KOREA_LCC,
-    "EPSG:4326",
-    [cellEasting, cellNorthing],
-  );
+  const cellEasting = GRID_UPPER_LEFT_EASTING + column * GRID_PIXEL_SIZE_METERS;
+  const cellNorthing = GRID_UPPER_LEFT_NORTHING - row * GRID_PIXEL_SIZE_METERS;
+  const [sourceLongitude, sourceLatitude] = proj4(KOREA_LCC, "EPSG:4326", [
+    cellEasting,
+    cellNorthing,
+  ]);
   return {
     row,
     column,
@@ -383,10 +411,36 @@ export const fetchLatestSolarGrid = internalActionGeneric({
     points: v.array(samplingPointValidator),
   },
   handler: async (_ctx, args) => {
-    const frame = await selectNetcdfFrame(
-      args.requestedAt,
-      args.latestStoredObsTimeUtc,
-    );
+    // Re-check at the external-request boundary so a job queued immediately
+    // before approval is removed cannot continue into NMSC metadata/downloads.
+    if (!hasApprovedNmscAccess()) {
+      return {
+        status: "access_not_approved",
+        samples: [],
+      };
+    }
+
+    let frame;
+    try {
+      frame = await selectNetcdfFrame(
+        args.requestedAt,
+        args.latestStoredObsTimeUtc,
+      );
+    } catch (error) {
+      if (error?.code === ACCESS_REVOKED_CODE) {
+        return {
+          status: "access_not_approved",
+          samples: [],
+        };
+      }
+      throw error;
+    }
+    if (!hasApprovedNmscAccess()) {
+      return {
+        status: "access_not_approved",
+        samples: [],
+      };
+    }
     if (!frame) {
       return {
         status: "not_modified",
@@ -394,7 +448,24 @@ export const fetchLatestSolarGrid = internalActionGeneric({
       };
     }
 
-    const bytes = await downloadNetcdf(frame);
+    let bytes;
+    try {
+      bytes = await downloadNetcdf(frame);
+    } catch (error) {
+      if (error?.code === ACCESS_REVOKED_CODE) {
+        return {
+          status: "access_not_approved",
+          samples: [],
+        };
+      }
+      throw error;
+    }
+    if (!hasApprovedNmscAccess()) {
+      return {
+        status: "access_not_approved",
+        samples: [],
+      };
+    }
     const tempDirectory = await mkdtemp(join(tmpdir(), "polypro-gk2a-"));
     const tempFile = join(tempDirectory, "swrad.nc");
     try {

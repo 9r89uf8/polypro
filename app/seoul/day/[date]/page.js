@@ -13,6 +13,12 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Line } from "react-chartjs-2";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  classifyForecastHigh,
+  classifyHighLock,
+  classifyKmaDifferenceMagnitude,
+  classifyWarmingMomentum,
+} from "./outlookAssessments";
 
 const nowLinePlugin = {
   id: "seoulNowLine",
@@ -588,6 +594,11 @@ const SEOUL_UTC_OFFSET_HOURS = 9;
 const OFFICIAL_SUNSET_ZENITH_DEGREES = 90.833;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
+const PEAK_TARGET_EVALUATION_INTERVAL_MS = 5 * MINUTE_MS;
+const PEAK_TARGET_BOOTSTRAP_C = 27;
+const PEAK_TARGET_PREFERENCE_KEY = "polypro:seoul:remaining-target:v1";
+const PEAK_TARGET_MIN_C = -20;
+const PEAK_TARGET_MAX_C = 45;
 const KMA_STALE_AGE_MINUTES = 6 * 60;
 const AMOS_DELAYED_AGE_MINUTES = 2;
 const AMOS_STALE_AGE_MINUTES = 10;
@@ -942,8 +953,18 @@ function robustTemperatureTrendCPerHour(rows, windowMinutes = 60) {
   const latest = ordered.at(-1);
   const windowStart = latest.obsTimeUtc - windowMinutes * MINUTE_MS;
   const windowRows = ordered.filter((row) => row.obsTimeUtc >= windowStart);
+  const representedMinuteCount = new Set(
+    windowRows.map((row) => Math.floor(row.obsTimeUtc / MINUTE_MS)),
+  ).size;
+  const latestGapMinutes =
+    windowRows.length > 1
+      ? (latest.obsTimeUtc - windowRows.at(-2).obsTimeUtc) / MINUTE_MS
+      : null;
   if (
     windowRows.length < 4 ||
+    representedMinuteCount < windowMinutes * 0.75 ||
+    !Number.isFinite(latestGapMinutes) ||
+    latestGapMinutes > 5 ||
     latest.obsTimeUtc - windowRows[0].obsTimeUtc <
       windowMinutes * MINUTE_MS * 0.75
   ) {
@@ -1907,6 +1928,28 @@ function weathercomTooltipDetails(point, unit) {
 function finiteNumber(value) {
   const numeric = typeof value === "string" ? Number(value) : value;
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeRawTargetC(value) {
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+  const numeric = finiteNumber(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  const normalized = Math.round(numeric * 10) / 10;
+  return normalized >= PEAK_TARGET_MIN_C && normalized <= PEAK_TARGET_MAX_C
+    ? normalized
+    : null;
+}
+
+function targetsMatch(left, right) {
+  return (
+    Number.isFinite(left) &&
+    Number.isFinite(right) &&
+    Math.abs(left - right) < 0.05
+  );
 }
 
 function firstArray(...values) {
@@ -2944,18 +2987,29 @@ function SolarHeatingPanel({
   queryLoading,
   latestAmos,
   isToday,
-  collectionWindowOpen,
   clockNowMs,
   onRefresh,
   refreshState,
 }) {
   const latest = solar?.latest ?? null;
   const configured = solar?.configured !== false;
+  const collectionWindowOpen = solar?.collectionWindowOpen === true;
   const status = queryLoading
     ? "loading"
     : !configured
       ? "setup required"
       : (solar?.status ?? (latest ? "current" : "awaiting data"));
+  const lowSolar =
+    isToday &&
+    !queryLoading &&
+    configured &&
+    !collectionWindowOpen &&
+    (status === "night" ||
+      status === "window_closed" ||
+      status === "low_solar");
+  const statusLabel = lowSolar
+    ? "low solar"
+    : String(status).replaceAll("_", " ");
   const guidanceCurrent =
     isToday &&
     (status === "ok" || status === "partial" || status === "current") &&
@@ -3003,7 +3057,7 @@ function SolarHeatingPanel({
   const statusTone =
     status === "ok" || status === "current"
       ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-300"
-      : status === "loading" || status === "night" || status === "window_closed"
+      : status === "loading" || lowSolar
         ? "border-slate-400/20 bg-slate-400/10 text-slate-400"
         : "border-amber-300/25 bg-amber-300/10 text-amber-300";
   const collectorRunning =
@@ -3039,29 +3093,39 @@ function SolarHeatingPanel({
             <button
               type="button"
               onClick={onRefresh}
-              disabled={refreshActive || !collectionWindowOpen || !configured}
-              title={
+              disabled={
+                refreshActive ||
+                queryLoading ||
+                !collectionWindowOpen ||
                 !configured
-                  ? "NMSC access approval is required before collection"
-                  : collectionWindowOpen
-                    ? "Queue the newest GK2A SWRAD frame"
-                    : "GK2A downloads are limited to 11:00–16:00 KST"
+              }
+              title={
+                queryLoading
+                  ? "Checking modeled solar availability"
+                  : !configured
+                    ? "NMSC access approval is required before collection"
+                    : collectionWindowOpen
+                      ? "Queue the newest GK2A SWRAD frame"
+                      : (solar?.statusMessage ??
+                        "GK2A collection is paused while modeled clear-sky irradiance is below 50 W/m²")
               }
               className="border border-cyan-300/30 bg-cyan-300/10 px-3 py-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.14em] text-cyan-200 transition hover:border-cyan-200/60 hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {refreshActive
                 ? "GK2A queued"
-                : !configured
-                  ? "Approval required"
-                  : collectionWindowOpen
-                    ? "Refresh GK2A"
-                    : "11–16 KST only"}
+                : queryLoading
+                  ? "Checking solar"
+                  : !configured
+                    ? "Approval required"
+                    : collectionWindowOpen
+                      ? "Refresh GK2A"
+                      : "Low solar"}
             </button>
           ) : null}
           <span
             className={`border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] ${statusTone}`}
           >
-            {String(status).replaceAll("_", " ")}
+            {statusLabel}
           </span>
         </div>
       </div>
@@ -3143,6 +3207,707 @@ function SolarHeatingPanel({
   );
 }
 
+const PEAK_DECISION_PRESENTATION = Object.freeze({
+  already_reached: {
+    label: "Already reached",
+    badge: "border-rose-300/30 bg-rose-300/10 text-rose-200",
+    accent: "text-rose-200",
+  },
+  insufficient_data: {
+    label: "Insufficient data",
+    badge: "border-amber-300/30 bg-amber-300/10 text-amber-200",
+    accent: "text-amber-200",
+  },
+  still_possible: {
+    label: "Still possible",
+    badge: "border-violet-300/30 bg-violet-300/10 text-violet-200",
+    accent: "text-violet-200",
+  },
+  peak_candidate: {
+    label: "Peak candidate",
+    badge: "border-cyan-300/30 bg-cyan-300/10 text-cyan-200",
+    accent: "text-cyan-200",
+  },
+  unlikely_to_reach: {
+    label: "Unlikely to reach",
+    badge: "border-emerald-300/30 bg-emerald-300/10 text-emerald-200",
+    accent: "text-emerald-200",
+  },
+  final: {
+    label: "Final",
+    badge: "border-slate-300/25 bg-slate-300/10 text-slate-200",
+    accent: "text-slate-200",
+  },
+});
+
+function peakDecisionPresentation(status) {
+  return (
+    PEAK_DECISION_PRESENTATION[status] ?? {
+      label: "Awaiting decision",
+      badge: "border-slate-500/25 bg-slate-500/10 text-slate-400",
+      accent: "text-slate-300",
+    }
+  );
+}
+
+function formatDecisionTrend(valueC, unit) {
+  const value = toUnitTemperatureDelta(valueC, unit);
+  if (!Number.isFinite(value)) {
+    return "Unavailable";
+  }
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}°${unit}/h`;
+}
+
+function formatDecisionAge(ageMinutes) {
+  if (!Number.isFinite(ageMinutes)) {
+    return "age unavailable";
+  }
+  if (ageMinutes < 1) {
+    return "under 1m old";
+  }
+  return `${Math.round(ageMinutes)}m old`;
+}
+
+function PeakTargetSelector({
+  date,
+  isToday,
+  mode,
+  selectedTargetC,
+  capturedKmaTargetC,
+  nextObservedHighTargetC,
+  observedHighC,
+  customTargetDraft,
+  customTargetError,
+  evaluationMessage,
+  onUseKmaTarget,
+  onUseNextTarget,
+  onCustomTargetDraftChange,
+  onApplyCustomTarget,
+}) {
+  const selectedTargetLabel = Number.isFinite(selectedTargetC)
+    ? `${selectedTargetC.toFixed(1)}°C`
+    : "Awaiting target";
+  const kmaTargetLabel = Number.isFinite(capturedKmaTargetC)
+    ? `${capturedKmaTargetC.toFixed(1)}°C`
+    : "Awaiting KMA";
+  const nextTargetLabel = Number.isFinite(nextObservedHighTargetC)
+    ? `${nextObservedHighTargetC.toFixed(1)}°C`
+    : "Awaiting AMOS";
+  const selectedTargetAlreadyReached =
+    Number.isFinite(selectedTargetC) &&
+    Number.isFinite(observedHighC) &&
+    observedHighC >= selectedTargetC;
+
+  return (
+    <div className="mt-3 border border-white/10 bg-white/[0.025] px-4 py-3 md:px-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-cyan-300">
+            Remaining-ceiling target
+          </p>
+          <p className="mt-1 text-xs leading-5 text-slate-400">
+            Choose the raw representative AMOS temperature this decision should
+            test. Targets are fixed in Celsius even when the page display uses
+            Fahrenheit.
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
+            Selected raw target
+          </p>
+          <p className="mt-1 font-mono text-sm text-cyan-100">
+            {selectedTargetLabel}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(18rem,1.4fr)]">
+        <button
+          type="button"
+          aria-pressed={mode === "kma"}
+          onClick={onUseKmaTarget}
+          className={`border px-3 py-2 text-left transition ${
+            mode === "kma"
+              ? "border-violet-300/50 bg-violet-300/10 text-violet-100"
+              : "border-white/10 bg-[#081321] text-slate-300 hover:border-white/25"
+          }`}
+        >
+          <span className="block font-mono text-[9px] uppercase tracking-[0.15em]">
+            Use KMA published high
+          </span>
+          <span className="mt-1 block text-xs">
+            {kmaTargetLabel} · captured once for {date}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onUseNextTarget}
+          disabled={!Number.isFinite(nextObservedHighTargetC)}
+          className="border border-white/10 bg-[#081321] px-3 py-2 text-left text-slate-300 transition hover:border-emerald-300/35 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          <span className="block font-mono text-[9px] uppercase tracking-[0.15em]">
+            Next +0.1°C
+          </span>
+          <span className="mt-1 block text-xs">
+            {nextTargetLabel} · capture observed max + 0.1°C
+          </span>
+        </button>
+
+        <form
+          onSubmit={onApplyCustomTarget}
+          className={`border bg-[#081321] px-3 py-2 ${
+            mode === "custom" ? "border-cyan-300/40" : "border-white/10"
+          }`}
+        >
+          <label
+            htmlFor="seoul-custom-peak-target"
+            className="block font-mono text-[9px] uppercase tracking-[0.15em] text-slate-400"
+          >
+            Custom raw target (°C)
+          </label>
+          <div className="mt-1 flex gap-2">
+            <input
+              id="seoul-custom-peak-target"
+              type="number"
+              inputMode="decimal"
+              step="0.1"
+              min={PEAK_TARGET_MIN_C}
+              max={PEAK_TARGET_MAX_C}
+              value={customTargetDraft}
+              onChange={(event) =>
+                onCustomTargetDraftChange(event.target.value)
+              }
+              placeholder="31.0"
+              className="min-w-0 flex-1 border border-white/10 bg-transparent px-2 py-1 font-mono text-xs text-white outline-none transition focus:border-cyan-300/50"
+            />
+            <button
+              type="submit"
+              className="border border-cyan-300/30 bg-cyan-300/10 px-3 font-mono text-[9px] font-semibold uppercase tracking-[0.13em] text-cyan-200 transition hover:border-cyan-200/60"
+            >
+              Apply
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="mt-2 font-mono text-[9px] leading-4">
+        {customTargetError ? (
+          <p className="text-amber-300">{customTargetError}</p>
+        ) : selectedTargetAlreadyReached ? (
+          <p className="text-amber-300">
+            This raw target has already been observed today, so &quot;already
+            reached&quot; is the expected result.
+          </p>
+        ) : evaluationMessage ? (
+          <p className="text-slate-500">{evaluationMessage}</p>
+        ) : !isToday ? (
+          <p className="text-slate-500">
+            Live five-minute target evaluation runs only on the current Seoul
+            day; archived output is shown only when it was stored.
+          </p>
+        ) : (
+          <p className="text-slate-500">
+            Waiting for the selected target&apos;s first evaluation.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const PLAIN_LANGUAGE_STATUS_TONES = Object.freeze({
+  positive: {
+    border: "border-emerald-300/25",
+    answer: "text-emerald-200",
+  },
+  caution: {
+    border: "border-amber-300/25",
+    answer: "text-amber-200",
+  },
+  negative: {
+    border: "border-rose-300/25",
+    answer: "text-rose-200",
+  },
+  cool: {
+    border: "border-sky-300/25",
+    answer: "text-sky-200",
+  },
+  neutral: {
+    border: "border-slate-300/15",
+    answer: "text-slate-200",
+  },
+});
+
+function PlainLanguageStatusCard({
+  question,
+  answer,
+  detail,
+  tone = "neutral",
+}) {
+  const presentation =
+    PLAIN_LANGUAGE_STATUS_TONES[tone] ?? PLAIN_LANGUAGE_STATUS_TONES.neutral;
+  return (
+    <div className={`border bg-[#081321] px-4 py-3 ${presentation.border}`}>
+      <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-slate-500">
+        {question}
+      </p>
+      <p className={`mt-1 text-base font-medium ${presentation.answer}`}>
+        {answer}
+      </p>
+      <p className="mt-1 text-[11px] leading-4 text-slate-400">{detail}</p>
+    </div>
+  );
+}
+
+function thresholdDashboardStatus(dashboard) {
+  return (
+    dashboard?.decisionState?.currentState ??
+    dashboard?.latestPrediction?.decisionStatus ??
+    null
+  );
+}
+
+function thresholdDashboardEvaluationAt(dashboard) {
+  return finiteNumber(
+    dashboard?.decisionState?.lastEvaluationAt ??
+      dashboard?.latestPrediction?.generatedAt,
+  );
+}
+
+function highLockAssessment({
+  dashboard,
+  nextHighTargetC,
+  observedHighC,
+  isToday,
+  isArchive,
+  amosFreshness,
+  clockNowMs,
+  unit,
+}) {
+  const dashboardTargetC = finiteNumber(dashboard?.selectedTargetC);
+  const status = thresholdDashboardStatus(dashboard);
+  const evaluatedAt = thresholdDashboardEvaluationAt(dashboard);
+  const decisionAgeMs =
+    Number.isFinite(clockNowMs) && Number.isFinite(evaluatedAt)
+      ? Math.max(0, clockNowMs - evaluatedAt)
+      : null;
+  const classification = classifyHighLock({
+    isArchive,
+    observedHighC,
+    nextHighTargetC,
+    dashboardTargetC,
+    decisionStatus: status,
+    amosFresh: !isToday || amosFreshness?.status === "fresh",
+    decisionAgeMs,
+  });
+  const nextHighLabel = formatPredictionTemperature(
+    toUnitTemperature(nextHighTargetC, unit),
+    unit,
+  );
+  const observedHighLabel = formatPredictionTemperature(
+    toUnitTemperature(observedHighC, unit),
+    unit,
+  );
+
+  if (classification === "no_observed_high") {
+    return {
+      answer: "Unknown — no observed high",
+      detail:
+        "A representative 15L AMOS high is required before the next 0.1°C can be tested.",
+      tone: "neutral",
+    };
+  }
+  if (classification === "final") {
+    return {
+      answer: isArchive ? "Day complete — stored high" : "Yes — final",
+      detail: isArchive
+        ? `${observedHighLabel} is the highest available stored observation for the completed Seoul-local day, not a live lock inference.`
+        : `The completed-day decision is finalized with ${observedHighLabel} as the observed high.`,
+      tone: isArchive ? "neutral" : "positive",
+    };
+  }
+  if (classification === "no_next_target") {
+    return {
+      answer: "Unknown — no next target",
+      detail:
+        "The first raw tenth above the observed high could not be formed.",
+      tone: "neutral",
+    };
+  }
+  if (classification === "pending") {
+    return {
+      answer: "Not tested yet",
+      detail: `Testing ${nextHighLabel} is what determines whether the ${observedHighLabel} observed high is likely locked.`,
+      tone: "neutral",
+    };
+  }
+  if (classification === "stale_amos") {
+    return {
+      answer: "Unknown — AMOS is stale",
+      detail: `A prior ${nextHighLabel} decision cannot lock the high without fresh representative observations.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "stale_decision") {
+    return {
+      answer: "Unknown — decision is old",
+      detail: `The last ${nextHighLabel} lock check is more than 10 minutes old or has no usable evaluation time.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "locked") {
+    return {
+      answer: "Likely locked — confirmed",
+      detail: `The model completed its confirmation that the next new high, ${nextHighLabel}, is unlikely. Temperature can still rebound without exceeding ${observedHighLabel}.`,
+      tone: "positive",
+    };
+  }
+  if (classification === "candidate") {
+    return {
+      answer: "Not yet — confirming",
+      detail: `${nextHighLabel} is a lock candidate, but all follow-up checks have not completed.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "target_reached") {
+    return {
+      answer: "No — the test target was reached",
+      detail: `${nextHighLabel} has appeared in the backend observations; the next tenth must now be tested.`,
+      tone: "negative",
+    };
+  }
+  if (classification === "insufficient_data") {
+    return {
+      answer: "Unknown — data limited",
+      detail: `The model does not have enough current evidence to decide whether ${nextHighLabel} remains possible.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "possible") {
+    return {
+      answer: "Not locked — another tenth is possible",
+      detail: `${nextHighLabel}, the first tenth above the observed high, has not been ruled out.`,
+      tone: "caution",
+    };
+  }
+  return {
+    answer: "Unknown — decision unavailable",
+    detail: `The exact ${nextHighLabel} lock decision is not in a recognized state.`,
+    tone: "neutral",
+  };
+}
+
+function forecastHighAssessment({
+  dashboard,
+  kma,
+  observedHighC,
+  isToday,
+  isArchive,
+  amosFreshness,
+  clockNowMs,
+  unit,
+}) {
+  const forecastHighC = finiteNumber(kma?.dailyHighC);
+  const dashboardTargetC = finiteNumber(dashboard?.selectedTargetC);
+  const status = thresholdDashboardStatus(dashboard);
+  const predictionStatus = dashboard?.latestPrediction?.status ?? null;
+  const evaluatedAt = thresholdDashboardEvaluationAt(dashboard);
+  const decisionAgeMs =
+    Number.isFinite(clockNowMs) && Number.isFinite(evaluatedAt)
+      ? Math.max(0, clockNowMs - evaluatedAt)
+      : null;
+  const predictionGeneratedAt = finiteNumber(
+    dashboard?.latestPrediction?.generatedAt,
+  );
+  const predictionAgeMs =
+    Number.isFinite(clockNowMs) && Number.isFinite(predictionGeneratedAt)
+      ? Math.max(0, clockNowMs - predictionGeneratedAt)
+      : null;
+  const classification = classifyForecastHigh({
+    isArchive,
+    forecastHighC,
+    observedHighC,
+    dashboardTargetC,
+    decisionStatus: status,
+    amosFresh: !isToday || amosFreshness?.status === "fresh",
+    forecastStale: Boolean(kma?.isStale),
+    decisionAgeMs,
+    predictionAgeMs,
+    predictionStatus,
+  });
+  const forecastLabel = formatPredictionTemperature(
+    toUnitTemperature(forecastHighC, unit),
+    unit,
+  );
+  const observedLabel = formatPredictionTemperature(
+    toUnitTemperature(observedHighC, unit),
+    unit,
+  );
+  if (classification === "no_forecast") {
+    return {
+      answer: kma?.loading ? "Loading forecast" : "Unavailable",
+      detail: kma?.approvalRequired
+        ? "The approved KMA forecast is unavailable, so its high cannot be assessed."
+        : "No KMA published high is available for comparison.",
+      tone: "neutral",
+    };
+  }
+  if (classification === "no_observed_high") {
+    return {
+      answer: "Not assessable yet",
+      detail: `${forecastLabel} is published, but no representative observed high is available.`,
+      tone: "neutral",
+    };
+  }
+
+  const differenceC = Math.abs(observedHighC - forecastHighC);
+  const differenceLabel = formatPredictionTemperature(
+    toUnitTemperatureDelta(differenceC, unit),
+    unit,
+  );
+  const materiallyDifferent =
+    classifyKmaDifferenceMagnitude(differenceC) === "material";
+  if (classification === "archive_above") {
+    return {
+      answer: materiallyDifferent
+        ? "Finished above stored KMA value"
+        : "Finished slightly above stored KMA",
+      detail: `The highest stored observation finished ${differenceLabel} above the stored ${forecastLabel} KMA value. This is not a forecast-skill score.`,
+      tone: materiallyDifferent ? "negative" : "caution",
+    };
+  }
+  if (classification === "archive_matched") {
+    return {
+      answer: "Finished at KMA — matched",
+      detail: `The highest stored observation matched the stored ${forecastLabel} KMA value.`,
+      tone: "positive",
+    };
+  }
+  if (classification === "archive_below") {
+    return {
+      answer: materiallyDifferent
+        ? "Finished below stored KMA value"
+        : "Finished slightly below stored KMA",
+      detail: `The highest stored observation finished ${differenceLabel} below the stored ${forecastLabel} KMA value. This is not a forecast-skill score.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "stale_exceeded") {
+    return {
+      answer: "Stored KMA high was exceeded",
+      detail: `AMOS reached ${observedLabel}, but the ${forecastLabel} KMA value is stale and is not presented as current guidance.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "stale_met") {
+    return {
+      answer: "Stored KMA high was reached",
+      detail: `AMOS reached ${forecastLabel}, but that KMA value is stale and is not presented as current guidance.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "exceeded") {
+    return {
+      answer: materiallyDifferent
+        ? "Too low — new high detected"
+        : "Slightly low — within KMA resolution",
+      detail: `The ${observedLabel} observed high is ${differenceLabel} above KMA's ${forecastLabel} published high.${
+        materiallyDifferent
+          ? ""
+          : " KMA publishes the daily high in whole degrees, so this small difference stays inside its resolution allowance."
+      }`,
+      tone: materiallyDifferent ? "negative" : "caution",
+    };
+  }
+  if (classification === "met") {
+    return {
+      answer: "On track — high reached",
+      detail: `AMOS has reached KMA's ${forecastLabel} published high; a later overshoot is still possible.`,
+      tone: "positive",
+    };
+  }
+
+  if (classification === "final_below") {
+    return {
+      answer: "Too high — fall short confirmed",
+      detail: `The finalized ${observedLabel} observed high finished ${differenceLabel} below KMA's ${forecastLabel}.`,
+      tone: "negative",
+    };
+  }
+  if (classification === "data_limited") {
+    return {
+      answer: "Unclear — data limited",
+      detail: `The observed high remains below ${forecastLabel}, but stale or insufficient inputs prevent a fall-short call.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "stale") {
+    return {
+      answer: "Assessment is stale",
+      detail: `The exact ${forecastLabel} decision has not been evaluated within the last 10 minutes.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "likely_too_high") {
+    return {
+      answer: `Likely to fall short of ${forecastLabel}`,
+      detail: `The exact ${forecastLabel} target completed the model's unlikely-to-reach checks without being reached.`,
+      tone: "negative",
+    };
+  }
+  if (classification === "fall_short_candidate") {
+    return {
+      answer: "Possible fall short — not confirmed",
+      detail: `${forecastLabel} is a candidate miss, but the confirmation checks are still running.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "reached_in_backend") {
+    return {
+      answer: "On track — high reached",
+      detail: `The exact ${forecastLabel} threshold is already present in the backend observations.`,
+      tone: "positive",
+    };
+  }
+  if (classification === "starting") {
+    return {
+      answer: "Not reached — assessment starting",
+      detail: `The exact ${forecastLabel} target has not produced a current decision yet, so a fall short is not assessed.`,
+      tone: "neutral",
+    };
+  }
+  if (classification === "running_warm") {
+    return {
+      answer: "Running above track — upside open",
+      detail: `AMOS was above KMA's current-hour track, and the exact ${forecastLabel} high remains possible.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "running_cool") {
+    return {
+      answer: "Below track — fall short not confirmed",
+      detail: `AMOS was below KMA's current-hour track, but ${forecastLabel} has not been ruled out.`,
+      tone: "caution",
+    };
+  }
+  if (classification === "hourly_on_track") {
+    return {
+      answer: "On track so far — unresolved",
+      detail: `AMOS was close to KMA's current-hour curve, and the exact ${forecastLabel} high remains possible.`,
+      tone: "neutral",
+    };
+  }
+  if (classification === "possible_unresolved") {
+    return {
+      answer: "Unresolved — forecast high still possible",
+      detail: `The exact ${forecastLabel} target remains possible, but that alone does not mean the daily forecast is on track.`,
+      tone: "caution",
+    };
+  }
+  return {
+    answer: "Still possible — fall short not confirmed",
+    detail: `${forecastLabel} remains above the observed high and has not completed an unlikely-to-reach confirmation.`,
+    tone: "caution",
+  };
+}
+
+function warmingSlowdownAssessment({
+  slope15mCPerHour,
+  slope30mCPerHour,
+  slope60mCPerHour,
+  isToday,
+  isArchive,
+  amosFreshness,
+  unit,
+}) {
+  const classification = classifyWarmingMomentum({
+    amosFresh: !isToday || amosFreshness?.status === "fresh",
+    slope15mCPerHour,
+    slope30mCPerHour,
+    slope60mCPerHour,
+  });
+  if (classification === "stale") {
+    return {
+      answer: "Unknown — AMOS is stale",
+      detail:
+        "Fresh representative observations are required to describe the current warming trend.",
+      tone: "caution",
+    };
+  }
+  if (classification === "insufficient_coverage") {
+    return {
+      answer: "Unknown — insufficient coverage",
+      detail: isArchive
+        ? "The archive lacks enough 15-, 30-, and 60-minute coverage at the last observation."
+        : "Robust 15-, 30-, and 60-minute trends are all required to measure a slowdown.",
+      tone: "neutral",
+    };
+  }
+
+  const trendDetail = `15m ${formatDecisionTrend(
+    slope15mCPerHour,
+    unit,
+  )}, 30m ${formatDecisionTrend(
+    slope30mCPerHour,
+    unit,
+  )}, 60m ${formatDecisionTrend(slope60mCPerHour, unit)}`;
+  const archivePrefix = isArchive ? "At the last observation, " : "";
+  if (classification === "cooling") {
+    return {
+      answer: isArchive ? "Cooling at last check" : "No — cooling now",
+      detail: `${archivePrefix}the 15-minute trend is outside the ±0.2°C/h steady band on the cool side (${trendDetail}); that is cooling, not merely slower warming.`,
+      tone: "cool",
+    };
+  }
+  if (classification === "leveled_off") {
+    return {
+      answer: isArchive
+        ? "Warming had leveled off"
+        : "Yes — warming has leveled off",
+      detail: `${archivePrefix}the 15-minute trend entered the ±0.2°C/h steady band after progressively slower positive 60- and 30-minute trends (${trendDetail}).`,
+      tone: "positive",
+    };
+  }
+  if (classification === "nearly_steady_mixed") {
+    return {
+      answer: "Nearly steady — slowdown unclear",
+      detail: `${archivePrefix}the 15-minute trend is inside the ±0.2°C/h steady band, but the 15/30/60-minute sequence does not show a clear monotonic slowdown (${trendDetail}).`,
+      tone: "neutral",
+    };
+  }
+  if (classification === "slowing") {
+    return {
+      answer: isArchive
+        ? "Warming was slowing"
+        : "Yes — still warming, more slowly",
+      detail: `${archivePrefix}all three trends are positive and step down from 60 to 30 to 15 minutes (${trendDetail}).`,
+      tone: "positive",
+    };
+  }
+  if (classification === "accelerating") {
+    return {
+      answer: isArchive
+        ? "Warming was accelerating"
+        : "No — warming is accelerating",
+      detail: `${archivePrefix}all three trends are positive and step up from 60 to 30 to 15 minutes (${trendDetail}).`,
+      tone: "caution",
+    };
+  }
+  if (classification === "resumed") {
+    return {
+      answer: isArchive ? "Warming had resumed" : "No — warming has resumed",
+      detail: `${archivePrefix}the 15-minute trend is warming after the 30-minute trend was steady or cooling (${trendDetail}).`,
+      tone: "caution",
+    };
+  }
+  return {
+    answer: isArchive ? "Still warming at last check" : "No — still warming",
+    detail: `${archivePrefix}the recent warming pace has not clearly dropped below the 30-minute pace (${trendDetail}).`,
+    tone: "caution",
+  };
+}
+
 function MaxOutlookPanel({
   date,
   today,
@@ -3154,12 +3919,86 @@ function MaxOutlookPanel({
   kma,
   kmaPeak,
   expectedHighC,
+  trend15mCPerHour,
+  trend30mCPerHour,
   trendCPerHour,
+  prediction,
+  decisionState,
+  nextHighTargetDashboard,
+  forecastHighTargetDashboard,
+  targetControl,
   onCollect,
   collectionState,
 }) {
   const isToday = date === today;
   const isArchive = date < today;
+  const decisionStatus =
+    decisionState?.currentState ?? prediction?.decisionStatus ?? null;
+  const decisionPresentation = peakDecisionPresentation(decisionStatus);
+  const decisionTargetC = finiteNumber(
+    decisionState?.targetC ??
+      prediction?.targetC ??
+      targetControl?.selectedTargetC,
+  );
+  const decisionCeilingC = decisionState
+    ? finiteNumber(decisionState.lastRuleCeilingC)
+    : finiteNumber(prediction?.remainingRuleCeilingC);
+  const decisionMarginC =
+    Number.isFinite(decisionTargetC) && Number.isFinite(decisionCeilingC)
+      ? decisionTargetC - decisionCeilingC
+      : decisionState
+        ? null
+        : finiteNumber(prediction?.marginBelowTargetC);
+  const candidateSinceUtc = decisionState
+    ? finiteNumber(decisionState.candidateSinceUtc)
+    : finiteNumber(prediction?.candidateSinceUtc);
+  const consecutivePasses = Math.max(
+    0,
+    Math.min(
+      3,
+      Math.trunc(
+        finiteNumber(
+          decisionState?.consecutivePasses ?? prediction?.consecutivePasses,
+        ) ?? 0,
+      ),
+    ),
+  );
+  const blockerDescriptions = Array.isArray(decisionState?.blockerDescriptions)
+    ? decisionState.blockerDescriptions
+    : Array.isArray(prediction?.blockerDescriptions)
+      ? prediction.blockerDescriptions
+      : [];
+  const terminalDecision =
+    decisionStatus === "already_reached" || decisionStatus === "final";
+  const visibleBlockerDescriptions = terminalDecision
+    ? []
+    : blockerDescriptions;
+  const decisionEvaluationAt = finiteNumber(
+    decisionState?.lastEvaluationAt ?? prediction?.generatedAt,
+  );
+  const predictionReasonMatchesState =
+    !decisionState || decisionState.currentState === prediction?.decisionStatus;
+  const decisionReason =
+    decisionStatus === "already_reached"
+      ? "The representative 15L AMOS temperature has reached the target."
+      : decisionStatus === "final"
+        ? "The completed Seoul-local day and its threshold evaluation are finalized."
+        : decisionStatus === "unlikely_to_reach"
+          ? "The rule ceiling stayed below the target with no active rebound blockers for the full 15-minute confirmation."
+          : decisionStatus === "peak_candidate"
+            ? `The rule ceiling is below the target; ${consecutivePasses} of 3 follow-up checks have completed within the 15-minute confirmation.`
+            : (blockerDescriptions[0] ??
+              (predictionReasonMatchesState ? prediction?.reason : null) ??
+              (decisionStatus === "insufficient_data"
+                ? "A critical observation, forecast, or solar input is unavailable or stale."
+                : decisionStatus === "still_possible"
+                  ? "The ceiling or at least one rebound check still leaves the target possible."
+                  : "No remaining-ceiling decision has been stored yet."));
+  const hasDecision = Boolean(
+    decisionStatus ||
+    Number.isFinite(decisionTargetC) ||
+    Number.isFinite(decisionCeilingC),
+  );
   const currentC = latestAmos?.tempC;
   const kmaDailyHighC = kma?.dailyHighC;
   const peakWindow = formatKmaPeakWindow(kmaPeak);
@@ -3294,6 +4133,123 @@ function MaxOutlookPanel({
   ]
     .filter(Boolean)
     .join(" · ");
+  const decisionTarget = formatPredictionTemperature(
+    toUnitTemperature(decisionTargetC, unit),
+    unit,
+  );
+  const decisionCeiling = formatPredictionTemperature(
+    toUnitTemperature(decisionCeilingC, unit),
+    unit,
+  );
+  const decisionMargin = formatPredictionTemperature(
+    toUnitTemperatureDelta(decisionMarginC, unit),
+    unit,
+  );
+  const confirmationValue =
+    decisionStatus === "already_reached"
+      ? "Not required"
+      : `${consecutivePasses} / 3`;
+  const confirmationDetail = Number.isFinite(candidateSinceUtc)
+    ? `Candidate since ${formatClock(candidateSinceUtc)} KST`
+    : decisionStatus === "already_reached"
+      ? "Target observation ends the threshold question"
+      : decisionStatus === "final"
+        ? "Completed day; confirmation is closed"
+        : "No active candidate timer";
+  const ceilingComponents = [
+    ["Observed high", prediction?.observedHighC],
+    ["KMA best", prediction?.kmaRemainingBestHighC],
+    ["KMA upper", prediction?.kmaRemainingUpperC],
+    ["30m nowcast", prediction?.nowcastUpperC],
+  ];
+  const robustTrends = [
+    ["15m", prediction?.robustSlope15mCPerHour],
+    ["30m", prediction?.robustSlope30mCPerHour],
+    ["60m", prediction?.robustSlope60mCPerHour],
+  ];
+  const decisionFreshness = [
+    ["Snapshot AMOS", formatDecisionAge(prediction?.observationAgeMinutes)],
+    ["Snapshot KMA", formatDecisionAge(prediction?.forecastAgeMinutes)],
+    [
+      "Snapshot GK2A",
+      prediction?.solarStatus
+        ? `${String(prediction.solarStatus).replaceAll("_", " ")} · ${formatDecisionAge(
+            prediction.solarObservationAgeMinutes,
+          )}`
+        : "snapshot unavailable",
+    ],
+    [
+      "Snapshot stored",
+      Number.isFinite(prediction?.generatedAt)
+        ? `${formatClock(prediction.generatedAt)} KST`
+        : "time unavailable",
+    ],
+    [
+      "State checked",
+      Number.isFinite(decisionEvaluationAt)
+        ? `${formatClock(decisionEvaluationAt)} KST`
+        : "time unavailable",
+    ],
+  ];
+  const secondary16LCurrent = formatPredictionTemperature(
+    toUnitTemperature(prediction?.secondary16LCurrentC, unit),
+    unit,
+  );
+  const secondary16LFacts = [
+    Number.isFinite(prediction?.secondary16LSlope15mCPerHour)
+      ? `15m ${formatDecisionTrend(
+          prediction.secondary16LSlope15mCPerHour,
+          unit,
+        )}`
+      : null,
+    Number.isFinite(prediction?.secondary16LSlope30mCPerHour)
+      ? `30m ${formatDecisionTrend(
+          prediction.secondary16LSlope30mCPerHour,
+          unit,
+        )}`
+      : null,
+    Number.isFinite(prediction?.secondary16LDifferenceFrom15LC)
+      ? `vs 15L ${formatTemperatureDelta(
+          toUnitTemperatureDelta(
+            prediction.secondary16LDifferenceFrom15LC,
+            unit,
+          ),
+          unit,
+        )}`
+      : null,
+    Number.isFinite(prediction?.secondary16LObservationAgeMinutes)
+      ? formatDecisionAge(prediction.secondary16LObservationAgeMinutes)
+      : null,
+  ].filter(Boolean);
+  const highLockSummary = highLockAssessment({
+    dashboard: nextHighTargetDashboard,
+    nextHighTargetC: targetControl?.nextObservedHighTargetC,
+    observedHighC: observedMax?.tempC,
+    isToday,
+    isArchive,
+    amosFreshness,
+    clockNowMs,
+    unit,
+  });
+  const forecastHighSummary = forecastHighAssessment({
+    dashboard: forecastHighTargetDashboard,
+    kma,
+    observedHighC: observedMax?.tempC,
+    isToday,
+    isArchive,
+    amosFreshness,
+    clockNowMs,
+    unit,
+  });
+  const warmingSlowdownSummary = warmingSlowdownAssessment({
+    slope15mCPerHour: trend15mCPerHour,
+    slope30mCPerHour: trend30mCPerHour,
+    slope60mCPerHour: trendCPerHour,
+    isToday,
+    isArchive,
+    amosFreshness,
+    unit,
+  });
 
   return (
     <section
@@ -3364,6 +4320,24 @@ function MaxOutlookPanel({
           )}
         </div>
       )}
+
+      <div
+        aria-label="Plain-language maximum outlook"
+        className="mb-3 grid gap-2 lg:grid-cols-3"
+      >
+        <PlainLanguageStatusCard
+          question="Is today's high locked?"
+          {...highLockSummary}
+        />
+        <PlainLanguageStatusCard
+          question="Is KMA's forecast high too low or too high?"
+          {...forecastHighSummary}
+        />
+        <PlainLanguageStatusCard
+          question="Is warming slowing?"
+          {...warmingSlowdownSummary}
+        />
+      </div>
 
       <div className="grid gap-px border border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <OutlookMetric
@@ -3447,6 +4421,176 @@ function MaxOutlookPanel({
         />
       </div>
 
+      <PeakTargetSelector date={date} isToday={isToday} {...targetControl} />
+
+      {hasDecision && (
+        <div className="mt-3 border border-cyan-300/15 bg-cyan-300/[0.025]">
+          <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 md:px-5">
+            <div className="min-w-0">
+              <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-cyan-300">
+                Remaining temperature ceiling
+              </p>
+              <p className="mt-1 max-w-4xl text-xs leading-5 text-slate-400">
+                {decisionReason}
+              </p>
+              <p className="mt-1 font-mono text-[9px] leading-4 text-slate-600">
+                This threshold decision is separate from the expected maximum
+                above. Status and confirmation are current mutable state; trends
+                and source details are the latest material immutable snapshot.
+              </p>
+            </div>
+            <span
+              className={`shrink-0 border px-2.5 py-1 font-mono text-[9px] font-semibold uppercase tracking-[0.15em] ${decisionPresentation.badge}`}
+            >
+              {decisionPresentation.label}
+            </span>
+          </div>
+
+          <div className="grid gap-px border-y border-white/10 bg-white/10 sm:grid-cols-2 xl:grid-cols-4">
+            <OutlookMetric
+              label="Raw AMOS target"
+              value={decisionTarget}
+              detail="Representative 15L threshold"
+              tone={decisionPresentation.accent}
+            />
+            <OutlookMetric
+              label="Remaining rule ceiling"
+              value={decisionCeiling}
+              detail="Deterministic operational ceiling"
+              tone={decisionPresentation.accent}
+            />
+            <OutlookMetric
+              label="Margin below target"
+              value={decisionMargin}
+              detail={
+                Number.isFinite(decisionMarginC)
+                  ? decisionMarginC > 0
+                    ? "Ceiling remains below the target"
+                    : "Ceiling reaches or exceeds the target"
+                  : "Unavailable for this evaluation"
+              }
+              tone={
+                Number.isFinite(decisionMarginC) && decisionMarginC > 0
+                  ? "text-emerald-200"
+                  : "text-slate-200"
+              }
+            />
+            <OutlookMetric
+              label="Confirmation"
+              value={confirmationValue}
+              detail={confirmationDetail}
+              tone={
+                consecutivePasses >= 3
+                  ? "text-emerald-200"
+                  : consecutivePasses > 0
+                    ? "text-cyan-200"
+                    : "text-slate-200"
+              }
+            />
+          </div>
+
+          <div className="grid gap-px bg-white/10 md:grid-cols-2 2xl:grid-cols-4">
+            <div className="bg-[#081321] px-4 py-3">
+              <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-slate-500">
+                Ceiling components
+              </p>
+              <dl className="mt-2 space-y-1 font-mono text-[10px] leading-4">
+                {ceilingComponents.map(([label, valueC]) => (
+                  <div
+                    key={label}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <dt className="text-slate-500">{label}</dt>
+                    <dd className="text-slate-200">
+                      {formatPredictionTemperature(
+                        toUnitTemperature(valueC, unit),
+                        unit,
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+
+            <div className="bg-[#081321] px-4 py-3">
+              <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-slate-500">
+                Robust AMOS trends
+              </p>
+              <dl className="mt-2 space-y-1 font-mono text-[10px] leading-4">
+                {robustTrends.map(([label, valueC]) => (
+                  <div
+                    key={label}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <dt className="text-slate-500">{label}</dt>
+                    <dd className="text-slate-200">
+                      {formatDecisionTrend(valueC, unit)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+
+            <div className="bg-[#081321] px-4 py-3">
+              <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-slate-500">
+                Decision freshness
+              </p>
+              <dl className="mt-2 space-y-1 font-mono text-[10px] leading-4">
+                {decisionFreshness.map(([label, value]) => (
+                  <div
+                    key={label}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <dt className="text-slate-500">{label}</dt>
+                    <dd className="text-right text-slate-200">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+
+            <div className="bg-[#081321] px-4 py-3">
+              <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-slate-500">
+                Independent 16L snapshot
+              </p>
+              <p className="mt-1 text-lg font-medium text-slate-200">
+                {secondary16LCurrent}
+              </p>
+              <p className="mt-1 font-mono text-[9px] leading-4 text-slate-500">
+                {secondary16LFacts.length
+                  ? secondary16LFacts.join(" · ")
+                  : "No corroborating 16L snapshot was stored"}
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-white/10 px-4 py-3 md:px-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-mono text-[9px] uppercase tracking-[0.17em] text-slate-500">
+                Active blockers · {visibleBlockerDescriptions.length}
+              </p>
+              {prediction?.modelVersion && (
+                <p className="font-mono text-[9px] text-slate-600">
+                  {prediction.modelVersion}
+                </p>
+              )}
+            </div>
+            {visibleBlockerDescriptions.length ? (
+              <ul className="mt-2 grid max-h-40 list-disc gap-x-8 gap-y-1 overflow-y-auto pl-4 font-mono text-[10px] leading-4 text-amber-100/75 lg:grid-cols-2">
+                {visibleBlockerDescriptions.map((description, index) => (
+                  <li key={`${index}-${description}`}>{description}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 font-mono text-[10px] leading-4 text-emerald-200/70">
+                {terminalDecision
+                  ? "Blockers no longer govern this terminal state."
+                  : "No active blockers in the persisted evaluation."}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <p className="mt-2 font-mono text-[9px] leading-4 text-slate-600">
         {[
           amosFreshness.timing,
@@ -3454,7 +4598,7 @@ function MaxOutlookPanel({
           hasKmaMaximum
             ? "expected max can never fall below the selected day’s observed AMOS maximum"
             : null,
-          "Weather.com appears only as a labeled secondary comparison",
+          "Weather.com remains secondary and can only veto the strongest threshold state",
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -3924,6 +5068,16 @@ export default function SeoulDayPage() {
     requestedAt: null,
     retryAt: null,
   });
+  const [peakTargetMode, setPeakTargetMode] = useState("kma");
+  const [customTargetC, setCustomTargetC] = useState(null);
+  const [customTargetDraft, setCustomTargetDraft] = useState("");
+  const [customTargetError, setCustomTargetError] = useState("");
+  const [targetPreferencesLoaded, setTargetPreferencesLoaded] = useState(false);
+  const [capturedKmaTarget, setCapturedKmaTarget] = useState({
+    date,
+    targetC: null,
+  });
+  const [targetEvaluationMessage, setTargetEvaluationMessage] = useState("");
   const refreshInFlight = useRef(false);
   const chartScrollRef = useRef(null);
   const hasAutoScrolledChart = useRef(false);
@@ -3937,6 +5091,15 @@ export default function SeoulDayPage() {
     isToday && Number.isFinite(clockNowMs)
       ? seoulMinuteForEpoch(clockNowMs)
       : null;
+  const selectedTargetC =
+    peakTargetMode === "custom"
+      ? normalizeRawTargetC(customTargetC)
+      : capturedKmaTarget.date === date
+        ? normalizeRawTargetC(capturedKmaTarget.targetC)
+        : null;
+  const dashboardTargetC = Number.isFinite(selectedTargetC)
+    ? selectedTargetC
+    : PEAK_TARGET_BOOTSTRAP_C;
 
   const dayData = useQuery(
     "seoul:getDayStationRows",
@@ -3944,14 +5107,25 @@ export default function SeoulDayPage() {
   );
   const predictionDashboard = useQuery(
     "seoulWeather:getHighPredictionDashboard",
-    isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
+    isDateValid
+      ? { stationIcao: STATION_ICAO, date, targetC: dashboardTargetC }
+      : "skip",
   );
+  const selectedTargetDashboard = targetsMatch(
+    predictionDashboard?.selectedTargetC,
+    selectedTargetC,
+  )
+    ? predictionDashboard
+    : null;
   const solarDashboard = useQuery(
     "seoulGk2a:getSolarHeatingDashboard",
     isDateValid ? { stationIcao: STATION_ICAO, date } : "skip",
   );
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
   const pollOneMinuteAmos = useAction("seoul:pollLatestAmosTemperatureSites");
+  const recomputeHighPrediction = useAction(
+    "seoulWeather:recomputeTodayHighPrediction",
+  );
   const requestSolarHeatingRefresh = useMutation(
     "seoulGk2aCollector:requestSolarHeatingRefresh",
   );
@@ -3988,6 +5162,17 @@ export default function SeoulDayPage() {
     () => selectObservedMaximum(amosDisplayRows),
     [amosDisplayRows],
   );
+  const nextObservedHighTargetC = Number.isFinite(observedMax?.tempC)
+    ? normalizeRawTargetC((Math.round(observedMax.tempC * 10) + 1) / 10)
+    : null;
+  const trend15mCPerHour = useMemo(
+    () => robustTemperatureTrendCPerHour(amosDisplayRows, 15),
+    [amosDisplayRows],
+  );
+  const trend30mCPerHour = useMemo(
+    () => robustTemperatureTrendCPerHour(amosDisplayRows, 30),
+    [amosDisplayRows],
+  );
   const trend60mCPerHour = useMemo(
     () => robustTemperatureTrendCPerHour(amosDisplayRows, 60),
     [amosDisplayRows],
@@ -4008,6 +5193,66 @@ export default function SeoulDayPage() {
       ),
     [date, predictionDashboard, providerFreshnessNow, today],
   );
+  const currentKmaTargetC = normalizeRawTargetC(kma?.dailyHighC);
+  const auxiliaryTargetCs = useMemo(() => {
+    if (!isDateValid || !isToday) {
+      return [];
+    }
+    const targets = [];
+    for (const candidate of [nextObservedHighTargetC, currentKmaTargetC]) {
+      if (
+        !Number.isFinite(candidate) ||
+        targetsMatch(candidate, selectedTargetC) ||
+        targets.some((targetC) => targetsMatch(targetC, candidate))
+      ) {
+        continue;
+      }
+      targets.push(candidate);
+    }
+    return targets;
+  }, [
+    currentKmaTargetC,
+    isDateValid,
+    isToday,
+    nextObservedHighTargetC,
+    selectedTargetC,
+  ]);
+  const auxiliaryDecisionSummaries = useQuery(
+    "seoulWeather:getHighPredictionDecisionSummaries",
+    auxiliaryTargetCs.length
+      ? {
+          stationIcao: STATION_ICAO,
+          date,
+          targetCs: auxiliaryTargetCs,
+        }
+      : "skip",
+  );
+  const auxiliaryDashboardForTarget = (targetC) => {
+    const row = auxiliaryDecisionSummaries?.targets?.find((candidate) =>
+      targetsMatch(candidate?.targetC, targetC),
+    );
+    return row
+      ? {
+          selectedTargetC: row.targetC,
+          decisionState: row.decisionState,
+          latestPrediction: row.latestPrediction,
+        }
+      : null;
+  };
+  const nextHighTargetDashboard = targetsMatch(
+    selectedTargetDashboard?.selectedTargetC,
+    nextObservedHighTargetC,
+  )
+    ? selectedTargetDashboard
+    : auxiliaryDashboardForTarget(nextObservedHighTargetC);
+  const forecastHighTargetDashboard = targetsMatch(
+    selectedTargetDashboard?.selectedTargetC,
+    currentKmaTargetC,
+  )
+    ? selectedTargetDashboard
+    : targetsMatch(nextHighTargetDashboard?.selectedTargetC, currentKmaTargetC)
+      ? nextHighTargetDashboard
+      : auxiliaryDashboardForTarget(currentKmaTargetC);
   const kmaPrimaryHourlyRows = useMemo(
     () => (kma.available ? kma.hourlyRows : []),
     [kma.available, kma.hourlyRows],
@@ -4335,6 +5580,196 @@ export default function SeoulDayPage() {
     ],
   );
 
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(PEAK_TARGET_PREFERENCE_KEY);
+      if (stored) {
+        const preference = JSON.parse(stored);
+        const storedCustomTargetC = normalizeRawTargetC(
+          preference?.customTargetC,
+        );
+        if (Number.isFinite(storedCustomTargetC)) {
+          setCustomTargetC(storedCustomTargetC);
+          setCustomTargetDraft(storedCustomTargetC.toFixed(1));
+        }
+        if (
+          preference?.mode === "custom" &&
+          Number.isFinite(storedCustomTargetC)
+        ) {
+          setPeakTargetMode("custom");
+        }
+      }
+    } catch (error) {
+      console.warn("Could not restore the Seoul target preference.", error);
+    } finally {
+      setTargetPreferencesLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!targetPreferencesLoaded) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        PEAK_TARGET_PREFERENCE_KEY,
+        JSON.stringify({
+          mode: peakTargetMode,
+          ...(Number.isFinite(customTargetC) ? { customTargetC } : {}),
+        }),
+      );
+    } catch (error) {
+      console.warn("Could not save the Seoul target preference.", error);
+    }
+  }, [customTargetC, peakTargetMode, targetPreferencesLoaded]);
+
+  useEffect(() => {
+    setCapturedKmaTarget((current) =>
+      current.date === date ? current : { date, targetC: null },
+    );
+  }, [date]);
+
+  useEffect(() => {
+    const publishedHighC = normalizeRawTargetC(kma?.dailyHighC);
+    if (!isDateValid || !Number.isFinite(publishedHighC)) {
+      return;
+    }
+    setCapturedKmaTarget((current) => {
+      if (current.date === date && Number.isFinite(current.targetC)) {
+        return current;
+      }
+      return { date, targetC: publishedHighC };
+    });
+  }, [date, isDateValid, kma?.dailyHighC]);
+
+  useEffect(() => {
+    if (!targetPreferencesLoaded || !isToday) {
+      setTargetEvaluationMessage("");
+      return;
+    }
+
+    const evaluationTargets = [];
+    for (const candidate of [
+      selectedTargetC,
+      currentKmaTargetC,
+      nextObservedHighTargetC,
+    ]) {
+      if (
+        !Number.isFinite(candidate) ||
+        evaluationTargets.some((targetC) => targetsMatch(targetC, candidate))
+      ) {
+        continue;
+      }
+      evaluationTargets.push(candidate);
+    }
+    if (!evaluationTargets.length) {
+      setTargetEvaluationMessage("");
+      return;
+    }
+
+    let disposed = false;
+    let retryTimer = null;
+    const evaluate = async (attempt = 0) => {
+      if (disposed) {
+        return;
+      }
+      if (!disposed && Number.isFinite(selectedTargetC)) {
+        setTargetEvaluationMessage("Evaluating the selected raw target…");
+      }
+      try {
+        await recomputeHighPrediction({
+          stationIcao: STATION_ICAO,
+          date,
+          targetCs: evaluationTargets,
+          trigger: "interactive",
+        });
+        if (!disposed && Number.isFinite(selectedTargetC)) {
+          setTargetEvaluationMessage(
+            "Selected and summary targets registered; server checks continue every 5 minutes after this page closes.",
+          );
+        }
+      } catch (error) {
+        console.error(error);
+        if (disposed) {
+          return;
+        }
+        if (attempt === 0) {
+          setTargetEvaluationMessage(
+            "Target initialization failed; retrying automatically in 30 seconds.",
+          );
+          retryTimer = window.setTimeout(() => evaluate(1), 30_000);
+        } else {
+          setTargetEvaluationMessage(
+            "Automatic target initialization failed. Reload the page to retry.",
+          );
+        }
+      }
+    };
+
+    evaluate();
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [
+    currentKmaTargetC,
+    date,
+    isToday,
+    nextObservedHighTargetC,
+    recomputeHighPrediction,
+    selectedTargetC,
+    targetPreferencesLoaded,
+  ]);
+
+  function useKmaPublishedHighTarget() {
+    const publishedHighC = normalizeRawTargetC(kma?.dailyHighC);
+    if (!Number.isFinite(publishedHighC)) {
+      setCustomTargetError(
+        "A KMA published daily high is required before selecting this target.",
+      );
+      return;
+    }
+    setCapturedKmaTarget({ date, targetC: publishedHighC });
+    setPeakTargetMode("kma");
+    setCustomTargetError("");
+  }
+
+  function useNextObservedHighTarget() {
+    if (!Number.isFinite(nextObservedHighTargetC)) {
+      setCustomTargetError(
+        "A representative AMOS observation is required before setting the next 0.1°C target.",
+      );
+      return;
+    }
+    setCustomTargetC(nextObservedHighTargetC);
+    setCustomTargetDraft(nextObservedHighTargetC.toFixed(1));
+    setCustomTargetError("");
+    setPeakTargetMode("custom");
+  }
+
+  function applyCustomTarget(event) {
+    event?.preventDefault();
+    const numericDraft =
+      customTargetDraft.trim() === "" ? null : finiteNumber(customTargetDraft);
+    if (!Number.isFinite(numericDraft)) {
+      setCustomTargetError("Enter a finite raw Celsius target.");
+      return;
+    }
+    const nextTargetC = normalizeRawTargetC(customTargetDraft);
+    if (!Number.isFinite(nextTargetC)) {
+      setCustomTargetError(
+        `Enter a raw target from ${PEAK_TARGET_MIN_C.toFixed(1)}°C through ${PEAK_TARGET_MAX_C.toFixed(1)}°C.`,
+      );
+      return;
+    }
+    setCustomTargetC(nextTargetC);
+    setCustomTargetDraft(nextTargetC.toFixed(1));
+    setCustomTargetError("");
+    setPeakTargetMode("custom");
+  }
+
   function scrollChartToMinute(minute, behavior = "smooth") {
     const scroller = chartScrollRef.current;
     if (!scroller || !Number.isFinite(minute)) {
@@ -4418,14 +5853,12 @@ export default function SeoulDayPage() {
     if (!isToday || solarRefreshState.active) {
       return;
     }
-    if (
-      !Number.isFinite(currentSeoulMinute) ||
-      currentSeoulMinute < 11 * 60 ||
-      currentSeoulMinute >= 16 * 60
-    ) {
+    if (solarDashboard?.collectionWindowOpen !== true) {
       setSolarRefreshState({
         active: false,
-        message: "GK2A downloads are limited to 11:00–16:00 KST.",
+        message:
+          solarDashboard?.statusMessage ??
+          "GK2A collection is paused while modeled clear-sky irradiance is below 50 W/m².",
         requestedAt: null,
       });
       return;
@@ -4450,7 +5883,7 @@ export default function SeoulDayPage() {
                   Math.ceil((result.retryAfterSeconds ?? 60) / 60),
                 )} minute(s).`
               : result?.status === "outside_collection_window"
-                ? "GK2A downloads are limited to 11:00–16:00 KST."
+                ? "GK2A collection is paused because modeled clear-sky irradiance is below 50 W/m²."
                 : "GK2A download queued; the panel will update when extraction finishes.";
       setSolarRefreshState({
         active: false,
@@ -4471,11 +5904,7 @@ export default function SeoulDayPage() {
   }
 
   async function collectKmaForecast() {
-    if (
-      !isDateValid ||
-      date < today ||
-      kmaCollectionState.active
-    ) {
+    if (!isDateValid || date < today || kmaCollectionState.active) {
       return;
     }
     setKmaCollectionState({
@@ -4526,10 +5955,7 @@ export default function SeoulDayPage() {
         });
         return;
       }
-      if (
-        result?.status === "queued" &&
-        Number.isFinite(result?.requestedAt)
-      ) {
+      if (result?.status === "queued" && Number.isFinite(result?.requestedAt)) {
         setKmaCollectionState({
           active: true,
           message:
@@ -4669,9 +6095,7 @@ export default function SeoulDayPage() {
       !Number.isFinite(kmaCollectionState.retryAt) ||
       !Number.isFinite(clockNowMs) ||
       clockNowMs < kmaCollectionState.retryAt ||
-      !kmaCollectionState.message.startsWith(
-        "KMA collection is cooling down",
-      )
+      !kmaCollectionState.message.startsWith("KMA collection is cooling down")
     ) {
       return;
     }
@@ -4920,7 +6344,33 @@ export default function SeoulDayPage() {
           kma={kma}
           kmaPeak={kmaPeak}
           expectedHighC={expectedHighC}
+          trend15mCPerHour={trend15mCPerHour}
+          trend30mCPerHour={trend30mCPerHour}
           trendCPerHour={trend60mCPerHour}
+          prediction={selectedTargetDashboard?.latestPrediction ?? null}
+          decisionState={selectedTargetDashboard?.decisionState ?? null}
+          nextHighTargetDashboard={nextHighTargetDashboard}
+          forecastHighTargetDashboard={forecastHighTargetDashboard}
+          targetControl={{
+            mode: peakTargetMode,
+            selectedTargetC,
+            capturedKmaTargetC:
+              capturedKmaTarget.date === date
+                ? normalizeRawTargetC(capturedKmaTarget.targetC)
+                : null,
+            nextObservedHighTargetC,
+            observedHighC: observedMax?.tempC,
+            customTargetDraft,
+            customTargetError,
+            evaluationMessage: targetEvaluationMessage,
+            onUseKmaTarget: useKmaPublishedHighTarget,
+            onUseNextTarget: useNextObservedHighTarget,
+            onCustomTargetDraftChange: (value) => {
+              setCustomTargetDraft(value);
+              setCustomTargetError("");
+            },
+            onApplyCustomTarget: applyCustomTarget,
+          }}
           onCollect={collectKmaForecast}
           collectionState={kmaCollectionState}
         />
@@ -4930,12 +6380,6 @@ export default function SeoulDayPage() {
           queryLoading={solarDashboard === undefined}
           latestAmos={latestAmos}
           isToday={isToday}
-          collectionWindowOpen={
-            isToday &&
-            Number.isFinite(currentSeoulMinute) &&
-            currentSeoulMinute >= 11 * 60 &&
-            currentSeoulMinute < 16 * 60
-          }
           clockNowMs={clockNowMs}
           onRefresh={refreshSolarHeating}
           refreshState={solarRefreshState}

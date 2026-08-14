@@ -1098,6 +1098,231 @@ The historical `publicData/oneMinObs_wellington-city` route found in archived
 clients now returns `404`; it is not used as a fallback. The public 48-hour
 graph is not a substitute for the near-live timestamped response.
 
+## MetService consumer mobile app backend (verified July 29, 2026)
+
+This check used the Android package and controlled requests, not MetService's
+published app terms.
+
+### Artifact checked
+
+- package:
+  - `com.metservice.kryten`
+- version:
+  - `2.29.3`
+  - Android `versionCode=408`
+- official Android listing:
+  - `https://play.google.com/store/apps/details?id=com.metservice.kryten`
+- APK metadata:
+  - `https://ws75.aptoide.com/api/7/app/get/package_name=com.metservice.kryten`
+- APK file SHA-256:
+  - `77F60B558B404AACB360A91EC93EF33E34CECA43DEAC84986098E695A46309FA`
+- signing-certificate SHA-256:
+  - `0B079DDF0AADB26323B40D734B63574918549947118DA1B4011D54FAA017A823`
+
+The APK came from a third-party mirror whose metadata says the artifact and
+signature were validated against Google Play. The file MD5 matched that mirror's
+metadata, but this was not an independent direct download from Google Play.
+
+### Static request path
+
+The Android app builds a Retrofit client with:
+
+- base URL:
+  - `https://api.metservice.com`
+- Wellington/general location request:
+  - `GET /mobile/nz/weatherData/{lat}/{lng}`
+- request authentication:
+  - an `apiKey` header added by the app's OkHttp interceptor
+
+The app rounds requested coordinates to three decimal places before calling
+`getWeatherData`.
+
+The packaged key is intentionally not recorded here. Relevant extracted code
+locations are:
+
+- `com.metservice.kryten.k.<clinit>`
+  - constructs the bundled app key
+- `com.metservice.kryten.a.invoke`
+  - configures the `https://api.metservice.com` Retrofit base URL
+- `M5.a.a`
+  - adds the `apiKey` request header
+- `com.metservice.kryten.service.LocationService.getWeatherData`
+  - declares `mobile/nz/weatherData/{lat}/{lng}`
+
+A complete DEX string scan found none of:
+
+- `publicData`
+- `webdata`
+- `weatherStationCurrentConditions`
+- `observations/nz/1-minute`
+- station `93110`
+- station `93439`
+
+So the Android client does not directly call either the website module or the
+documented commercial one-minute route. It calls a separate mobile backend and
+lets that backend choose the observation station.
+
+### Wellington response and public-module comparison
+
+The app's own location search returned:
+
+- location:
+  - `Rongotai`
+- app location id:
+  - `1427`
+- coordinates:
+  - `-41.32659,174.80656`
+
+After the client's three-decimal rounding, that becomes:
+
+- `https://api.metservice.com/mobile/nz/weatherData/-41.327/174.807`
+
+The response selected:
+
+- `result.observationData.location=93439`
+- `result.observationData.locationName=Wellington Aero AWS`
+- `result.forecastData.locationGFS=93439`
+
+Its hourly disclaimer also identified Wellington Aero Automatic Weather Station
+`(93439)`. No sampled response field contained `93110`.
+
+A nearby controlled comparison at coordinates `-41.327,174.805` returned:
+
+- route:
+  - `https://api.metservice.com/mobile/nz/weatherData/-41.327/174.805`
+- HTTP status:
+  - `200`
+- selected location:
+  - `result.apiKey=lyall-bay`
+- observation station:
+  - `result.observationData.location=93439`
+  - `result.observationData.locationName=Wellington Aero AWS`
+
+At `2026-07-29T20:29:37Z`, the mobile response exposed:
+
+- observation time:
+  - `2026-07-30T08:20:00+12:00`
+- temperature:
+  - `10.7 C`
+- relative humidity:
+  - `84`
+- pressure:
+  - `1019`
+- rainfall:
+  - `0.0`
+- wind:
+  - north at `33`, gusting `44`
+
+The compact public `weatherStationCurrentConditions/93439` module returned the
+same selected values seconds later. The timestamped public
+`currentConditions/93439/93439` module also identified the `08:20` observation;
+its sampled gust was `41`, so the projections are not guaranteed to be
+byte-for-byte identical.
+
+One earlier check caught independent cache timing:
+
+- at about `08:25` NZST, the mobile backend still exposed the `08:10`
+  observation
+- the timestamped public module had already advanced to `08:20`
+- the mobile backend exposed `08:20` by about `08:29:37`
+
+That single cycle shows the mobile route is independently materialized or
+cached and can lag the public module. It is not enough evidence to assign a
+stable mobile refresh cadence, but it found no mobile freshness advantage.
+
+The Android client also configures a two-minute response-freshness/default
+`max-age` and a much longer offline `max-stale` allowance. That client-side
+cache is another reason an on-device observation may be older than a fresh
+direct response even when both ultimately represent station `93439`.
+
+### Commercial one-minute route is a separate entitlement
+
+MetService's technical documentation gives the commercial base as:
+
+- `https://api.metservice.com/observations/nz/1-minute`
+
+The documented latest-station shape is:
+
+- `GET /weatherStation/{stationId}/latest`
+
+Authentication scope tests showed:
+
+- no key on `weatherStation/93439/latest`:
+  - `400`
+  - no API key provided
+- the Android app's bundled key on the same route:
+  - `403`
+  - `METWARN-OBSAPI-AUTH03`
+  - permission is required for the endpoint
+- the same bundled key on the mobile `weatherData` route:
+  - `200`
+
+This is strong evidence that the mobile backend and commercial one-minute API
+are separate products/scopes even though both use `api.metservice.com`.
+
+Technical references:
+
+- `https://developer.metservice.com/docs/api-catalog/1min-obs-api/`
+- `https://developer.metservice.com/docs/api-catalog/1min-obs-api/weather-stations/`
+- `https://developer.metservice.com/docs/api-reference/1min-obs/get-weather-station-station-id-latest/`
+
+### Station-ID correction: `93110` is not Wellington
+
+The current one-minute station guide is internally contradictory:
+
+- one example labels `93110` as Wellington Airport
+- its major-airports list assigns `93110` to both:
+  - `NZWN` Wellington
+  - `NZAA` Auckland
+
+MetService's live WIS2 station catalogue resolves the conflict:
+
+- `93110`
+  - `AUCKLAND AIRPORT AWS`
+  - `https://wis2.metservice.com/oapi/collections/stations/items/0-20000-0-93110`
+- `93439`
+  - `WELLINGTON AIRPORT AWS`
+  - `https://wis2.metservice.com/oapi/collections/stations/items/0-20000-0-93439`
+
+The mobile payload and both public modules also identify Wellington as `93439`.
+The safest current interpretation is therefore:
+
+- the station guide's `93110=NZWN` text is a documentation defect
+- `93110` is not evidence of a commercial-versus-public Wellington station split
+- `93439` is the live Wellington Airport / Wellington Aero AWS identifier seen
+  in current MetService catalogue and consumer payloads
+
+If commercial one-minute access is approved later, enumerate its live
+`/weatherStation` collection or request the `NZWN` alternative identifier
+before hard-coding a numeric station ID.
+
+### iOS confidence boundary
+
+The iOS App Store lookup also reports version `2.29.3`:
+
+- `https://itunes.apple.com/lookup?id=525900888&country=nz`
+
+The sampled mobile response included both Android and iOS
+minimum/recommended-version headers, which supports a shared mobile backend:
+
+- `met-droid-recommended-min`
+- `met-droid-required-min`
+- `met-ios-recommended-min`
+- `met-ios-required-min`
+
+That is supporting evidence only. This pass did not obtain an iOS binary or
+capture iOS traffic, so the Android route is proven and iOS route parity remains
+high-confidence but unconfirmed.
+
+### Integration implication
+
+Do not copy the consumer app's bundled key into this repository or treat its
+reachability as production authorization. Any future mobile-backend collector
+would require a provider-issued credential, confirmed MetService scope, and a
+dedicated positive server-side approval flag separate from
+`METSERVICE_PUBLICDATA_ACCESS_APPROVED`. Commercial one-minute access must be
+gated and approved separately as well.
+
 ## Non-finding
 
 - `https://about.metservice.com/preflight` returned a 404 in the sampled run, so

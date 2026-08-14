@@ -13,10 +13,8 @@ const RKSI_LATITUDE = 37.4602;
 const RKSI_LONGITUDE = 126.4407;
 const MILLIS_PER_MINUTE = 60 * 1000;
 const PRODUCT_CADENCE_MINUTES = 10;
-const COLLECTION_WINDOW_START_MINUTES = 11 * 60;
-const COLLECTION_WINDOW_END_MINUTES = 16 * 60;
 const COLLECTION_LOCK_TIMEOUT_MS = 15 * 60 * 1000;
-const MIN_COLLECTION_INTERVAL_MS = 10 * 60 * 1000;
+const COLLECTION_SLOT_MS = 10 * 60 * 1000;
 const OBSERVATION_RETENTION_MS = 48 * 60 * 60 * 1000;
 const MAX_RECENT_WIND_AGE_MINUTES = 45;
 const MIN_UPWIND_WIND_SPEED_KT = 2;
@@ -31,6 +29,7 @@ const COLLECTOR_STATUS = {
   PARTIAL: "partial",
   NO_DATA: "no_data",
   ERROR: "error",
+  UNCONFIGURED: "unconfigured",
 };
 
 const POINT_KIND = {
@@ -139,16 +138,10 @@ function formatSeoulDateTime(epochMs) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
-function seoulMinuteOfDay(epochMs) {
-  const parts = getDateParts(seoulDateTimeFormatter, new Date(epochMs));
-  return Number(parts.hour) * 60 + Number(parts.minute);
-}
-
-function isWithinCollectionWindow(epochMs) {
-  const minuteOfDay = seoulMinuteOfDay(epochMs);
+function hasUsefulSolarEnergy(epochMs) {
   return (
-    minuteOfDay >= COLLECTION_WINDOW_START_MINUTES &&
-    minuteOfDay < COLLECTION_WINDOW_END_MINUTES
+    haurwitzClearSkyDsr(epochMs, RKSI_LATITUDE, RKSI_LONGITUDE)
+      .clearSkyDsrWm2 >= TRANSMISSION_MIN_CLEAR_SKY_WM2
   );
 }
 
@@ -198,8 +191,7 @@ function solarPosition(epochMs, latitude, longitude) {
   const date = new Date(epochMs);
   const year = date.getUTCFullYear();
   const daysInYear =
-    Date.UTC(year + 1, 0, 1) - Date.UTC(year, 0, 1) >
-    365 * 24 * 60 * 60 * 1000
+    Date.UTC(year + 1, 0, 1) - Date.UTC(year, 0, 1) > 365 * 24 * 60 * 60 * 1000
       ? 366
       : 365;
   const utcHour =
@@ -450,7 +442,7 @@ async function queueCollection(ctx, { stationIcao, mode }) {
       stationIcao,
     };
   }
-  if (!isWithinCollectionWindow(now)) {
+  if (!hasUsefulSolarEnergy(now)) {
     return {
       queued: false,
       status: "outside_collection_window",
@@ -460,9 +452,7 @@ async function queueCollection(ctx, { stationIcao, mode }) {
 
   const existing = await ctx.db
     .query("seoulGk2aCollectorStatus")
-    .withIndex("by_station", (query) =>
-      query.eq("stationIcao", stationIcao),
-    )
+    .withIndex("by_station", (query) => query.eq("stationIcao", stationIcao))
     .first();
   if (
     Number.isFinite(existing?.collectionInFlightSince) &&
@@ -475,17 +465,19 @@ async function queueCollection(ctx, { stationIcao, mode }) {
       collectionInFlightSince: existing.collectionInFlightSince,
     };
   }
-  if (
-    Number.isFinite(existing?.collectionQueuedAt) &&
-    now - existing.collectionQueuedAt < MIN_COLLECTION_INTERVAL_MS
-  ) {
+  const collectionSlotUtc = Math.floor(now / COLLECTION_SLOT_MS);
+  const existingCollectionSlotUtc = Number.isFinite(
+    existing?.collectionQueuedAt,
+  )
+    ? Math.floor(existing.collectionQueuedAt / COLLECTION_SLOT_MS)
+    : null;
+  if (existingCollectionSlotUtc === collectionSlotUtc) {
     return {
       queued: false,
       status: "cooldown",
       stationIcao,
       retryAfterSeconds: Math.ceil(
-        (MIN_COLLECTION_INTERVAL_MS - (now - existing.collectionQueuedAt)) /
-          1_000,
+        ((collectionSlotUtc + 1) * COLLECTION_SLOT_MS - now) / 1_000,
       ),
     };
   }
@@ -557,8 +549,11 @@ export const getLatestAirportObservation = internalQueryGeneric({
   args: {
     stationIcao: v.string(),
   },
-  handler: async (ctx, args) =>
-    await ctx.db
+  handler: async (ctx, args) => {
+    if (!hasApprovedNmscAccess()) {
+      return null;
+    }
+    return await ctx.db
       .query("seoulGk2aSolarObservations")
       .withIndex("by_station_point_ts", (query) =>
         query
@@ -566,29 +561,32 @@ export const getLatestAirportObservation = internalQueryGeneric({
           .eq("pointKind", POINT_KIND.AIRPORT),
       )
       .order("desc")
-      .first(),
+      .first();
+  },
 });
 
 export const getCollectorState = internalQueryGeneric({
   args: {
     stationIcao: v.string(),
   },
-  handler: async (ctx, args) =>
-    await ctx.db
+  handler: async (ctx, args) => {
+    if (!hasApprovedNmscAccess()) {
+      return null;
+    }
+    return await ctx.db
       .query("seoulGk2aCollectorStatus")
       .withIndex("by_station", (query) =>
         query.eq("stationIcao", args.stationIcao),
       )
-      .first(),
+      .first();
+  },
 });
 
 async function pruneExpiredRows(ctx, stationIcao, retentionCutoffUtc) {
   const expiredRows = await ctx.db
     .query("seoulGk2aSolarObservations")
     .withIndex("by_station_obs_ts", (query) =>
-      query
-        .eq("stationIcao", stationIcao)
-        .lt("obsTimeUtc", retentionCutoffUtc),
+      query.eq("stationIcao", stationIcao).lt("obsTimeUtc", retentionCutoffUtc),
     )
     .take(500);
   for (const row of expiredRows) {
@@ -604,6 +602,18 @@ export const upsertAndPruneSolarObservations = internalMutationGeneric({
     retentionCutoffUtc: v.number(),
   },
   handler: async (ctx, args) => {
+    // This is the final database write boundary for downloaded NMSC rows.
+    // A job that outlives approval must discard its payload, not persist it.
+    if (!hasApprovedNmscAccess()) {
+      return {
+        status: "access_not_approved",
+        insertedCount: 0,
+        patchedCount: 0,
+        unchangedCount: 0,
+        prunedCount: 0,
+        rowCount: 0,
+      };
+    }
     const now = Date.now();
     let insertedCount = 0;
     let patchedCount = 0;
@@ -700,8 +710,27 @@ export const writeCollectorStatus = internalMutationGeneric({
     if (!existing || existing.collectionRunId !== args.runId) {
       return { updated: false, reason: "superseded" };
     }
-    const { clearCollectionInFlight, ...statusFields } = args;
-    delete statusFields.runId;
+    const approvalActive = hasApprovedNmscAccess();
+    const { clearCollectionInFlight, ...requestedStatusFields } = args;
+    delete requestedStatusFields.runId;
+    // This mutation is the final boundary for every worker-status side effect.
+    // If approval changed after the action's preceding check, clear the owned
+    // lock but do not copy frame times, success metadata, or row counts from
+    // the now-protected payload into the collector-status document.
+    const statusFields = approvalActive
+      ? requestedStatusFields
+      : {
+          stationIcao: args.stationIcao,
+          status: COLLECTOR_STATUS.UNCONFIGURED,
+          configured: false,
+          lastAttemptAt: args.lastAttemptAt,
+          lastAttemptAtLocal: args.lastAttemptAtLocal,
+          lastError:
+            "NMSC approval is required before GK2A NetCDF access can be enabled.",
+          requestedPointCount: 0,
+          storedRowCount: 0,
+          upwindStatus: "unknown",
+        };
     const patch = {
       ...statusFields,
       updatedAt: Date.now(),
@@ -714,16 +743,20 @@ export const writeCollectorStatus = internalMutationGeneric({
         : {}),
     };
     if (
-      !args.lastError &&
-      (args.status === COLLECTOR_STATUS.OK ||
-        args.status === COLLECTOR_STATUS.PARTIAL ||
-        args.status === COLLECTOR_STATUS.NO_DATA)
+      approvalActive &&
+      !statusFields.lastError &&
+      (statusFields.status === COLLECTOR_STATUS.OK ||
+        statusFields.status === COLLECTOR_STATUS.PARTIAL ||
+        statusFields.status === COLLECTOR_STATUS.NO_DATA)
     ) {
       patch.lastError = undefined;
     }
     if (existing) {
       await ctx.db.patch(existing._id, patch);
-      return { updated: true };
+      return {
+        updated: true,
+        ...(approvalActive ? {} : { status: "access_not_approved" }),
+      };
     }
     return { updated: false, reason: "missing" };
   },
@@ -740,6 +773,29 @@ export const collectSolarHeating = internalActionGeneric({
     const stationIcao = normalizeStationIcao(args.stationIcao);
     const lastAttemptAt = Date.now();
     const lastAttemptAtLocal = formatSeoulDateTime(lastAttemptAt);
+    if (!hasApprovedNmscAccess()) {
+      const message =
+        "NMSC approval is required before GK2A NetCDF access can be enabled.";
+      await ctx.runMutation(internal.seoulGk2aCollector.writeCollectorStatus, {
+        stationIcao,
+        runId: args.runId,
+        status: COLLECTOR_STATUS.UNCONFIGURED,
+        configured: false,
+        lastAttemptAt,
+        lastAttemptAtLocal,
+        lastError: message,
+        requestedPointCount: 0,
+        storedRowCount: 0,
+        upwindStatus: "unknown",
+        clearCollectionInFlight: true,
+      });
+      return {
+        ok: false,
+        status: "access_not_approved",
+        stationIcao,
+        message,
+      };
+    }
     try {
       // Enforce the rolling retention window even when the upstream frame has
       // not advanced or the subsequent NMSC request fails.
@@ -756,10 +812,9 @@ export const collectSolarHeating = internalActionGeneric({
           stationIcao,
           now: args.requestedAt,
         }),
-        ctx.runQuery(
-          internal.seoulGk2aCollector.getLatestAirportObservation,
-          { stationIcao },
-        ),
+        ctx.runQuery(internal.seoulGk2aCollector.getLatestAirportObservation, {
+          stationIcao,
+        }),
         ctx.runQuery(internal.seoulGk2aCollector.getCollectorState, {
           stationIcao,
         }),
@@ -783,6 +838,36 @@ export const collectSolarHeating = internalActionGeneric({
           points: sampling.points,
         },
       );
+
+      // Recheck after the node action returns and before inspecting or storing
+      // its protected payload. This closes the queued/in-flight revocation
+      // race even if approval changed during discovery or download.
+      if (result.status === "access_not_approved" || !hasApprovedNmscAccess()) {
+        const message =
+          "NMSC approval is required before GK2A NetCDF access can be enabled.";
+        await ctx.runMutation(
+          internal.seoulGk2aCollector.writeCollectorStatus,
+          {
+            stationIcao,
+            runId: args.runId,
+            status: COLLECTOR_STATUS.UNCONFIGURED,
+            configured: false,
+            lastAttemptAt,
+            lastAttemptAtLocal,
+            lastError: message,
+            requestedPointCount: sampling.points.length,
+            storedRowCount: 0,
+            upwindStatus: sampling.upwindStatus,
+            clearCollectionInFlight: true,
+          },
+        );
+        return {
+          ok: false,
+          status: "access_not_approved",
+          stationIcao,
+          message,
+        };
+      }
 
       if (result.status === "not_modified") {
         const status = latestStored
@@ -816,7 +901,7 @@ export const collectSolarHeating = internalActionGeneric({
         };
       }
 
-      if (!isWithinCollectionWindow(result.observationTimeUtc)) {
+      if (!hasUsefulSolarEnergy(result.observationTimeUtc)) {
         await ctx.runMutation(
           internal.seoulGk2aCollector.writeCollectorStatus,
           {
@@ -827,7 +912,7 @@ export const collectSolarHeating = internalActionGeneric({
             lastAttemptAt,
             lastAttemptAtLocal,
             lastError:
-              "The latest GK2A frame was outside the 11:00-16:00 KST collection window.",
+              "The latest GK2A frame was below the 50 W/m² modeled clear-sky collection threshold.",
             lastResolvedFrameTimeUtc: result.observationTimeUtc,
             requestedPointCount: sampling.points.length,
             storedRowCount: 0,
@@ -845,13 +930,10 @@ export const collectSolarHeating = internalActionGeneric({
       const rows = buildObservationRows(result, sampling);
       const airportRow = rows.find(
         (row) =>
-          row.pointKind === POINT_KIND.AIRPORT &&
-          Number.isFinite(row.dsrWm2),
+          row.pointKind === POINT_KIND.AIRPORT && Number.isFinite(row.dsrWm2),
       );
       const sampleErrors = result.samples
-        .filter(
-          (sample) => sample.error || !Number.isFinite(sample.dsrWm2),
-        )
+        .filter((sample) => sample.error || !Number.isFinite(sample.dsrWm2))
         .map(
           (sample) =>
             `${sample.pointKind}: ${
@@ -871,41 +953,64 @@ export const collectSolarHeating = internalActionGeneric({
           retentionCutoffUtc: lastAttemptAt - OBSERVATION_RETENTION_MS,
         },
       );
-      const successful = Boolean(airportRow);
-      await ctx.runMutation(
-        internal.seoulGk2aCollector.writeCollectorStatus,
-        {
+      if (writeResult.status === "access_not_approved") {
+        const message =
+          "NMSC approval was removed before the downloaded GK2A rows could be stored.";
+        await ctx.runMutation(
+          internal.seoulGk2aCollector.writeCollectorStatus,
+          {
+            stationIcao,
+            runId: args.runId,
+            status: COLLECTOR_STATUS.UNCONFIGURED,
+            configured: false,
+            lastAttemptAt,
+            lastAttemptAtLocal,
+            lastError: message,
+            requestedPointCount: sampling.points.length,
+            storedRowCount: 0,
+            upwindStatus: sampling.upwindStatus,
+            clearCollectionInFlight: true,
+          },
+        );
+        return {
+          ok: false,
+          status: "access_not_approved",
           stationIcao,
-          runId: args.runId,
-          status,
-          configured: true,
-          lastAttemptAt,
-          lastAttemptAtLocal,
-          ...(successful
-            ? {
-                lastSuccessAt: lastAttemptAt,
-                lastSuccessAtLocal: lastAttemptAtLocal,
-                latestObsTimeUtc: airportRow.obsTimeUtc,
-                latestObsTimeLocal: airportRow.obsTimeLocal,
-              }
-            : {}),
-          ...(sampleErrors.length
-            ? { lastError: sampleErrors.join("; ").slice(0, 500) }
-            : {}),
-          lastResolvedFrameTimeUtc: result.observationTimeUtc,
-          requestedPointCount: sampling.points.length,
-          storedRowCount: rows.length,
-          upwindStatus: sampling.upwindStatus,
-          ...(sampling.wind
-            ? {
-                windObservedAtUtc: sampling.wind.obsTimeUtc,
-                windDirectionFromDeg: sampling.wind.windDirectionFromDeg,
-                windSpeedKt: sampling.wind.windSpeedKt,
-              }
-            : {}),
-          clearCollectionInFlight: true,
-        },
-      );
+          message,
+        };
+      }
+      const successful = Boolean(airportRow);
+      await ctx.runMutation(internal.seoulGk2aCollector.writeCollectorStatus, {
+        stationIcao,
+        runId: args.runId,
+        status,
+        configured: true,
+        lastAttemptAt,
+        lastAttemptAtLocal,
+        ...(successful
+          ? {
+              lastSuccessAt: lastAttemptAt,
+              lastSuccessAtLocal: lastAttemptAtLocal,
+              latestObsTimeUtc: airportRow.obsTimeUtc,
+              latestObsTimeLocal: airportRow.obsTimeLocal,
+            }
+          : {}),
+        ...(sampleErrors.length
+          ? { lastError: sampleErrors.join("; ").slice(0, 500) }
+          : {}),
+        lastResolvedFrameTimeUtc: result.observationTimeUtc,
+        requestedPointCount: sampling.points.length,
+        storedRowCount: rows.length,
+        upwindStatus: sampling.upwindStatus,
+        ...(sampling.wind
+          ? {
+              windObservedAtUtc: sampling.wind.obsTimeUtc,
+              windDirectionFromDeg: sampling.wind.windDirectionFromDeg,
+              windSpeedKt: sampling.wind.windSpeedKt,
+            }
+          : {}),
+        clearCollectionInFlight: true,
+      });
       return {
         ok: successful,
         status,
@@ -915,25 +1020,29 @@ export const collectSolarHeating = internalActionGeneric({
         ...writeResult,
       };
     } catch (error) {
-      const message = formatErrorMessage(error);
-      await ctx.runMutation(
-        internal.seoulGk2aCollector.writeCollectorStatus,
-        {
-          stationIcao,
-          runId: args.runId,
-          status: COLLECTOR_STATUS.ERROR,
-          configured: true,
-          lastAttemptAt,
-          lastAttemptAtLocal,
-          lastError: message,
-          storedRowCount: 0,
-          upwindStatus: "unknown",
-          clearCollectionInFlight: true,
-        },
-      );
+      const approvalStillActive = hasApprovedNmscAccess();
+      const message = approvalStillActive
+        ? formatErrorMessage(error)
+        : "NMSC approval is required before GK2A NetCDF access can be enabled.";
+      await ctx.runMutation(internal.seoulGk2aCollector.writeCollectorStatus, {
+        stationIcao,
+        runId: args.runId,
+        status: approvalStillActive
+          ? COLLECTOR_STATUS.ERROR
+          : COLLECTOR_STATUS.UNCONFIGURED,
+        configured: approvalStillActive,
+        lastAttemptAt,
+        lastAttemptAtLocal,
+        lastError: message,
+        storedRowCount: 0,
+        upwindStatus: "unknown",
+        clearCollectionInFlight: true,
+      });
       return {
         ok: false,
-        status: COLLECTOR_STATUS.ERROR,
+        status: approvalStillActive
+          ? COLLECTOR_STATUS.ERROR
+          : "access_not_approved",
         stationIcao,
         message,
       };

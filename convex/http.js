@@ -4,6 +4,75 @@ import { internal } from "./_generated/api";
 
 const http = httpRouter();
 
+function capmaPublicImageApproved() {
+    return (
+        process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_ACCESS_APPROVED === "true" &&
+        process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_RETENTION_APPROVED === "true" &&
+        process.env.SENEAM_CAPMA_MMMX_TDZ_DATA_REPUBLICATION_APPROVED === "true"
+    );
+}
+
+http.route({
+    path: "/mexico/capma/latest-image",
+    method: "GET",
+    handler: httpAction(async (ctx, request) => {
+        if (!capmaPublicImageApproved()) {
+            return new Response("CAPMA image publication approval is required.", {
+                status: 403,
+                headers: { "Cache-Control": "no-store" },
+            });
+        }
+
+        const url = new URL(request.url);
+        const stationIcao = (url.searchParams.get("stationIcao") || "").toUpperCase();
+        const tdz = url.searchParams.get("tdz") || "";
+        const rawHash = url.searchParams.get("rawHash") || "";
+        if (
+            stationIcao !== "MMMX" ||
+            (tdz !== "05" && tdz !== "23") ||
+            !/^[a-f0-9]{64}$/.test(rawHash)
+        ) {
+            return new Response("Not found", {
+                status: 404,
+                headers: { "Cache-Control": "no-store" },
+            });
+        }
+
+        const image = await ctx.runQuery(internal.mexicoCapma.getLatestImageForHttp, {
+            stationIcao,
+            tdz,
+            rawHash,
+        });
+        if (!image || !capmaPublicImageApproved()) {
+            return new Response("Not found", {
+                status: 404,
+                headers: { "Cache-Control": "no-store" },
+            });
+        }
+
+        const blob = await ctx.storage.get(image.storageId);
+        if (!blob || !capmaPublicImageApproved()) {
+            return new Response("Not found", {
+                status: 404,
+                headers: { "Cache-Control": "no-store" },
+            });
+        }
+
+        return new Response(blob, {
+            status: 200,
+            headers: {
+                "Cache-Control": "private, no-store, max-age=0",
+                "Content-Disposition": `inline; filename="MMMX-TDZ-${tdz}-latest.jpg"`,
+                "Content-Length": String(image.responseBytes),
+                "Content-Type": image.contentType,
+                "ETag": `"${image.rawHash}"`,
+                "Pragma": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        });
+    }),
+});
+
 http.route({
     path: "/twilio/recording",
     method: "POST",
