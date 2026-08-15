@@ -3794,11 +3794,26 @@ the local event date with the claimed UTC request-start minute, keeping adjacent
 claims distinct even if both responses complete in the same minute. Status
 completion is conditional on that exact claim, so an older overlapping request
 cannot overwrite a newer attempt's state. Capture and chart time remain the
-completed response time, not the request start. The page reads a chart-only projection of those rows
-reactively and renders one stepped line per bucket on a separate `0-100%`
-chart. Line dash patterns supplement color, the capture audit table exposes the
-same history non-visually, and a gap longer than 90 seconds explicitly breaks
-every line. During the active window, a last collector attempt more than two
+completed response time, not the request start. The page reads a chart-only
+projection of those rows reactively and renders one stepped line per bucket on
+a separate `0-100%` chart. Line dash patterns supplement color, the capture
+audit table exposes the same history non-visually, and a gap longer than 90
+seconds explicitly breaks every line. Hover selection uses two-dimensional
+nearest-line distance and the tooltip is restricted to one bucket, so pointing
+at (for example) the `26°C` line shows only that bucket's probability, quote
+context, and exact snapshot time rather than every bucket captured in that
+minute.
+
+The probability chart also has an independent top timeline for official MMMX
+`METAR`/`SPECI` arrivals during the visible collection window. Each tick is
+positioned and labeled to the millisecond from `initialAwcReceiptTimeUtc`; when
+that provider field is unavailable, the chart uses `firstSeenAt`, adds `*` to
+the report type, and displays a first-seen fallback note. These are exact stored
+timestamps for the AWC relay/application arrival, not a claim about SENEAM's
+unexposed originating publication or transmission time. The bottom axis remains
+the hourly Mexico City probability-capture timeline.
+
+During the active window, a last collector attempt more than two
 local clock minutes old is labeled stale rather than healthy. The outbound
 event link appears only after a stored snapshot has
 verified that event. Historical pages do not call Polymarket or

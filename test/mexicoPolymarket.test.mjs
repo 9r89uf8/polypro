@@ -12,7 +12,10 @@ import {
   mexicoPolymarketSnapshotKey,
   normalizeMexicoPolymarketEvent,
 } from "../convex/mexicoPolymarket.js";
-import { buildPolymarketChartPoints } from "../app/mexico/polymarket-chart.js";
+import {
+  buildMetarReleaseMarkers,
+  buildPolymarketChartPoints,
+} from "../app/mexico/polymarket-chart.js";
 
 const DATE = "2026-08-14";
 const SLUG = "highest-temperature-in-mexico-city-on-august-14-2026";
@@ -265,6 +268,49 @@ test("charts response-completion time, missing buckets, ordering, and collection
   assert.equal(points[3].x, 663 + 5 / 60);
 });
 
+test("builds the top METAR timeline from exact arrival timestamps", () => {
+  const awcReceipt = Date.parse("2026-08-14T22:10:37.250Z");
+  const firstSeenFallback = Date.parse("2026-08-14T22:50:12.500Z");
+  const markers = buildMetarReleaseMarkers(
+    [
+      {
+        reportKey: "later",
+        reportType: "SPECI",
+        firstSeenAt: firstSeenFallback,
+      },
+      {
+        reportKey: "awc",
+        reportType: "METAR",
+        initialAwcReceiptTimeUtc: awcReceipt,
+        firstSeenAt: awcReceipt + 10_000,
+      },
+      {
+        reportKey: "outside-window",
+        reportType: "METAR",
+        initialAwcReceiptTimeUtc: Date.parse("2026-08-14T16:55:00Z"),
+      },
+      {
+        reportKey: "next-day",
+        reportType: "METAR",
+        initialAwcReceiptTimeUtc: Date.parse("2026-08-15T22:10:00Z"),
+      },
+    ],
+    DATE,
+    660,
+    1082,
+  );
+
+  assert.deepEqual(
+    markers.map((marker) => marker.reportKey),
+    ["awc", "later"],
+  );
+  assert.equal(markers[0].releaseAt, awcReceipt);
+  assert.equal(markers[0].releaseSource, "awcReceipt");
+  assert.equal(markers[0].x, 970 + 37.25 / 60);
+  assert.equal(markers[1].releaseSource, "firstSeen");
+  assert.equal(markers[1].reportType, "SPECI");
+});
+
 test("schema, cron, collector, and chart keep the same snapshot contract", async () => {
   const [schema, crons, collector, page] = await Promise.all([
     readFile(new URL("../convex/schema.js", import.meta.url), "utf8"),
@@ -300,4 +346,7 @@ test("schema, cron, collector, and chart keep the same snapshot contract", async
   assert.match(page, /Polymarket daily-high probabilities/);
   assert.match(page, /Source · Gamma outcomePrices\[Yes\]/);
   assert.match(page, /Probability capture audit/);
+  assert.match(page, /axis: "xy"/);
+  assert.match(page, /filter\(_item, index\)/);
+  assert.match(page, /OFFICIAL MMMX METAR \/ SPECI ARRIVALS/);
 });

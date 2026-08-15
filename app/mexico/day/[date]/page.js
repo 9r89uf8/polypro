@@ -15,7 +15,10 @@ import { Line } from "react-chartjs-2";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { resolveConvexSiteOrigin } from "../../convex-site";
-import { buildPolymarketChartPoints } from "../../polymarket-chart";
+import {
+  buildMetarReleaseMarkers,
+  buildPolymarketChartPoints,
+} from "../../polymarket-chart";
 
 const STATION_ICAO = "MMMX";
 const MEXICO_TIMEZONE = "America/Mexico_City";
@@ -841,6 +844,7 @@ function MetricCard({ label, value, detail, tone = "text-white" }) {
 
 const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
   series,
+  metarRows,
   date,
   isToday,
   currentMinute,
@@ -867,6 +871,19 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
     (left, right) =>
       left.displayOrder - right.displayOrder ||
       left.label.localeCompare(right.label),
+  );
+  const collectionStartMinute = series?.collectionStartMinute ?? 660;
+  const collectionEndMinute = series?.collectionEndMinute ?? 1080;
+  const chartEndMinute = collectionEndMinute + 2;
+  const metarReleaseMarkers = useMemo(
+    () =>
+      buildMetarReleaseMarkers(
+        metarRows,
+        date,
+        collectionStartMinute,
+        chartEndMinute,
+      ),
+    [chartEndMinute, collectionStartMinute, date, metarRows],
   );
   const chartData = useMemo(
     () => ({
@@ -895,7 +912,7 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
       animation: { duration: 180 },
       interaction: {
         mode: "nearest",
-        axis: "x",
+        axis: "xy",
         intersect: false,
       },
       plugins: {
@@ -911,22 +928,33 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
           },
         },
         tooltip: {
+          mode: "nearest",
+          axis: "xy",
+          intersect: false,
           backgroundColor: "rgba(3, 10, 20, 0.97)",
           borderColor: "rgba(148, 163, 184, 0.28)",
           borderWidth: 1,
           padding: 12,
           titleColor: "#94a3b8",
           bodyColor: "#f8fafc",
+          filter(_item, index) {
+            return index === 0;
+          },
           callbacks: {
             title(items) {
-              return items.length
-                ? date + " · " + minuteLabel(items[0].parsed.x) + " Mexico City"
-                : "";
+              if (!items.length) {
+                return "";
+              }
+              const capturedAt = items[0].raw?.capturedAt;
+              const time = Number.isFinite(capturedAt)
+                ? formatMexicoClock(capturedAt, true)
+                : minuteLabel(items[0].parsed.x);
+              return date + " · " + time + " Mexico City";
             },
             label(item) {
               return (
                 item.dataset.label +
-                ": " +
+                " probability: " +
                 Number(item.parsed.y).toFixed(2).replace(/\.00$/, "") +
                 "%"
               );
@@ -953,8 +981,8 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
       scales: {
         x: {
           type: "linear",
-          min: series?.collectionStartMinute ?? 660,
-          max: (series?.collectionEndMinute ?? 1080) + 2,
+          min: collectionStartMinute,
+          max: chartEndMinute,
           border: { color: "rgba(148, 163, 184, 0.2)" },
           grid: { color: "rgba(148, 163, 184, 0.08)" },
           ticks: {
@@ -973,6 +1001,57 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
             font: {
               family: "IBM Plex Mono, monospace",
               size: 10,
+              weight: "normal",
+            },
+          },
+        },
+        metarDrops: {
+          axis: "x",
+          type: "linear",
+          position: "top",
+          display: metarReleaseMarkers.length > 0,
+          min: collectionStartMinute,
+          max: chartEndMinute,
+          afterBuildTicks(scale) {
+            scale.ticks = metarReleaseMarkers.map((marker) => ({
+              value: marker.x,
+            }));
+          },
+          border: { color: "rgba(248, 250, 252, 0.32)" },
+          grid: {
+            drawOnChartArea: true,
+            tickLength: 8,
+            lineWidth: 1,
+            color: "rgba(248, 250, 252, 0.12)",
+          },
+          ticks: {
+            autoSkip: false,
+            color(context) {
+              const marker = metarReleaseMarkers[context.index];
+              return marker?.reportType === "SPECI" ? "#fda4af" : "#e2e8f0";
+            },
+            padding: 5,
+            font: { family: "IBM Plex Mono, monospace", size: 8 },
+            callback(_value, index) {
+              const marker = metarReleaseMarkers[index];
+              if (!marker) {
+                return "";
+              }
+              const type =
+                marker.reportType +
+                (marker.isCorrection ? " COR" : "") +
+                (marker.releaseSource === "firstSeen" ? "*" : "");
+              return [type, formatMexicoClock(marker.releaseAt, true, true)];
+            },
+          },
+          title: {
+            display: true,
+            text: "OFFICIAL MMMX METAR / SPECI ARRIVALS",
+            color: "#94a3b8",
+            padding: { top: 0, bottom: 3 },
+            font: {
+              family: "IBM Plex Mono, monospace",
+              size: 9,
               weight: "normal",
             },
           },
@@ -1004,10 +1083,13 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
         },
       },
     }),
-    [date, series?.collectionEndMinute, series?.collectionStartMinute],
+    [
+      chartEndMinute,
+      collectionStartMinute,
+      date,
+      metarReleaseMarkers,
+    ],
   );
-  const collectionStartMinute = series?.collectionStartMinute ?? 660;
-  const collectionEndMinute = series?.collectionEndMinute ?? 1080;
   const collectorAttemptDate = mexicoDateKeyForEpoch(
     series?.collectorStatus?.lastAttemptAt,
   );
@@ -1099,7 +1181,9 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
             Up to one server-side snapshot per minute from 11:00 AM through 6:00 PM
             Mexico City time. Lines use each market&apos;s published Yes outcome
             price as its implied probability; values are preserved as published
-            and are not normalized to total 100%.
+            and are not normalized to total 100%. Hovering follows the nearest
+            individual line. The top timeline marks each official report&apos;s exact
+            AWC receipt time.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1138,6 +1222,7 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
       <div className="mb-3 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[9px] uppercase tracking-[0.13em] text-slate-500">
         <span>{snapshots.length} snapshots</span>
         <span>{marketDefinitions.length} temperature buckets</span>
+        <span>{metarReleaseMarkers.length} official report arrivals</span>
         <span>Source · Gamma outcomePrices[Yes]</span>
         {latestSnapshot && (
           <span>
@@ -1146,6 +1231,15 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
         )}
       </div>
 
+      {metarReleaseMarkers.some(
+        (marker) => marker.releaseSource === "firstSeen",
+      ) && (
+        <p className="mb-3 font-mono text-[9px] leading-4 text-slate-500">
+          * AWC receipt metadata was unavailable; this marker uses the exact
+          application first-seen time.
+        </p>
+      )}
+
       <div
         className="relative overflow-x-auto border border-white/10 bg-[#07111f]/90"
         role="region"
@@ -1153,7 +1247,7 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
         aria-label="Scrollable Polymarket Mexico City daily-high probability chart"
         aria-describedby="mexico-polymarket-description"
       >
-        <div className="h-[440px] min-w-[1050px] p-3 md:p-5">
+        <div className="h-[480px] min-w-[1050px] p-3 md:p-5">
           {snapshots.length ? <Line data={chartData} options={chartOptions} /> : null}
         </div>
         {series !== undefined && !snapshots.length && (
@@ -2619,6 +2713,7 @@ export default function MexicoDayPage() {
 
         <PolymarketProbabilityChart
           series={polymarketSeries}
+          metarRows={metarRows}
           date={date}
           isToday={isToday}
           currentMinute={currentMinute}

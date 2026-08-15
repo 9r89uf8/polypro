@@ -45,9 +45,67 @@ function mexicoMinuteForEpoch(epochMs) {
   const hour = Number(parts.hour);
   const minute = Number(parts.minute);
   const second = Number(parts.second);
-  return [hour, minute, second].every(Number.isFinite)
-    ? hour * 60 + minute + second / 60
+  const millisecond = new Date(epochMs).getUTCMilliseconds();
+  return [hour, minute, second, millisecond].every(Number.isFinite)
+    ? hour * 60 + minute + (second + millisecond / 1000) / 60
     : null;
+}
+
+function mexicoDateForEpoch(epochMs) {
+  const parts = {};
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: MEXICO_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  for (const part of formatter.formatToParts(new Date(epochMs))) {
+    if (part.type !== "literal") {
+      parts[part.type] = part.value;
+    }
+  }
+  return parts.year && parts.month && parts.day
+    ? [parts.year, parts.month, parts.day].join("-")
+    : null;
+}
+
+export function buildMetarReleaseMarkers(
+  metarRows,
+  date,
+  minMinute = 0,
+  maxMinute = 1440,
+) {
+  return [...(metarRows ?? [])]
+    .map((row) => {
+      const hasAwcReceipt = Number.isFinite(row?.initialAwcReceiptTimeUtc);
+      const releaseAt = hasAwcReceipt
+        ? row.initialAwcReceiptTimeUtc
+        : row?.firstSeenAt;
+      if (
+        !Number.isFinite(releaseAt) ||
+        mexicoDateForEpoch(releaseAt) !== date
+      ) {
+        return null;
+      }
+      const x = mexicoMinuteForEpoch(releaseAt);
+      if (!Number.isFinite(x) || x < minMinute || x > maxMinute) {
+        return null;
+      }
+      return {
+        x,
+        releaseAt,
+        releaseSource: hasAwcReceipt ? "awcReceipt" : "firstSeen",
+        reportType: row?.reportType === "SPECI" ? "SPECI" : "METAR",
+        isCorrection: row?.isCorrection === true,
+        reportKey: row?.reportKey ?? row?._id ?? String(releaseAt),
+      };
+    })
+    .filter(Boolean)
+    .sort(
+      (left, right) =>
+        left.releaseAt - right.releaseAt ||
+        String(left.reportKey).localeCompare(String(right.reportKey)),
+    );
 }
 
 export function buildPolymarketChartPoints(snapshots, marketId) {
