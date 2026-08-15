@@ -1026,6 +1026,8 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
           },
           ticks: {
             autoSkip: false,
+            minRotation: 90,
+            maxRotation: 90,
             color(context) {
               const marker = metarReleaseMarkers[context.index];
               return marker?.reportType === "SPECI" ? "#fda4af" : "#e2e8f0";
@@ -1041,7 +1043,7 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
                 marker.reportType +
                 (marker.isCorrection ? " COR" : "") +
                 (marker.releaseSource === "firstSeen" ? "*" : "");
-              return [type, formatMexicoClock(marker.releaseAt, true, true)];
+              return type + " · " + formatMexicoClock(marker.releaseAt, true, true);
             },
           },
           title: {
@@ -1247,7 +1249,7 @@ const PolymarketProbabilityChart = memo(function PolymarketProbabilityChart({
         aria-label="Scrollable Polymarket Mexico City daily-high probability chart"
         aria-describedby="mexico-polymarket-description"
       >
-        <div className="h-[480px] min-w-[1050px] p-3 md:p-5">
+        <div className="h-[560px] min-w-[1050px] p-3 md:p-5">
           {snapshots.length ? <Line data={chartData} options={chartOptions} /> : null}
         </div>
         {series !== undefined && !snapshots.length && (

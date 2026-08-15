@@ -3811,7 +3811,9 @@ that provider field is unavailable, the chart uses `firstSeenAt`, adds `*` to
 the report type, and displays a first-seen fallback note. These are exact stored
 timestamps for the AWC relay/application arrival, not a claim about SENEAM's
 unexposed originating publication or transmission time. The bottom axis remains
-the hourly Mexico City probability-capture timeline.
+the hourly Mexico City probability-capture timeline. Top labels are vertical so
+closely spaced routine reports, special reports, and corrections remain
+individually readable without removing any stored arrival from the rail.
 
 During the active window, a last collector attempt more than two
 local clock minutes old is labeled stale rather than healthy. The outbound

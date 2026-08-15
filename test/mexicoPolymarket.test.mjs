@@ -349,4 +349,5 @@ test("schema, cron, collector, and chart keep the same snapshot contract", async
   assert.match(page, /axis: "xy"/);
   assert.match(page, /filter\(_item, index\)/);
   assert.match(page, /OFFICIAL MMMX METAR \/ SPECI ARRIVALS/);
+  assert.match(page, /minRotation: 90/);
 });
