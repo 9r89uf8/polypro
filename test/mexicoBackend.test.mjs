@@ -9,11 +9,19 @@ import jpeg from "jpeg-js";
 import { resolveConvexSiteOrigin } from "../app/mexico/convex-site.js";
 
 import {
+  buildMetarUpdatePatch,
   normalizeAwcMetarItem,
   normalizeTafPeriod,
   optionalFiniteNumber,
   parseTafTemperatureGroups,
+  buildRelayMetarRow,
+  normalizeMetarRaw,
+  parseMetarTempGroup,
+  publicMetarRowsForCapmaApproval,
+  resolveReportObsTimeUtc,
 } from "../convex/mexico.js";
+import { parseCapmaAftnReportLines } from "../convex/mexicoCapmaAftn.js";
+import { buildRelayRaceSummary } from "../convex/mexicoRelayRace.js";
 import {
   normalizeSmnRow,
   parseSmnHourlyGzipStream,
@@ -855,4 +863,293 @@ test("Mexico collectors use canonical status keys and one-minute minimum cooldow
     assert.match(block, /tempC: v\.optional\(v\.number\(\)\)/);
     assert.match(block, /tempF: v\.optional\(v\.number\(\)\)/);
   }
+});
+
+test("relay normalization gives one identity to AWC, CAPMA AFTN, and NOAA text forms", async () => {
+  const awcRaw =
+    "METAR MMMX 192348Z 01006KT 7SM -RA BKN020CB BKN080 OVC220 20/11 A3029 NOSIG RMK SLP110 54000 900 60055 8/963 HZY";
+  const capmaLine =
+    "MMMX 192348Z 01006KT 7SM -RA BKN020CB BKN080 OVC220 20/11 A3029      NOSIG RMK SLP110 54000 900 60055 8/963 HZY";
+  const noaaLine =
+    "MMMX 192348Z 01006KT 7SM -RA BKN020CB BKN080 OVC220 20/11 A3029 NOSIG RMK SLP110 54000 900 60055 8/963 HZY";
+
+  const awcNorm = normalizeMetarRaw(awcRaw);
+  const capmaNorm = normalizeMetarRaw(capmaLine);
+  const noaaNorm = normalizeMetarRaw(noaaLine);
+  assert.equal(awcNorm.normalized, awcRaw);
+  assert.equal(capmaNorm.normalized, awcRaw);
+  assert.equal(noaaNorm.normalized, awcRaw);
+  assert.equal(capmaNorm.typeless, awcNorm.typeless);
+  assert.equal(noaaNorm.typeless, awcNorm.typeless);
+
+  const obsEpoch = 1787183280000; // 2026-08-19T23:48Z in ms
+  const anchor = obsEpoch + 12 * 60 * 1000;
+  const envelope = {
+    stationIcao: "MMMX",
+    source: "capma_aftn_metar",
+    fetchStartedAt: anchor,
+    fetchCompletedAt: anchor,
+  };
+  const relayRow = await buildRelayMetarRow(capmaLine, envelope);
+  const awcRow = await normalizeAwcMetarItem(
+    {
+      icaoId: "MMMX",
+      rawOb: awcRaw,
+      obsTime: obsEpoch / 1000,
+      metarType: "METAR",
+    },
+    { stationIcao: "MMMX", fetchStartedAt: anchor, fetchCompletedAt: anchor },
+  );
+  assert.ok(relayRow);
+  assert.ok(awcRow);
+  assert.equal(relayRow.reportKey, awcRow.reportKey);
+  assert.equal(relayRow.rawHash, awcRow.rawHash);
+  assert.equal(relayRow.typelessHash, awcRow.typelessHash);
+  assert.equal(relayRow.tempC, 20);
+  assert.equal(relayRow.dewpointC, 11);
+  assert.equal(relayRow.reportType, "METAR");
+  assert.equal(relayRow.firstSource, "capma_aftn_metar");
+
+  const speciLine =
+    "SPECI MMMX 200013Z 08007KT 8SM BKN020CB BKN080 OVC220 19/10 A3031      NOSIG RMK 8/963 HZY RAE12 OCNL DROPS";
+  const speciNorm = normalizeMetarRaw(speciLine);
+  assert.equal(speciNorm.collapsed.startsWith("SPECI"), true);
+  assert.equal(
+    speciNorm.typeless,
+    "MMMX 200013Z 08007KT 8SM BKN020CB BKN080 OVC220 19/10 A3031 NOSIG RMK 8/963 HZY RAE12 OCNL DROPS",
+  );
+
+  const correctionRaw =
+    "METAR MMMX 192043Z COR 09008KT 10SM BKN020CB BKN080 25/09 A3027 NOSIG";
+  const correctionRelayRow = await buildRelayMetarRow(correctionRaw, envelope);
+  const correctionAwcRow = await normalizeAwcMetarItem(
+    {
+      icaoId: "MMMX",
+      rawOb: correctionRaw,
+      obsTime: Date.parse("2026-08-19T20:43:00Z") / 1000,
+      metarType: "METAR",
+    },
+    { stationIcao: "MMMX", fetchStartedAt: anchor, fetchCompletedAt: anchor },
+  );
+  assert.equal(correctionRelayRow.reportKey, correctionAwcRow.reportKey);
+  assert.equal(correctionRelayRow.isCorrection, true);
+});
+
+test("relay temp groups decode signed whole degrees and ignore RMK slashes", () => {
+  assert.deepEqual(
+    parseMetarTempGroup("MMMX 192348Z 01006KT 7SM 20/11 A3029 RMK 8/963 HZY"),
+    { tempC: 20, dewpointC: 11 },
+  );
+  assert.deepEqual(
+    parseMetarTempGroup("MMMX 010150Z 00000KT 7SM M02/M10 A3040 RMK 8/800"),
+    { tempC: -2, dewpointC: -10 },
+  );
+  assert.deepEqual(parseMetarTempGroup("MMMX 010150Z 00000KT 7SM A3040"), {});
+});
+
+test("relay obs-time resolution handles midnight and month rollover", () => {
+  const justAfterMidnight = Date.UTC(2026, 7, 20, 0, 5, 0);
+  assert.equal(
+    resolveReportObsTimeUtc({
+      day: 19,
+      hour: 23,
+      minute: 48,
+      anchorUtc: justAfterMidnight,
+    }),
+    Date.UTC(2026, 7, 19, 23, 48, 0),
+  );
+  const firstOfMonth = Date.UTC(2026, 7, 1, 0, 5, 0);
+  assert.equal(
+    resolveReportObsTimeUtc({
+      day: 31,
+      hour: 23,
+      minute: 0,
+      anchorUtc: firstOfMonth,
+    }),
+    Date.UTC(2026, 6, 31, 23, 0, 0),
+  );
+  assert.equal(
+    resolveReportObsTimeUtc({
+      day: 17,
+      hour: 23,
+      minute: 48,
+      anchorUtc: justAfterMidnight,
+    }),
+    null,
+  );
+});
+
+test("CAPMA AFTN relay collector fails closed behind its dedicated gate", async () => {
+  const [aftnSource, mexicoSource, cronsSource] = await Promise.all([
+    readFile(new URL("../convex/mexicoCapmaAftn.js", import.meta.url), "utf8"),
+    readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
+    readFile(new URL("../convex/crons.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(
+    aftnSource,
+    /SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED === "true"/,
+  );
+  const gateBeforeFetch =
+    aftnSource.indexOf("aftnAccessApproved()") < aftnSource.indexOf("fetch(");
+  assert.ok(gateBeforeFetch);
+  assert.match(
+    aftnSource.slice(aftnSource.indexOf("const response = await fetch")),
+    /if \(!aftnAccessApproved\(\)\)/,
+  );
+  assert.match(
+    mexicoSource,
+    /CAPMA AFTN approval was removed before sighting storage/,
+  );
+  assert.match(
+    mexicoSource,
+    /CAPMA AFTN approval was removed before official-report storage/,
+  );
+  assert.match(aftnSource, /redirect: "manual"/);
+  assert.match(aftnSource, /const COOLDOWN_MS = 60_000;/);
+  assert.match(cronsSource, /mexico_capma_noaa_relay_race_every_minute/);
+  assert.doesNotMatch(cronsSource, /mexico_noaa_text_metar_every_minute/);
+  assert.doesNotMatch(cronsSource, /mexico_capma_aftn_reports_every_minute/);
+});
+
+test("CAPMA AFTN HTML extraction tolerates attributes, line breaks, and padding", () => {
+  const html = `
+    <p class="report" id="tam_let_5">
+      MMMX 192348Z 01006KT 7SM 20/11 A3029&nbsp;&nbsp;NOSIG = 192359
+    </p>
+    <p id=tam_let_5>SPECI MMMX 200013Z 08007KT 8SM 19/10 A3031</p>
+  `;
+  assert.deepEqual(parseCapmaAftnReportLines(html), [
+    "MMMX 192348Z 01006KT 7SM 20/11 A3029 NOSIG",
+    "SPECI MMMX 200013Z 08007KT 8SM 19/10 A3031",
+  ]);
+});
+
+test("AWC enriches an early relay row without losing the earliest sighting", () => {
+  const existing = {
+    firstSeenAt: 200,
+    firstSource: "capma_aftn_metar",
+    rawProviderJson: "capma",
+    tempC: 20,
+  };
+  const awcRow = {
+    firstSource: "awc",
+    typelessHash: "same-report",
+    reportTimeUtc: 300,
+    tempC: 21,
+    tempF: 69.8,
+    rawProviderJson: "awc",
+    initialAwcReceiptTimeUtc: 350,
+    latestAwcReceiptTimeUtc: 351,
+    firstAwcFetchStartedAt: 360,
+    firstAwcSeenAt: 361,
+    fetchCompletedAt: 361,
+  };
+  const patch = buildMetarUpdatePatch(existing, awcRow, {
+    source: "noaa_text_metar",
+    firstSeenAt: 100,
+  });
+  assert.equal(patch.firstSeenAt, 100);
+  assert.equal(patch.firstSource, "noaa_text_metar");
+  assert.equal(patch.relayFirstSeenAt, 100);
+  assert.equal(patch.initialAwcReceiptTimeUtc, 350);
+  assert.equal(patch.latestAwcReceiptTimeUtc, 351);
+  assert.equal(patch.firstAwcSeenAt, 361);
+  assert.equal(patch.rawProviderJson, "awc");
+  assert.equal(patch.tempC, 21);
+
+  const laterCapmaPatch = buildMetarUpdatePatch(
+    { ...existing, rawProviderJson: "awc", initialAwcReceiptTimeUtc: 350 },
+    {
+      firstSource: "capma_aftn_metar",
+      rawProviderJson: "new-capma",
+      tempC: 20,
+      fetchCompletedAt: 500,
+    },
+    null,
+  );
+  assert.equal(laterCapmaPatch.rawProviderJson, undefined);
+  assert.equal(laterCapmaPatch.initialAwcReceiptTimeUtc, undefined);
+});
+
+test("CAPMA-only reports and timing are hidden again after approval removal", () => {
+  const capmaOnly = {
+    reportKey: "capma-only",
+    firstSource: "capma_aftn_metar",
+    firstSeenAt: 100,
+  };
+  const awcConfirmed = {
+    reportKey: "confirmed",
+    firstSource: "capma_aftn_metar",
+    firstSeenAt: 100,
+    relayFirstSeenAt: 100,
+    relaySource: "capma_aftn_metar",
+    firstAwcFetchStartedAt: 190,
+    firstAwcSeenAt: 200,
+    fetchStartedAt: 90,
+    fetchCompletedAt: 100,
+    lastSeenAt: 300,
+    updatedAt: 300,
+  };
+  const visible = publicMetarRowsForCapmaApproval(
+    [capmaOnly, awcConfirmed],
+    false,
+  );
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].reportKey, "confirmed");
+  assert.equal(visible[0].firstSource, "awc");
+  assert.equal(visible[0].firstSeenAt, 200);
+  assert.equal(visible[0].fetchStartedAt, 190);
+  assert.equal(visible[0].relayFirstSeenAt, undefined);
+});
+
+test("relay race counts only earlier slots where both sources succeeded", () => {
+  const capma = "capma_aftn_metar";
+  const noaa = "noaa_text_metar";
+  const sighting = (source, obsTimeUtc, typelessHash, raceSlotUtc) => ({
+    source,
+    obsTimeUtc,
+    typelessHash,
+    raceSlotUtc,
+    firstSeenAt: raceSlotUtc + (source === capma ? 1_000 : 2_000),
+  });
+  const attempt = (raceSlotUtc, capmaStatus = "ok", noaaStatus = "ok") => ({
+    raceSlotUtc,
+    capmaStatus,
+    noaaStatus,
+  });
+  const sightings = [
+    sighting(capma, 10, "capma-win", 60_000),
+    sighting(noaa, 10, "capma-win", 120_000),
+    sighting(capma, 20, "same-poll", 120_000),
+    sighting(noaa, 20, "same-poll", 120_000),
+    sighting(noaa, 30, "invalid", 180_000),
+    sighting(capma, 30, "invalid", 240_000),
+    sighting(noaa, 40, "noaa-win", 60_000),
+    sighting(capma, 40, "noaa-win", 120_000),
+  ];
+  const attempts = [
+    attempt(60_000),
+    attempt(120_000),
+    attempt(180_000, "approval_required", "ok"),
+    attempt(240_000),
+  ];
+  const metarRows = sightings
+    .filter((row) => row.source === capma)
+    .map((row) => ({
+      obsTimeUtc: row.obsTimeUtc,
+      typelessHash: row.typelessHash,
+      reportType: "METAR",
+      isCorrection: false,
+    }));
+  const race = buildRelayRaceSummary({ sightings, attempts, metarRows });
+  assert.equal(race.all.matchedReportCount, 4);
+  assert.equal(race.all.decisiveReportCount, 2);
+  assert.equal(race.all.capmaWins, 1);
+  assert.equal(race.all.noaaWins, 1);
+  assert.equal(race.all.samePollCount, 1);
+  assert.equal(race.all.invalidPairCount, 1);
+  assert.equal(
+    race.recentComparisons.find((row) => row.obsTimeUtc === 30).outcome,
+    "invalid_pair",
+  );
 });

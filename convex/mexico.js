@@ -54,10 +54,14 @@ function formatMexicoDate(epochMs) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+export { formatMexicoDate };
+
 function formatMexicoDateTime(epochMs) {
   const parts = getDateParts(mexicoDateTimeFormatter, epochMs);
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
+
+export { formatMexicoDateTime };
 
 function roundToTenth(value) {
   return Math.round(value * 10) / 10;
@@ -99,11 +103,181 @@ async function sha256Text(value) {
   ).join("");
 }
 
+export { sha256Text };
+
+const NOAA_TEXT_METAR_URL =
+  "https://tgftp.nws.noaa.gov/data/observations/metar/stations/MMMX.TXT";
+export const NOAA_TEXT_SOURCE = "noaa_text_metar";
+export const CAPMA_AFTN_SOURCE = "capma_aftn_metar";
+
+function capmaAftnAccessApproved() {
+  return process.env.SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED === "true";
+}
+
+// Collapse whitespace and make the leading report-type token explicit so the
+// same official report hashes to the same identity whether it arrives from
+// AWC JSON ("METAR MMMX ..."), the CAPMA AFTN relay (routine lines omit the
+// METAR token and pad fields with extra spaces), or the NOAA single-station
+// text file (no type token at all). AWC rawOb already carries single spaces
+// and a type token, so its normalized form is byte-identical to the stored
+// value and existing reportKeys remain stable.
+export function normalizeMetarRaw(raw) {
+  const collapsed = String(raw ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!collapsed) {
+    return null;
+  }
+  const hasToken = /^(METAR|SPECI|COR) /.test(collapsed);
+  const normalized = hasToken ? collapsed : `METAR ${collapsed}`;
+  const typeless = collapsed.replace(/^(METAR|SPECI|COR) /, "");
+  return { collapsed, normalized, typeless };
+}
+
+// First whole-degree temperature/dew point group after the time group, e.g.
+// "20/11" or "M02/M10". Three-digit RMK slashes such as "8/963" never match.
+export function parseMetarTempGroup(raw) {
+  const match = /\s(M?\d{2})\/(M?\d{2})(?=\s|$)/.exec(String(raw ?? ""));
+  if (!match) {
+    return {};
+  }
+  const decode = (token) =>
+    token.startsWith("M") ? -Number(token.slice(1)) : Number(token);
+  return { tempC: decode(match[1]), dewpointC: decode(match[2]) };
+}
+
+// Resolve YYGGggZ against an anchor instant. The day-of-month is taken from
+// the anchor's UTC month; if that would land in the future the previous month
+// is used (midnight rollover). Results more than 26 hours old are rejected.
+export function resolveReportObsTimeUtc({
+  day,
+  hour,
+  minute,
+  anchorUtc,
+  maxFutureMs = 15 * 60 * 1000,
+}) {
+  if (
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    !Number.isFinite(anchorUtc)
+  ) {
+    return null;
+  }
+  const anchor = new Date(anchorUtc);
+  let candidate = Date.UTC(
+    anchor.getUTCFullYear(),
+    anchor.getUTCMonth(),
+    day,
+    hour,
+    minute,
+    0,
+  );
+  if (candidate > anchorUtc + maxFutureMs) {
+    candidate = Date.UTC(
+      anchor.getUTCFullYear(),
+      anchor.getUTCMonth() - 1,
+      day,
+      hour,
+      minute,
+      0,
+    );
+  }
+  if (
+    candidate > anchorUtc + maxFutureMs ||
+    anchorUtc - candidate > 26 * 60 * 60 * 1000
+  ) {
+    return null;
+  }
+  return candidate;
+}
+
+// Build a canonical official-report row from a relay line (CAPMA AFTN). The
+// reportKey formula matches normalizeAwcMetarItem so an early relay insert and
+// the later AWC upsert address the same row instead of double-counting.
+export async function buildRelayMetarRow(rawLine, envelope) {
+  const { stationIcao, fetchStartedAt, fetchCompletedAt } = envelope;
+  const norm = normalizeMetarRaw(rawLine);
+  if (!norm) {
+    return null;
+  }
+  const timeMatch = /^MMMX (\d{2})(\d{2})(\d{2})Z/.exec(norm.typeless);
+  if (!timeMatch) {
+    return null;
+  }
+  const obsTimeUtc = resolveReportObsTimeUtc({
+    day: Number(timeMatch[1]),
+    hour: Number(timeMatch[2]),
+    minute: Number(timeMatch[3]),
+    anchorUtc: fetchCompletedAt,
+  });
+  if (obsTimeUtc === null) {
+    return null;
+  }
+  const rawHash = await sha256Text(norm.normalized);
+  const typelessHash = await sha256Text(norm.typeless);
+  const reportType = norm.collapsed.startsWith("SPECI") ? "SPECI" : "METAR";
+  const temps = parseMetarTempGroup(norm.typeless);
+  return {
+    stationIcao,
+    reportKey: `${stationIcao}:${obsTimeUtc}:${reportType}:${rawHash}`,
+    rawHash,
+    typelessHash,
+    firstSource: envelope.source,
+    date: formatMexicoDate(obsTimeUtc),
+    obsTimeUtc,
+    obsTimeLocal: formatMexicoDateTime(obsTimeUtc),
+    reportType,
+    isCorrection: /\bCOR\b/i.test(norm.collapsed),
+    ...(temps.tempC !== undefined
+      ? { tempC: temps.tempC, tempF: toFahrenheit(temps.tempC) }
+      : {}),
+    ...(temps.dewpointC !== undefined
+      ? { dewpointC: temps.dewpointC, dewpointF: toFahrenheit(temps.dewpointC) }
+      : {}),
+    rawMetar: norm.normalized,
+    rawProviderJson: JSON.stringify({
+      source: envelope.source,
+      line: String(rawLine ?? "").trim(),
+    }),
+    firstSeenAt: fetchCompletedAt,
+    fetchStartedAt,
+    fetchCompletedAt,
+  };
+}
+
 function assertStation(stationIcao) {
   if ((stationIcao ?? STATION_ICAO).trim().toUpperCase() !== STATION_ICAO) {
     throw new Error("The Mexico collector supports MMMX only.");
   }
   return STATION_ICAO;
+}
+
+export function publicMetarRowsForCapmaApproval(rows, accessApproved) {
+  if (accessApproved) {
+    return rows;
+  }
+  return rows.flatMap((row) => {
+    if (row.firstSource !== CAPMA_AFTN_SOURCE) {
+      return [row];
+    }
+    if (!Number.isFinite(row.firstAwcSeenAt)) {
+      return [];
+    }
+    const { relayFirstSeenAt, relaySource, ...awcConfirmed } = row;
+    const firstAwcSeenAt = row.firstAwcSeenAt;
+    return [
+      {
+        ...awcConfirmed,
+        firstSource: "awc",
+        firstSeenAt: firstAwcSeenAt,
+        fetchStartedAt: row.firstAwcFetchStartedAt ?? firstAwcSeenAt,
+        fetchCompletedAt: firstAwcSeenAt,
+        lastSeenAt: firstAwcSeenAt,
+        updatedAt: firstAwcSeenAt,
+      },
+    ];
+  });
 }
 
 function isDateKey(value) {
@@ -121,7 +295,9 @@ function shiftDateKey(date, days) {
 }
 
 function parseReportType(value, rawMetar) {
-  const normalized = String(value ?? "").trim().toUpperCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toUpperCase();
   if (normalized === "SPECI") {
     return "SPECI";
   }
@@ -240,9 +416,7 @@ export function normalizeTafPeriod(period) {
     timeToUtc,
     timeFromLocal: formatMexicoDateTime(timeFromUtc),
     timeToLocal: formatMexicoDateTime(timeToUtc),
-    ...(period?.fcstChange
-      ? { changeType: String(period.fcstChange) }
-      : {}),
+    ...(period?.fcstChange ? { changeType: String(period.fcstChange) } : {}),
     ...(Number.isFinite(probability) ? { probability } : {}),
     ...(period?.wxString ? { weather: String(period.wxString) } : {}),
     ...(clouds ? { cloudSummary: clouds } : {}),
@@ -269,7 +443,12 @@ export async function normalizeAwcMetarItem(
   if (!rawMetar || !Number.isFinite(obsTimeUtc)) {
     return null;
   }
-  const rawHash = await sha256Text(rawMetar);
+  const norm = normalizeMetarRaw(rawMetar);
+  if (!norm) {
+    return null;
+  }
+  const rawHash = await sha256Text(norm.normalized);
+  const typelessHash = await sha256Text(norm.typeless);
   const reportType = parseReportType(item?.metarType, rawMetar);
   const reportTimeUtc = parseEpoch(item?.reportTime);
   const receiptTimeUtc = parseEpoch(item?.receiptTime);
@@ -289,9 +468,7 @@ export async function normalizeAwcMetarItem(
     ...(Number.isFinite(reportTimeUtc) ? { reportTimeUtc } : {}),
     reportType,
     isCorrection: /\bCOR\b/i.test(rawMetar),
-    ...(Number.isFinite(tempC)
-      ? { tempC, tempF: toFahrenheit(tempC) }
-      : {}),
+    ...(Number.isFinite(tempC) ? { tempC, tempF: toFahrenheit(tempC) } : {}),
     ...(Number.isFinite(dewpointC)
       ? { dewpointC, dewpointF: toFahrenheit(dewpointC) }
       : {}),
@@ -304,12 +481,16 @@ export async function normalizeAwcMetarItem(
     ...(Number.isFinite(visibilitySm) ? { visibilitySm } : {}),
     rawMetar,
     rawProviderJson: JSON.stringify(item),
+    typelessHash,
+    firstSource: "awc",
     ...(Number.isFinite(receiptTimeUtc)
       ? {
           initialAwcReceiptTimeUtc: receiptTimeUtc,
           latestAwcReceiptTimeUtc: receiptTimeUtc,
         }
       : {}),
+    firstAwcFetchStartedAt: fetchStartedAt,
+    firstAwcSeenAt: fetchCompletedAt,
     firstSeenAt: fetchCompletedAt,
     fetchStartedAt,
     fetchCompletedAt,
@@ -439,6 +620,8 @@ const metarRowValidator = v.object({
   stationIcao: v.string(),
   reportKey: v.string(),
   rawHash: v.string(),
+  typelessHash: v.optional(v.string()),
+  firstSource: v.optional(v.string()),
   date: v.string(),
   obsTimeUtc: v.number(),
   obsTimeLocal: v.string(),
@@ -460,14 +643,111 @@ const metarRowValidator = v.object({
   rawProviderJson: v.string(),
   initialAwcReceiptTimeUtc: v.optional(v.number()),
   latestAwcReceiptTimeUtc: v.optional(v.number()),
+  firstAwcFetchStartedAt: v.optional(v.number()),
+  firstAwcSeenAt: v.optional(v.number()),
   firstSeenAt: v.number(),
   fetchStartedAt: v.number(),
   fetchCompletedAt: v.number(),
 });
 
+const relaySightingValidator = v.object({
+  stationIcao: v.string(),
+  source: v.string(),
+  date: v.string(),
+  obsTimeUtc: v.number(),
+  typelessHash: v.string(),
+  rawReport: v.string(),
+  reportTypeHint: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
+  isCorrectionHint: v.optional(v.boolean()),
+  fileStampUtc: v.optional(v.number()),
+  raceSlotUtc: v.optional(v.number()),
+  firstSeenAt: v.number(),
+  fetchStartedAt: v.number(),
+  fetchCompletedAt: v.number(),
+});
+
+function earlierRelaySighting(sightings) {
+  return sightings.reduce(
+    (earliest, sighting) =>
+      !earliest || sighting.firstSeenAt < earliest.firstSeenAt
+        ? sighting
+        : earliest,
+    null,
+  );
+}
+
+export function buildMetarUpdatePatch(existing, row, earliestSighting) {
+  const isAwc = row.firstSource === "awc";
+  const patch = {
+    typelessHash: row.typelessHash ?? existing.typelessHash,
+    firstSource: existing.firstSource ?? row.firstSource ?? "awc",
+    lastSeenAt: row.fetchCompletedAt,
+    updatedAt: row.fetchCompletedAt,
+  };
+  if (
+    Number.isFinite(earliestSighting?.firstSeenAt) &&
+    earliestSighting.firstSeenAt < existing.firstSeenAt
+  ) {
+    patch.firstSeenAt = earliestSighting.firstSeenAt;
+    patch.firstSource = earliestSighting.source;
+    patch.relayFirstSeenAt = earliestSighting.firstSeenAt;
+    patch.relaySource = earliestSighting.source;
+  }
+  if (isAwc) {
+    for (const field of [
+      "reportTimeUtc",
+      "tempC",
+      "tempF",
+      "dewpointC",
+      "dewpointF",
+      "weather",
+      "cloudCover",
+      "cloudSummary",
+      "flightCategory",
+      "windDirectionDeg",
+      "windSpeedKt",
+      "visibilitySm",
+    ]) {
+      if (row[field] !== undefined) {
+        patch[field] = row[field];
+      }
+    }
+    patch.rawProviderJson = row.rawProviderJson;
+    const initialAwcReceiptTimeUtc =
+      existing.initialAwcReceiptTimeUtc ?? row.initialAwcReceiptTimeUtc;
+    const latestAwcReceiptTimeUtc =
+      row.latestAwcReceiptTimeUtc ?? existing.latestAwcReceiptTimeUtc;
+    if (initialAwcReceiptTimeUtc !== undefined) {
+      patch.initialAwcReceiptTimeUtc = initialAwcReceiptTimeUtc;
+    }
+    if (latestAwcReceiptTimeUtc !== undefined) {
+      patch.latestAwcReceiptTimeUtc = latestAwcReceiptTimeUtc;
+    }
+    patch.firstAwcFetchStartedAt =
+      existing.firstAwcFetchStartedAt ?? row.firstAwcFetchStartedAt;
+    patch.firstAwcSeenAt = existing.firstAwcSeenAt ?? row.firstAwcSeenAt;
+  } else if (existing.tempC === undefined && row.tempC !== undefined) {
+    patch.tempC = row.tempC;
+    patch.tempF = row.tempF;
+    if (row.dewpointC !== undefined) {
+      patch.dewpointC = row.dewpointC;
+      patch.dewpointF = row.dewpointF;
+    }
+  }
+  return patch;
+}
+
 export const upsertMetarBatch = internalMutationGeneric({
   args: { rows: v.array(metarRowValidator) },
   handler: async (ctx, args) => {
+    if (
+      args.rows.some((row) => row.firstSource === CAPMA_AFTN_SOURCE) &&
+      !capmaAftnAccessApproved()
+    ) {
+      throw new Error(
+        "CAPMA AFTN approval was removed before official-report storage.",
+      );
+    }
     let insertedCount = 0;
     let updatedCount = 0;
     for (const row of args.rows) {
@@ -479,24 +759,60 @@ export const upsertMetarBatch = internalMutationGeneric({
             .eq("reportKey", row.reportKey),
         )
         .first();
+      const relaySightings = row.typelessHash
+        ? await ctx.db
+            .query("mexicoRelaySightings")
+            .withIndex("by_station_obs_hash", (query) =>
+              query
+                .eq("stationIcao", row.stationIcao)
+                .eq("obsTimeUtc", row.obsTimeUtc)
+                .eq("typelessHash", row.typelessHash),
+            )
+            .collect()
+        : [];
+      const earliestSighting = earlierRelaySighting(relaySightings);
       if (existing) {
-        await ctx.db.patch(existing._id, {
-          ...(row.tempC !== undefined && row.tempF !== undefined
-            ? { tempC: row.tempC, tempF: row.tempF }
-            : {}),
-          latestAwcReceiptTimeUtc:
-            row.latestAwcReceiptTimeUtc ?? existing.latestAwcReceiptTimeUtc,
-          rawProviderJson: row.rawProviderJson,
-          lastSeenAt: row.fetchCompletedAt,
-          updatedAt: row.fetchCompletedAt,
-        });
+        await ctx.db.patch(
+          existing._id,
+          buildMetarUpdatePatch(existing, row, earliestSighting),
+        );
+        for (const sighting of relaySightings) {
+          if (!sighting.adopted) {
+            await ctx.db.patch(sighting._id, {
+              adopted: true,
+              updatedAt: row.fetchCompletedAt,
+            });
+          }
+        }
         updatedCount += 1;
       } else {
+        const relayFirstSeenAt = earliestSighting?.firstSeenAt;
+        const relaySource = earliestSighting?.source;
+        const firstSeenAt = Math.min(
+          row.firstSeenAt,
+          relayFirstSeenAt ?? Number.POSITIVE_INFINITY,
+        );
         await ctx.db.insert("mexicoMetarObservations", {
           ...row,
+          firstSeenAt,
+          firstSource:
+            firstSeenAt === relayFirstSeenAt
+              ? relaySource
+              : (row.firstSource ?? "awc"),
+          ...(relayFirstSeenAt !== undefined
+            ? { relayFirstSeenAt, relaySource }
+            : {}),
           lastSeenAt: row.fetchCompletedAt,
           updatedAt: row.fetchCompletedAt,
         });
+        for (const sighting of relaySightings) {
+          if (!sighting.adopted) {
+            await ctx.db.patch(sighting._id, {
+              adopted: true,
+              updatedAt: row.fetchCompletedAt,
+            });
+          }
+        }
         insertedCount += 1;
       }
     }
@@ -567,6 +883,220 @@ export const pollAwcMetars = actionGeneric({
       await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
         stationIcao,
         source: "awc_metar",
+        status: "error",
+        lastError: message,
+      });
+      throw new Error(message);
+    }
+  },
+});
+
+export const recordRelaySightings = internalMutationGeneric({
+  args: { rows: v.array(relaySightingValidator) },
+  handler: async (ctx, args) => {
+    if (
+      args.rows.some((row) => row.source === CAPMA_AFTN_SOURCE) &&
+      !capmaAftnAccessApproved()
+    ) {
+      throw new Error(
+        "CAPMA AFTN approval was removed before sighting storage.",
+      );
+    }
+    let recordedCount = 0;
+    let updatedCount = 0;
+    for (const row of args.rows) {
+      const existing = await ctx.db
+        .query("mexicoRelaySightings")
+        .withIndex("by_station_source_obs_hash", (query) =>
+          query
+            .eq("stationIcao", row.stationIcao)
+            .eq("source", row.source)
+            .eq("obsTimeUtc", row.obsTimeUtc)
+            .eq("typelessHash", row.typelessHash),
+        )
+        .first();
+      let sightingId;
+      let effectiveFirstSeenAt;
+      if (existing) {
+        sightingId = existing._id;
+        effectiveFirstSeenAt = Math.min(existing.firstSeenAt, row.firstSeenAt);
+        const earlier = row.firstSeenAt < existing.firstSeenAt;
+        await ctx.db.patch(existing._id, {
+          ...(earlier
+            ? {
+                firstSeenAt: row.firstSeenAt,
+                fetchStartedAt: row.fetchStartedAt,
+                fetchCompletedAt: row.fetchCompletedAt,
+                ...(row.fileStampUtc !== undefined
+                  ? { fileStampUtc: row.fileStampUtc }
+                  : {}),
+                ...(row.raceSlotUtc !== undefined
+                  ? { raceSlotUtc: row.raceSlotUtc }
+                  : {}),
+              }
+            : {}),
+          lastSeenAt: row.fetchCompletedAt,
+          updatedAt: row.fetchCompletedAt,
+        });
+        updatedCount += 1;
+      } else {
+        sightingId = await ctx.db.insert("mexicoRelaySightings", {
+          ...row,
+          lastSeenAt: row.fetchCompletedAt,
+          adopted: false,
+          updatedAt: row.fetchCompletedAt,
+        });
+        effectiveFirstSeenAt = row.firstSeenAt;
+        recordedCount += 1;
+      }
+
+      const officialRows = await ctx.db
+        .query("mexicoMetarObservations")
+        .withIndex("by_station_obs_typeless_hash", (query) =>
+          query
+            .eq("stationIcao", row.stationIcao)
+            .eq("obsTimeUtc", row.obsTimeUtc)
+            .eq("typelessHash", row.typelessHash),
+        )
+        .collect();
+      for (const official of officialRows) {
+        if (effectiveFirstSeenAt < official.firstSeenAt) {
+          await ctx.db.patch(official._id, {
+            firstSeenAt: effectiveFirstSeenAt,
+            firstSource: row.source,
+            relayFirstSeenAt: effectiveFirstSeenAt,
+            relaySource: row.source,
+            updatedAt: row.fetchCompletedAt,
+          });
+        }
+      }
+      if (officialRows.length > 0 && !existing?.adopted) {
+        await ctx.db.patch(sightingId, {
+          adopted: true,
+          updatedAt: row.fetchCompletedAt,
+        });
+      }
+    }
+    return { recordedCount, updatedCount };
+  },
+});
+
+// NOAA's single-station text relay has repeatedly surfaced the latest MMMX
+// report tens of seconds before AWC's receiptTime. The file carries no report
+// type, so it records an earliest-sighting only; the canonical AWC row adopts
+// the earlier firstSeenAt when it arrives. Same once-per-minute discipline as
+// the AWC collector.
+export const pollNoaaTextMetar = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+    raceSlotUtc: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = assertStation(args.stationIcao);
+    const claim = await ctx.runMutation(internal.mexico.claimCollectorAttempt, {
+      stationIcao,
+      source: NOAA_TEXT_SOURCE,
+      cooldownMs: AWC_COOLDOWN_MS,
+    });
+    if (!claim.claimed) {
+      return { status: "cooldown", retryAfterAt: claim.retryAfterAt };
+    }
+    const fetchStartedAt = Date.now();
+    try {
+      const response = await fetch(NOAA_TEXT_METAR_URL, {
+        cache: "no-store",
+        headers: {
+          "User-Agent": USER_AGENT,
+        },
+      });
+      const text = await response.text();
+      const fetchCompletedAt = Date.now();
+      if (!response.ok) {
+        throw new Error(
+          `NOAA text METAR request failed (${response.status}): ${text.slice(0, 200)}`,
+        );
+      }
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const stampMatch = /^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2})$/.exec(
+        lines[0] ?? "",
+      );
+      const fileStampUtc = stampMatch
+        ? Date.UTC(
+            Number(stampMatch[1]),
+            Number(stampMatch[2]) - 1,
+            Number(stampMatch[3]),
+            Number(stampMatch[4]),
+            Number(stampMatch[5]),
+            0,
+          )
+        : undefined;
+      const rawLine = lines[1] ?? "";
+      const norm = normalizeMetarRaw(rawLine);
+      const timeMatch = norm
+        ? /^MMMX (\d{2})(\d{2})(\d{2})Z/.exec(norm.typeless)
+        : null;
+      const obsTimeUtc = timeMatch
+        ? resolveReportObsTimeUtc({
+            day: Number(timeMatch[1]),
+            hour: Number(timeMatch[2]),
+            minute: Number(timeMatch[3]),
+            anchorUtc: fetchCompletedAt,
+          })
+        : null;
+      if (!norm || !timeMatch || obsTimeUtc === null) {
+        throw new Error(
+          "NOAA text METAR body did not contain a usable MMMX report.",
+        );
+      }
+      const typelessHash = await sha256Text(norm.typeless);
+      const result = await ctx.runMutation(
+        internal.mexico.recordRelaySightings,
+        {
+          rows: [
+            {
+              stationIcao,
+              source: NOAA_TEXT_SOURCE,
+              date: formatMexicoDate(obsTimeUtc),
+              obsTimeUtc,
+              typelessHash,
+              rawReport: norm.collapsed,
+              ...(fileStampUtc !== undefined ? { fileStampUtc } : {}),
+              ...(args.raceSlotUtc !== undefined
+                ? { raceSlotUtc: args.raceSlotUtc }
+                : {}),
+              firstSeenAt: fetchCompletedAt,
+              fetchStartedAt,
+              fetchCompletedAt,
+            },
+          ],
+        },
+      );
+      await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
+        stationIcao,
+        source: NOAA_TEXT_SOURCE,
+        status: "ok",
+        lastSuccessAt: fetchCompletedAt,
+        lastError: "",
+        httpStatus: response.status,
+        responseBytes: text.length,
+        lastModified: response.headers.get("last-modified") ?? undefined,
+        rowCount: result.recordedCount,
+      });
+      return {
+        status: "ok",
+        ...result,
+        obsTimeUtc,
+        fetchStartedAt,
+        fetchCompletedAt,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
+        stationIcao,
+        source: NOAA_TEXT_SOURCE,
         status: "error",
         lastError: message,
       });
@@ -712,9 +1242,7 @@ export const pollAwcTaf = actionGeneric({
           rawTaf,
           rawProviderJson: JSON.stringify(item),
           issueTimeUtc,
-          ...(Number.isFinite(bulletinTimeUtc)
-            ? { bulletinTimeUtc }
-            : {}),
+          ...(Number.isFinite(bulletinTimeUtc) ? { bulletinTimeUtc } : {}),
           ...(Number.isFinite(awcDatabaseTimeUtc)
             ? { awcDatabaseTimeUtc }
             : {}),
@@ -871,7 +1399,7 @@ export const getDayDashboard = queryGeneric({
       throw new Error("Date must be in YYYY-MM-DD format.");
     }
 
-    const [metarRows, smnRows, recentTafs, statuses] = await Promise.all([
+    const [storedMetarRows, smnRows, recentTafs, statuses] = await Promise.all([
       ctx.db
         .query("mexicoMetarObservations")
         .withIndex("by_station_date_obs", (query) =>
@@ -899,6 +1427,11 @@ export const getDayDashboard = queryGeneric({
         .collect(),
     ]);
 
+    const capmaAftnApproved = capmaAftnAccessApproved();
+    const metarRows = publicMetarRowsForCapmaApproval(
+      storedMetarRows,
+      capmaAftnApproved,
+    );
     metarRows.sort((left, right) =>
       left.obsTimeUtc !== right.obsTimeUtc
         ? left.obsTimeUtc - right.obsTimeUtc
@@ -912,7 +1445,9 @@ export const getDayDashboard = queryGeneric({
       recentTafs.find((capture) => {
         const localDates = [
           formatMexicoDate(capture.validFromUtc),
-          formatMexicoDate(Math.max(capture.validFromUtc, capture.validToUtc - 1)),
+          formatMexicoDate(
+            Math.max(capture.validFromUtc, capture.validToUtc - 1),
+          ),
         ];
         return localDates.includes(args.date);
       }) ??
@@ -943,14 +1478,17 @@ export const getDayDashboard = queryGeneric({
     let capmaMetarSimilarity = null;
     if (capmaVisible) {
       const previousDayMetars = isToday
-        ? await ctx.db
-            .query("mexicoMetarObservations")
-            .withIndex("by_station_date_obs", (query) =>
-              query
-                .eq("stationIcao", stationIcao)
-                .eq("date", shiftDateKey(args.date, -1)),
-            )
-            .collect()
+        ? publicMetarRowsForCapmaApproval(
+            await ctx.db
+              .query("mexicoMetarObservations")
+              .withIndex("by_station_date_obs", (query) =>
+                query
+                  .eq("stationIcao", stationIcao)
+                  .eq("date", shiftDateKey(args.date, -1)),
+              )
+              .collect(),
+            capmaAftnApproved,
+          )
         : [];
       const rollingStartUtc = nowMs - 24 * 60 * 60 * 1000;
       const rollingReleaseMetars = [...previousDayMetars, ...metarRows].filter(
@@ -1046,7 +1584,7 @@ export const getDayDashboard = queryGeneric({
       };
     }
 
-    const emptyCapmaLatestImages = { "05": null, "23": null };
+    const emptyCapmaLatestImages = { "05": null, 23: null };
     let capmaLatestImages = emptyCapmaLatestImages;
     if (capmaVisible) {
       const [tdz05, tdz23] = await Promise.all(
@@ -1102,7 +1640,7 @@ export const getDayDashboard = queryGeneric({
       );
       capmaLatestImages = {
         "05": publicLatestImages[0],
-        "23": publicLatestImages[1],
+        23: publicLatestImages[1],
       };
     }
 

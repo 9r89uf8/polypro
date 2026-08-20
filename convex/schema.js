@@ -1866,6 +1866,12 @@ export default defineSchema({
     rawProviderJson: v.string(),
     initialAwcReceiptTimeUtc: v.optional(v.number()),
     latestAwcReceiptTimeUtc: v.optional(v.number()),
+    firstAwcFetchStartedAt: v.optional(v.number()),
+    firstAwcSeenAt: v.optional(v.number()),
+    typelessHash: v.optional(v.string()),
+    firstSource: v.optional(v.string()),
+    relayFirstSeenAt: v.optional(v.number()),
+    relaySource: v.optional(v.string()),
     firstSeenAt: v.number(),
     fetchStartedAt: v.number(),
     fetchCompletedAt: v.number(),
@@ -1874,7 +1880,64 @@ export default defineSchema({
   })
     .index("by_station_report_key", ["stationIcao", "reportKey"])
     .index("by_station_date_obs", ["stationIcao", "date", "obsTimeUtc"])
-    .index("by_station_obs_hash", ["stationIcao", "obsTimeUtc", "rawHash"]),
+    .index("by_station_obs_hash", ["stationIcao", "obsTimeUtc", "rawHash"])
+    .index("by_station_obs_typeless_hash", [
+      "stationIcao",
+      "obsTimeUtc",
+      "typelessHash",
+    ]),
+
+  // Earliest application-level sightings of an official MMMX report on relays
+  // that cannot always classify report type (NOAA single-station text file).
+  // Used only to adopt an earlier firstSeenAt when the canonical row arrives;
+  // never rendered as an observation series.
+  mexicoRelaySightings: defineTable({
+    stationIcao: v.string(),
+    source: v.string(),
+    date: v.optional(v.string()),
+    obsTimeUtc: v.number(),
+    typelessHash: v.string(),
+    rawReport: v.string(),
+    reportTypeHint: v.optional(v.union(v.literal("METAR"), v.literal("SPECI"))),
+    isCorrectionHint: v.optional(v.boolean()),
+    fileStampUtc: v.optional(v.number()),
+    raceSlotUtc: v.optional(v.number()),
+    firstSeenAt: v.number(),
+    fetchStartedAt: v.number(),
+    fetchCompletedAt: v.number(),
+    lastSeenAt: v.optional(v.number()),
+    adopted: v.boolean(),
+    updatedAt: v.number(),
+  })
+    .index("by_station_source_obs_hash", [
+      "stationIcao",
+      "source",
+      "obsTimeUtc",
+      "typelessHash",
+    ])
+    .index("by_station_obs_hash", ["stationIcao", "obsTimeUtc", "typelessHash"])
+    .index("by_station_date", ["stationIcao", "date", "firstSeenAt"]),
+
+  // One row per scheduled paired CAPMA/NOAA attempt. A relay win is counted
+  // only when both requests succeeded in the earlier source's polling slot.
+  mexicoRelayRaceAttempts: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    raceSlotUtc: v.number(),
+    startedAt: v.number(),
+    completedAt: v.number(),
+    capmaStatus: v.string(),
+    noaaStatus: v.string(),
+    capmaFetchStartedAt: v.optional(v.number()),
+    capmaFetchCompletedAt: v.optional(v.number()),
+    noaaFetchStartedAt: v.optional(v.number()),
+    noaaFetchCompletedAt: v.optional(v.number()),
+    capmaRowCount: v.optional(v.number()),
+    noaaRowCount: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_station_slot", ["stationIcao", "raceSlotUtc"])
+    .index("by_station_date_slot", ["stationIcao", "date", "raceSlotUtc"]),
 
   mexicoTafForecasts: defineTable({
     stationIcao: v.string(),
@@ -1975,11 +2038,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_station_date_time", [
-      "stationIcao",
-      "date",
-      "forecastTimeUtc",
-    ])
+    .index("by_station_date_time", ["stationIcao", "date", "forecastTimeUtc"])
     .index("by_station_time", ["stationIcao", "forecastTimeUtc"]),
 
   mexicoPolymarketProbabilitySnapshots: defineTable({
@@ -2020,11 +2079,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_station_snapshot_key", ["stationIcao", "snapshotKey"])
-    .index("by_station_date_captured", [
-      "stationIcao",
-      "date",
-      "capturedAt",
-    ]),
+    .index("by_station_date_captured", ["stationIcao", "date", "capturedAt"]),
 
   mexicoCapmaTdzObservations: defineTable({
     stationIcao: v.string(),

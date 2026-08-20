@@ -1,6 +1,12 @@
 # MMMX: fastest current-temperature source
 
-Last researched: **2026-08-04 America/Mexico_City**.
+Last researched: **2026-08-04 America/Mexico_City**, with a follow-up
+verification and relay-latency pass on **2026-08-19/20 UTC** (section
+`August 19-20, 2026 follow-up verification` at the end). The follow-up
+re-verified every live public path, measured fresh relay latencies, exhausted
+several new dead ends (MADIS, WIS2 CAP, IEM, renewed SENEAM/AICM surfaces), and
+shipped two relay collectors: an ungated NOAA single-station sighting probe and
+a gated CAPMA AFTN report collector.
 
 ## Scope and airport identity
 
@@ -2841,6 +2847,7 @@ npx convex env remove SEMAR_AVIMET_MESSAGE_RETENTION_APPROVED --prod
 | CAPMA MMMX TDZ image access         | `SENEAM_CAPMA_MMMX_TDZ_IMAGES_ACCESS_APPROVED`           | SENEAM/CAPMA approval for conditional automated GETs of only `pista05.jpg`/`pista23.jpg`, allowed rate, OCR/derivation, transport risk, sensor identity and support | Do not queue, fetch, OCR, retry, or treat browser reachability as automation permission    |
 | CAPMA MMMX TDZ image retention      | `SENEAM_CAPMA_MMMX_TDZ_IMAGES_RETENTION_APPROVED`        | SENEAM approval for raw JPEG/body hash, parsed fields, embedded times, Convex duration, internal reads and deletion                                                 | Keep only approved volatile diagnostics; do not insert/upsert or retain images/readings    |
 | CAPMA MMMX TDZ data republication   | `SENEAM_CAPMA_MMMX_TDZ_DATA_REPUBLICATION_APPROVED`      | SENEAM and any required AICM authority for public/commercial display of images or OCR fields, derivatives, export, attribution and expiry                           | Keep approved retained data internal and hidden; linking alone grants no downstream rights |
+| CAPMA MMMX AFTN report relay        | `SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED`         | SENEAM/CAPMA approval for conditional automated GETs of only `reportemetar/buscar_samx.php?id=MMMX`, plain-HTTP transport, one-minute cadence, retention of official report text and display | Action returns `approval_required`; no request, queue, or store; official METAR/SPECI still arrive through AWC |
 | Direct SENEAM MMMX AWOS             | `SENEAM_MMMX_AWOS_ACCESS_APPROVED`                       | SENEAM/CAPMA approval for exact owner-provided web viewer/export/API, six AICM stations, temperature/dew point, automation and limits                               | Do not scan, intercept VHF, guess protocols, or access logger/LAN/control surfaces         |
 | SENEAM MMMX AWOS retention          | `SENEAM_MMMX_AWOS_RETENTION_APPROVED`                    | SENEAM approval for raw/current samples, timestamps and QC/status retention in Convex for a stated duration                                                         | Process only the minimum volatile diagnostics allowed by access approval                   |
 | SENEAM MMMX AWOS republication      | `SENEAM_MMMX_AWOS_REPUBLICATION_APPROVED`                | SENEAM approval for public/commercial display, export, derivatives, attribution and expiry                                                                          | Keep authorized retained data internal and hidden                                          |
@@ -2995,8 +3002,10 @@ coordinateConfidence
 approvalScopeVersion
 ```
 
-`firstSeenAt` is immutable. If a provider revises a row, update `updatedAt`,
-retain the original first-seen timestamp, and record the raw revision. Never
+`firstSeenAt` is monotonic-earliest: ordinary refreshes never replace it, but
+an auditable relay sighting that predates the initial canonical insert may move
+it backward. It must never move forward. If a provider revises a row, update
+`updatedAt`, retain the earliest evidenced timestamp, and record the raw revision. Never
 infer a high-resolution temperature from a whole-degree METAR. Resolve known
 cross-provider aliases before counting station agreement or calculating any
 ensemble diagnostic. The live MMMX test observed AWC mutate `receiptTime` for
@@ -3563,7 +3572,8 @@ The timestamps have distinct meanings:
 | `reportTimeUtc`                     | AWC report-cycle time; stored as metadata, never used as observation or publication time |
 | `initialAwcReceiptTimeUtc`          | First AWC `receiptTime` stored for the raw report                                        |
 | `latestAwcReceiptTimeUtc`           | Most recent AWC receipt metadata seen for the same raw report                            |
-| `firstSeenAt`                       | Immutable time this application first fetched the report                                 |
+| `firstAwcSeenAt`                    | Immutable time this application first completed an AWC response containing the report    |
+| `firstSeenAt`                       | Earliest evidenced application receipt across the permitted relays                        |
 | `fetchStartedAt`/`fetchCompletedAt` | Local request envelope used to bound application delivery time                           |
 
 Chart points use `obsTimeUtc`. The UI may say **AWC received** for
@@ -3576,9 +3586,12 @@ publication-audit table with an unavailable temperature; only its temperature
 chart point is omitted. When present, METAR temperature has `1 °C` encoded
 precision even though the UI can convert it to Fahrenheit.
 
-Rows dedupe by station, observation time, report type, and raw hash. A
+Rows dedupe by station, observation time, report type, and normalized raw hash. A
 correction with changed raw content is therefore preserved instead of silently
-overwriting the report it corrects.
+overwriting the report it corrects. A CAPMA-first row is enriched on the first
+matching AWC response with the initial/latest AWC receipt metadata, AWC fetch
+time, decoded fields, and provider JSON without losing the earlier permitted
+relay sighting.
 
 ### Continuous CAPMA versus METAR/SPECI trust analysis
 
@@ -4041,6 +4054,7 @@ and their local transcription evidence must never be committed.
 | SMN hourly / `mexico_smn_hourly_forecast_minute_20`        | `20 * * * *`                                | `mexicoForecastNode:pollSmnHourlyForecast` | Venustiano Carranza; five minutes after the documented `:15` update boundary; 30-minute shared cooldown      |
 | Polymarket daily high / `mexico_polymarket_daily_high_every_minute` | `* * * * *`                       | internal `mexicoPolymarket:pollScheduledDailyHighProbabilities` | Public Gamma API; server gate allows requests only 11:00-18:00 Mexico City; shared atomic one-minute slot |
 | CAPMA image queue / `mexico_capma_tdz_images_every_minute` | `* * * * *`                                 | `mexicoCapma:queueScheduledCapmaRefresh`   | No queue/request unless access and retention are exact `true`; each TDZ worker also has a 60-second cooldown |
+| CAPMA-vs-NOAA report race / `mexico_capma_noaa_relay_race_every_minute` | `* * * * *`                    | `mexicoRelayRace:pollCapmaNoaaRelayRace`  | NOAA runs once/minute; CAPMA returns `approval_required` without a request unless the dedicated AFTN flag is exact `true`; both source actions retain independent 60-second cooldowns |
 
 Crons and manual controls share backend claim/status rows, so an open page
 cannot double the Polymarket request rate within a minute. A cron schedule does not weaken a
@@ -4074,3 +4088,130 @@ commissioning trail. Ask for or verify:
 
 The appearance of a new page, hostname, login, or value is not commissioning
 evidence and does not inherit approval from the legacy JPEG path.
+
+## August 19-20, 2026 follow-up verification
+
+The follow-up confirmed that AWC routinely publishes MMMX observations in a
+top-of-hour batch. Live production rows included `192246Z` at AWC receipt
+`23:00:15.063Z` (14 minutes 15 seconds), `192348Z` at
+`00:00:16.187Z` (12 minutes 16 seconds), and `200043Z` at
+`01:00:39.575Z` (17 minutes 40 seconds). These examples support the batch
+behavior but do **not** establish a 14-minute upper bound; the older 72-hour
+sample in this document reached 20 minutes 56 seconds. SPECIs in the same pass
+usually reached AWC in roughly one to two minutes.
+
+The August 3 CAPMA observation proves that CAPMA beat **AWC** for one routine
+report by at least 4 minutes 50.7 seconds. It does not establish whether CAPMA
+beats NOAA's single-station relay. That question requires simultaneous,
+continuously paired collection; comparing CAPMA browser observation time with a
+NOAA file timestamp from another run would not be a valid race.
+
+### Paired CAPMA-versus-NOAA relay experiment
+
+`mexicoRelayRace:pollCapmaNoaaRelayRace` starts the two source actions from one
+parent action every minute and gives them the same `raceSlotUtc`. Each source
+still has its own atomic 60-second backend cooldown, so a cron plus a manual
+call cannot increase its request rate. NOAA continues to collect while CAPMA is
+disabled. The CAPMA child returns `approval_required` before any request unless
+`SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED` is the exact string `true`.
+
+Source-specific `mexicoRelaySightings` rows retain:
+
+```text
+stationIcao
+source
+date
+obsTimeUtc
+typelessHash
+reportTypeHint
+isCorrectionHint
+raceSlotUtc
+firstSeenAt
+fetchStartedAt
+fetchCompletedAt
+lastSeenAt
+rawReport
+adopted
+```
+
+The identity for cross-relay comparison is `obsTimeUtc + typelessHash`. The
+typeless hash collapses whitespace and omits only the leading report-type token,
+allowing NOAA's type-less text file to match the canonical report without
+letting NOAA create an official observation. CAPMA sightings are separate from
+NOAA sightings; one source can no longer overwrite the other's first-seen row.
+
+`mexicoRelayRaceAttempts` records whether both requests succeeded in each
+shared minute. A source wins only when it first contains the report in an
+earlier slot **and both endpoints returned successfully in that earlier slot**.
+If both first contain the report in the same slot, the result is `same_poll` and
+publication order is explicitly unknown at the approved one-minute resolution.
+If the losing endpoint was disabled, in cooldown, or errored in the earlier
+slot, the pair is `invalid_pair` and never contributes a win. This also excludes
+bootstrap history from the first approved CAPMA response. Attempt rows have a
+rolling 14-day retention window.
+
+The gated query
+`mexicoRelayRace:getCapmaNoaaRelayRace({ stationIcao: "MMMX", date })` returns
+overall, routine-METAR, SPECI, and correction summaries: decisive wins,
+same-poll and invalid counts, CAPMA win percentage, signed median CAPMA lead,
+and recent comparisons. With approval absent it returns only
+`approval_required` and safe collector status; it does not query or expose the
+protected CAPMA sightings.
+
+### CAPMA AFTN approval and revocation behavior
+
+The approving authority is **SENEAM/CAPMA**, as owner/operator of the CAPMA
+portal and report surface. Required scope is conditional automated GET access
+to only:
+
+```text
+http://capma.mx/reportemetar/buscar_samx.php?id=MMMX
+```
+
+Approval must explicitly cover one request per minute, plain-HTTP transport,
+retention of the returned official report text and derived timing/hash fields,
+use in the CAPMA-versus-NOAA comparison, and dashboard display of a CAPMA-first
+official row until AWC confirms it. Browser reachability, a user instruction,
+or the absence of credentials is not approval.
+
+Protected entry points are:
+
+1. `mexicoCapmaAftn:pollCapmaAftnReports`, including direct/manual calls and
+   calls from the paired cron, checks before claiming work, immediately before
+   the request, and after the response before parsing or storage.
+2. `mexico:recordRelaySightings` independently refuses CAPMA sighting storage
+   after revocation.
+3. `mexico:upsertMetarBatch` independently refuses CAPMA official-row storage
+   after revocation; AWC and NOAA paths remain available.
+4. `mexicoRelayRace:getCapmaNoaaRelayRace` returns no CAPMA race data without
+   approval.
+5. `mexico:getDayDashboard` hides CAPMA-only official rows after revocation. If
+   AWC has confirmed the same row, it returns only the AWC copy/timing view and
+   removes CAPMA relay timing from the response.
+
+Deploy code, schema, and the paired cron with the flag absent. After the user
+confirms that SENEAM/CAPMA granted the exact scope above, activate production
+separately:
+
+```text
+npx convex env set SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED true --prod
+```
+
+Removing the flag disables the protected request, storage, and query paths:
+
+```text
+npx convex env remove SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED --prod
+```
+
+Development CAPMA requests require the same appropriate authority. While the
+flag is absent, parser, normalization, race classification, enrichment, and
+revocation behavior are tested with inline fixtures only. Do not fetch CAPMA to
+create a fixture.
+
+Production deployment verification at `2026-08-20T01:59:35Z` found the AFTN
+approval variable absent. The public race query returned
+`status=approval_required`, `accessApproved=false`, and no race payload. The
+first paired cron recorded CAPMA collector status `approval_required` with no
+HTTP or success metadata, while NOAA returned HTTP 200 and recorded one
+sighting. This is the expected disabled launch state: the NOAA baseline is
+running and CAPMA has made no automated request.

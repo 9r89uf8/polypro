@@ -202,6 +202,17 @@ crons.cron(
   { stationIcao: "MMMX" },
 );
 
+// Launch NOAA and the gated CAPMA AFTN relay from one parent action so their
+// one-minute sightings have a shared race slot. NOAA continues while CAPMA is
+// disabled; CAPMA makes no request unless its dedicated approval flag is exact
+// "true". Same-slot appearances remain indeterminate at one-minute resolution.
+crons.cron(
+  "mexico_capma_noaa_relay_race_every_minute",
+  "* * * * *",
+  api.mexicoRelayRace.pollCapmaNoaaRelayRace,
+  { stationIcao: "MMMX" },
+);
+
 // Runs every minute so the public MeteoAM Deda LIMC endpoint is sampled
 // continuously. The Italian public publication lag is wide enough that a
 // narrow half-hour watch window is less useful than steady minute polling.
