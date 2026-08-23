@@ -1,5 +1,8 @@
 const TEMPLATE_WIDTH = 32;
 const TEMPLATE_HEIGHT = 48;
+const MIN_TIMESTAMP_GLYPH_SCORE = 0.55;
+const MAX_SCREEN_FUTURE_MS = 15 * 60 * 1000;
+const MAX_SCREEN_AGE_MS = 24 * 60 * 60 * 1000;
 
 // Arial Bold digit silhouettes, normalized to 32x48 and packed one bit per
 // pixel. The CAPMA legacy AWOS display uses this same fixed Windows font and
@@ -187,12 +190,10 @@ function normalizeComponent(component) {
   return normalized;
 }
 
-export function classifyCapmaDigit(component) {
+export function classifyCapmaDigitCandidates(component) {
   const normalized = normalizeComponent(component);
   const templates = getDigitTemplates();
-  let bestDigit = null;
-  let bestScore = -1;
-  let secondScore = -1;
+  const candidates = [];
 
   for (let digit = 0; digit < templates.length; digit += 1) {
     let intersection = 0;
@@ -206,20 +207,19 @@ export function classifyCapmaDigit(component) {
         intersection += 1;
       }
     }
-    const score = union ? intersection / union : 0;
-    if (score > bestScore) {
-      secondScore = bestScore;
-      bestScore = score;
-      bestDigit = digit;
-    } else if (score > secondScore) {
-      secondScore = score;
-    }
+    candidates.push({ digit, score: union ? intersection / union : 0 });
   }
 
+  return candidates.sort((left, right) => right.score - left.score);
+}
+
+export function classifyCapmaDigit(component) {
+  const [best, second] = classifyCapmaDigitCandidates(component);
+
   return {
-    digit: bestDigit,
-    score: bestScore,
-    margin: bestScore - Math.max(0, secondScore),
+    digit: best?.digit ?? null,
+    score: best?.score ?? -1,
+    margin: (best?.score ?? -1) - Math.max(0, second?.score ?? -1),
   };
 }
 
@@ -231,20 +231,30 @@ const lightNeutralText = (red, green, blue) =>
   Math.max(red, green, blue) - Math.min(red, green, blue) < 80;
 const yellowText = (red, green, blue) => red > 120 && green > 90 && blue < 110;
 
-function recognizeComponents(components, minimumScore = 0.68) {
+function recognizeComponents(
+  components,
+  minimumScore = 0.68,
+  minimumMargin = 0,
+) {
   return components.map((component) => {
     const match = classifyCapmaDigit(component);
-    if (match.score < minimumScore) {
+    if (match.score < minimumScore || match.margin < minimumMargin) {
       throw new Error(
-        `CAPMA OCR rejected an ambiguous digit (${match.score.toFixed(3)} confidence).`,
+        `CAPMA OCR rejected an ambiguous digit (${match.score.toFixed(3)} confidence, ${match.margin.toFixed(3)} margin).`,
       );
     }
     return { ...match, component };
   });
 }
 
-function readTemperature(image, rectangle, size) {
-  const components = findComponents(image, rectangle, darkText);
+function readTemperatureWithPredicate(
+  image,
+  rectangle,
+  size,
+  predicate,
+  palette,
+) {
+  const components = findComponents(image, rectangle, predicate);
   const degreeCandidates = components.filter(
     (component) =>
       component.height >= size.degreeMinHeight &&
@@ -267,7 +277,11 @@ function readTemperature(image, rectangle, size) {
   if (!digitComponents.length || digitComponents.length > 2) {
     throw new Error("CAPMA OCR found an unexpected temperature digit count.");
   }
-  const matches = recognizeComponents(digitComponents);
+  const matches = recognizeComponents(
+    digitComponents,
+    palette === "yellow_on_dark" ? 0.6 : 0.68,
+    palette === "yellow_on_dark" ? 0.08 : 0,
+  );
   const signComponent = components.find(
     (component) =>
       component.x1 < (digitComponents[0]?.x0 ?? degree.x0) &&
@@ -284,6 +298,337 @@ function readTemperature(image, rectangle, size) {
     value,
     confidence: Math.min(...matches.map((match) => match.score)),
     glyphs: matches.map((match) => match.digit).join(""),
+    palette,
+  };
+}
+
+function readTemperature(image, rectangle, size) {
+  const candidates = [];
+  const errors = [];
+  for (const [palette, predicate] of [
+    ["dark_on_light", darkText],
+    ["yellow_on_dark", yellowText],
+  ]) {
+    try {
+      candidates.push(
+        readTemperatureWithPredicate(
+          image,
+          rectangle,
+          size,
+          predicate,
+          palette,
+        ),
+      );
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (!candidates.length) {
+    throw new Error(
+      `CAPMA OCR could not read the temperature in either supported display palette (${errors.join("; ")}).`,
+    );
+  }
+  return candidates.sort(
+    (left, right) => right.confidence - left.confidence,
+  )[0];
+}
+
+// Extended display fields beyond the two whole-degree temperatures. The same
+// fixed 1366x768 layout carries % HUMEDAD (integer percent), PRESION
+// (0.1 hPa station pressure), PUNTO DE ROCIO (whole-degree computed dew
+// point), QNH (0.01 inHg) and the 2-minute rocio value. Each field is read
+// independently and fails soft to null so a degraded box never rejects the
+// frame that the core temperature/timestamp gates already accepted.
+const EXTENDED_SMALL_DIGIT_MIN_SCORE = 0.62;
+
+const DEWPOINT_RECTANGLE = { x0: 328, y0: 352, x1: 552, y1: 416 };
+const DEWPOINT_SIZE = {
+  degreeMinHeight: 18,
+  degreeMaxHeight: 30,
+  degreeMinWidth: 10,
+  degreeMaxY: 369,
+  digitMinHeight: 35,
+  digitMinWidth: 7,
+  digitMinArea: 250,
+  minusMinWidth: 10,
+  minusMaxHeight: 12,
+  minusMinY: 375,
+};
+const TWO_MINUTE_DEWPOINT_RECTANGLE = { x0: 145, y0: 602, x1: 245, y1: 636 };
+const TWO_MINUTE_DEWPOINT_SIZE = {
+  degreeMinHeight: 8,
+  degreeMaxHeight: 16,
+  degreeMinWidth: 5,
+  degreeMaxY: 614,
+  digitMinHeight: 16,
+  digitMinWidth: 4,
+  digitMinArea: 60,
+  minusMinWidth: 6,
+  minusMaxHeight: 8,
+  minusMinY: 614,
+};
+const HUMIDITY_RECTANGLE = { x0: 135, y0: 262, x1: 270, y1: 303 };
+// The pressure string is centered in its box and its width changes: the
+// display drops a trailing ".0" and shows e.g. "787 hPa". The rectangle spans
+// the whole box so the unit letters are never clipped into digit-like shapes.
+const PRESSURE_RECTANGLE = { x0: 112, y0: 313, x1: 275, y1: 354 };
+const QNH_RECTANGLE = { x0: 318, y0: 492, x1: 588, y1: 585 };
+
+function classifyExtendedDigit(component) {
+  const [best] = classifyCapmaDigitCandidates(component);
+  if (!best || best.score < EXTENDED_SMALL_DIGIT_MIN_SCORE) {
+    throw new Error("CAPMA extended OCR rejected a low-confidence digit.");
+  }
+  return { digit: best.digit, score: best.score };
+}
+
+function readHumidityWithPredicate(image, predicate) {
+  const components = findComponents(image, HUMIDITY_RECTANGLE, predicate);
+  const percentCircles = components.filter(
+    (component) =>
+      component.height >= 7 &&
+      component.height <= 12 &&
+      component.width >= 6 &&
+      component.width <= 12,
+  );
+  if (!percentCircles.length) {
+    throw new Error("CAPMA extended OCR could not locate the percent mark.");
+  }
+  const percentX = Math.min(...percentCircles.map((circle) => circle.x0));
+  const digitComponents = components.filter(
+    (component) =>
+      component.height >= 16 &&
+      component.height <= 26 &&
+      component.width >= 4 &&
+      component.x1 <= percentX - 2,
+  );
+  if (!digitComponents.length || digitComponents.length > 3) {
+    throw new Error("CAPMA extended OCR found an unexpected humidity digit count.");
+  }
+  const matches = digitComponents.map(classifyExtendedDigit);
+  const value = Number(matches.map((match) => match.digit).join(""));
+  if (!Number.isInteger(value) || value < 1 || value > 100) {
+    throw new Error("CAPMA extended OCR humidity is outside the allowed range.");
+  }
+  return {
+    value,
+    confidence: Math.min(...matches.map((match) => match.score)),
+  };
+}
+
+function readStationPressureWithPredicate(image, predicate) {
+  const components = findComponents(image, PRESSURE_RECTANGLE, predicate);
+  const digitSized = components.filter(
+    (component) =>
+      component.height >= 16 && component.height <= 26 && component.width >= 4,
+  );
+  // Left-to-right prefix of confidently classified digits. The first glyph
+  // that fails classification is the unit text ("hPa") and ends the value.
+  const matches = [];
+  let stopper = null;
+  for (const component of digitSized) {
+    const [best] = classifyCapmaDigitCandidates(component);
+    if (best && best.score >= EXTENDED_SMALL_DIGIT_MIN_SCORE) {
+      matches.push({ component, digit: best.digit, score: best.score });
+    } else {
+      stopper = component;
+      break;
+    }
+  }
+  if (matches.length < 3 || matches.length > 4) {
+    throw new Error("CAPMA extended OCR expected 3 or 4 station-pressure digits.");
+  }
+  const decimalDots = components.filter(
+    (component) =>
+      component.width >= 3 &&
+      component.width <= 9 &&
+      component.height >= 3 &&
+      component.height <= 9 &&
+      component.y0 >= PRESSURE_RECTANGLE.y0 + 20,
+  );
+  const integerEnd = matches[2].component.x1;
+  const nextStart =
+    matches[3]?.component.x0 ?? stopper?.x0 ?? integerEnd + 24;
+  const dotBetween = decimalDots.some(
+    (dot) => dot.x0 >= integerEnd - 2 && dot.x1 <= nextStart + 2,
+  );
+  let tenths;
+  if (matches.length === 4) {
+    // "787.2 hPa": the tenth digit sits after the decimal gap.
+    if (!dotBetween || nextStart - integerEnd < 6) {
+      throw new Error("CAPMA extended OCR could not confirm the pressure decimal.");
+    }
+    tenths = matches[3].digit;
+  } else {
+    // "787 hPa": the display drops a trailing ".0". A visible dot with a
+    // missing tenth digit means the tenth failed OCR; fail closed instead of
+    // guessing zero.
+    if (dotBetween) {
+      throw new Error("CAPMA extended OCR lost the pressure tenth digit.");
+    }
+    tenths = 0;
+  }
+  const value =
+    (matches[0].digit * 1000 +
+      matches[1].digit * 100 +
+      matches[2].digit * 10 +
+      tenths) /
+    10;
+  if (!Number.isFinite(value) || value < 700 || value > 820) {
+    throw new Error("CAPMA extended OCR station pressure is outside the allowed range.");
+  }
+  return {
+    value,
+    confidence: Math.min(...matches.map((match) => match.score)),
+  };
+}
+
+function readQnhWithPredicate(image, predicate) {
+  const digitComponents = findComponents(image, QNH_RECTANGLE, predicate).filter(
+    (component) =>
+      component.height >= 55 && component.height <= 80 && component.width >= 12,
+  );
+  if (digitComponents.length !== 4) {
+    throw new Error("CAPMA extended OCR expected four QNH digits.");
+  }
+  const decimalGap = digitComponents[2].x0 - digitComponents[1].x1;
+  if (decimalGap < 15) {
+    throw new Error("CAPMA extended OCR could not confirm the QNH decimal gap.");
+  }
+  const matches = digitComponents.map(classifyExtendedDigit);
+  const value =
+    (matches[0].digit * 1000 +
+      matches[1].digit * 100 +
+      matches[2].digit * 10 +
+      matches[3].digit) /
+    100;
+  if (!Number.isFinite(value) || value < 27 || value > 32) {
+    throw new Error("CAPMA extended OCR QNH is outside the allowed range.");
+  }
+  return {
+    value,
+    confidence: Math.min(...matches.map((match) => match.score)),
+  };
+}
+
+function bestAcrossPalettes(image, reader) {
+  const candidates = [];
+  for (const predicate of [darkText, yellowText]) {
+    try {
+      candidates.push(reader(image, predicate));
+    } catch {
+      // The other palette may still validate.
+    }
+  }
+  if (!candidates.length) {
+    return null;
+  }
+  return candidates.sort((left, right) => right.confidence - left.confidence)[0];
+}
+
+// Magnus form used only as a physical consistency band. The display computes
+// dew point from its unrounded temperature and humidity, so a displayed
+// (T, Td, RH) triple that cannot coexist within display quantization means at
+// least one of the three was misread.
+export function capmaMagnusDewpointC(temperatureC, humidityPercent) {
+  const gamma =
+    Math.log(humidityPercent / 100) +
+    (17.62 * temperatureC) / (243.12 + temperatureC);
+  return (243.12 * gamma) / (17.62 - gamma);
+}
+
+export function capmaDewpointTripleIsFeasible({
+  currentTempC,
+  dewpointC,
+  humidityPercent,
+}) {
+  if (
+    !Number.isFinite(currentTempC) ||
+    !Number.isFinite(dewpointC) ||
+    !Number.isFinite(humidityPercent)
+  ) {
+    return true;
+  }
+  const lowest = capmaMagnusDewpointC(
+    currentTempC - 0.5,
+    Math.max(0.5, humidityPercent - 0.6),
+  );
+  const highest = capmaMagnusDewpointC(
+    currentTempC + 0.5,
+    Math.min(100, humidityPercent + 0.6),
+  );
+  return highest >= dewpointC - 0.6 && lowest <= dewpointC + 0.6;
+}
+
+const PRESSURE_QNH_RATIO = 1.3097;
+const PRESSURE_QNH_TOLERANCE_HPA = 1.2;
+const INHG_TO_HPA = 33.8639;
+
+export function capmaPressureQnhIsConsistent({ stationPressureHpa, qnhInHg }) {
+  if (!Number.isFinite(stationPressureHpa) || !Number.isFinite(qnhInHg)) {
+    return true;
+  }
+  const predictedQnhHpa = stationPressureHpa * PRESSURE_QNH_RATIO;
+  return (
+    Math.abs(qnhInHg * INHG_TO_HPA - predictedQnhHpa) <=
+    PRESSURE_QNH_TOLERANCE_HPA
+  );
+}
+
+export function extractCapmaExtendedFields(image, options = {}) {
+  const read = (reader) => bestAcrossPalettes(image, reader);
+  const tryTemperature = (rectangle, size) => {
+    try {
+      const result = readTemperature(image, rectangle, size);
+      return { value: result.value, confidence: result.confidence };
+    } catch {
+      return null;
+    }
+  };
+
+  let dewpoint = tryTemperature(DEWPOINT_RECTANGLE, DEWPOINT_SIZE);
+  let humidity = read(readHumidityWithPredicate);
+  let stationPressure = read(readStationPressureWithPredicate);
+  let qnh = read(readQnhWithPredicate);
+  const twoMinuteDewpoint = tryTemperature(
+    TWO_MINUTE_DEWPOINT_RECTANGLE,
+    TWO_MINUTE_DEWPOINT_SIZE,
+  );
+
+  // Cross-checks fail closed on the fields they implicate: an infeasible
+  // (T, Td, RH) triple drops dew point and humidity, and a QNH that does not
+  // match the 0.1 hPa station pressure drops both pressure fields.
+  if (
+    !capmaDewpointTripleIsFeasible({
+      currentTempC: options.currentTempC,
+      dewpointC: dewpoint?.value,
+      humidityPercent: humidity?.value,
+    })
+  ) {
+    dewpoint = null;
+    humidity = null;
+  }
+  if (
+    !capmaPressureQnhIsConsistent({
+      stationPressureHpa: stationPressure?.value,
+      qnhInHg: qnh?.value,
+    })
+  ) {
+    stationPressure = null;
+    qnh = null;
+  }
+
+  return {
+    dewpointC: dewpoint?.value ?? null,
+    dewpointConfidence: dewpoint?.confidence ?? null,
+    humidityPercent: humidity?.value ?? null,
+    humidityConfidence: humidity?.confidence ?? null,
+    stationPressureHpa: stationPressure?.value ?? null,
+    stationPressureConfidence: stationPressure?.confidence ?? null,
+    qnhInHg: qnh?.value ?? null,
+    qnhConfidence: qnh?.confidence ?? null,
+    twoMinuteDewpointC: twoMinuteDewpoint?.value ?? null,
+    twoMinuteDewpointConfidence: twoMinuteDewpoint?.confidence ?? null,
   };
 }
 
@@ -293,9 +638,15 @@ function readFixedDigits(image, rectangle, predicate, componentFilter, count) {
   );
   const matches = [];
   for (const component of components) {
-    const match = classifyCapmaDigit(component);
+    const candidates = classifyCapmaDigitCandidates(component);
+    const [best, second] = candidates;
+    const match = {
+      digit: best?.digit ?? null,
+      score: best?.score ?? -1,
+      margin: (best?.score ?? -1) - Math.max(0, second?.score ?? -1),
+    };
     if (match.score >= 0.68) {
-      matches.push({ ...match, component });
+      matches.push({ ...match, component, candidates });
     }
   }
   if (matches.length !== count) {
@@ -306,29 +657,94 @@ function readFixedDigits(image, rectangle, predicate, componentFilter, count) {
   return {
     text: matches.map((match) => match.digit).join(""),
     confidence: Math.min(...matches.map((match) => match.score)),
+    glyphs: matches.map((match) => match.candidates),
   };
 }
 
-function parseScreenTimestamp(dateDigits, timeDigits) {
-  const day = Number(dateDigits.slice(0, 2));
-  const month = Number(dateDigits.slice(2, 4));
-  const year = Number(dateDigits.slice(4, 8));
-  const hour = Number(timeDigits.slice(0, 2));
-  const minute = Number(timeDigits.slice(2, 4));
-  const second = Number(timeDigits.slice(4, 6));
-  const epoch = Date.UTC(year, month - 1, day, hour, minute, second);
-  const parsed = new Date(epoch);
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day ||
-    parsed.getUTCHours() !== hour ||
-    parsed.getUTCMinutes() !== minute ||
-    parsed.getUTCSeconds() !== second
-  ) {
-    throw new Error("CAPMA OCR produced an invalid embedded UTC timestamp.");
+function padTimestampPart(value, length = 2) {
+  return String(value).padStart(length, "0");
+}
+
+function timestampDigitStrings(epochMs) {
+  const value = new Date(epochMs);
+  return {
+    dateText: `${padTimestampPart(value.getUTCDate())}${padTimestampPart(value.getUTCMonth() + 1)}${padTimestampPart(value.getUTCFullYear(), 4)}`,
+    timeText: `${padTimestampPart(value.getUTCHours())}${padTimestampPart(value.getUTCMinutes())}${padTimestampPart(value.getUTCSeconds())}`,
+  };
+}
+
+function scoreTimestampDigits(glyphs, digits) {
+  let score = 0;
+  let confidence = 1;
+  for (let index = 0; index < digits.length; index += 1) {
+    const digit = Number(digits[index]);
+    const candidate = glyphs[index]?.find((item) => item.digit === digit);
+    if (!candidate || candidate.score < MIN_TIMESTAMP_GLYPH_SCORE) {
+      return null;
+    }
+    score += Math.log(candidate.score);
+    confidence = Math.min(confidence, candidate.score);
   }
-  return epoch;
+  return { score, confidence };
+}
+
+export function resolveCapmaScreenTimestamp({
+  dateGlyphs,
+  timeGlyphs,
+  fetchedAt,
+}) {
+  if (
+    !Array.isArray(dateGlyphs) ||
+    dateGlyphs.length !== 8 ||
+    !Array.isArray(timeGlyphs) ||
+    timeGlyphs.length !== 6 ||
+    !Number.isFinite(fetchedAt)
+  ) {
+    throw new Error("CAPMA OCR timestamp evidence is incomplete.");
+  }
+
+  const firstSecond = Math.ceil((fetchedAt - MAX_SCREEN_AGE_MS) / 1000);
+  const lastSecond = Math.floor((fetchedAt + MAX_SCREEN_FUTURE_MS) / 1000);
+  let best = null;
+  for (
+    let epochSecond = firstSecond;
+    epochSecond <= lastSecond;
+    epochSecond += 1
+  ) {
+    const screenTimeUtc = epochSecond * 1000;
+    const { dateText, timeText } = timestampDigitStrings(screenTimeUtc);
+    const dateScore = scoreTimestampDigits(dateGlyphs, dateText);
+    if (!dateScore) {
+      continue;
+    }
+    const timeScore = scoreTimestampDigits(timeGlyphs, timeText);
+    if (!timeScore) {
+      continue;
+    }
+    const score = dateScore.score + timeScore.score;
+    const distanceFromFetch = Math.abs(fetchedAt - screenTimeUtc);
+    if (
+      !best ||
+      score > best.score + Number.EPSILON ||
+      (Math.abs(score - best.score) <= Number.EPSILON &&
+        distanceFromFetch < best.distanceFromFetch)
+    ) {
+      best = {
+        screenTimeUtc,
+        dateText,
+        timeText,
+        score,
+        confidence: Math.min(dateScore.confidence, timeScore.confidence),
+        distanceFromFetch,
+      };
+    }
+  }
+  if (!best) {
+    throw new Error(
+      "CAPMA OCR could not resolve a plausible embedded UTC timestamp.",
+    );
+  }
+  return best;
 }
 
 export function extractCapmaDisplayFromPixels(image, options = {}) {
@@ -341,6 +757,7 @@ export function extractCapmaDisplayFromPixels(image, options = {}) {
     throw new Error("CAPMA OCR requires RGBA pixel data.");
   }
 
+  const fetchedAt = options.fetchedAt ?? Date.now();
   const date = readFixedDigits(
     image,
     { x0: 1070, y0: 12, x1: 1245, y1: 47 },
@@ -355,7 +772,12 @@ export function extractCapmaDisplayFromPixels(image, options = {}) {
     (component) => component.height >= 20 && component.area >= 100,
     6,
   );
-  const screenTimeUtc = parseScreenTimestamp(date.text, time.text);
+  const timestamp = resolveCapmaScreenTimestamp({
+    dateGlyphs: date.glyphs,
+    timeGlyphs: time.glyphs,
+    fetchedAt,
+  });
+  const screenTimeUtc = timestamp.screenTimeUtc;
 
   const currentTemperature = readTemperature(
     image,
@@ -415,28 +837,36 @@ export function extractCapmaDisplayFromPixels(image, options = {}) {
     );
   }
 
-  const fetchedAt = options.fetchedAt ?? Date.now();
   if (
-    screenTimeUtc > fetchedAt + 15 * 60 * 1000 ||
-    screenTimeUtc < fetchedAt - 24 * 60 * 60 * 1000
+    screenTimeUtc > fetchedAt + MAX_SCREEN_FUTURE_MS ||
+    screenTimeUtc < fetchedAt - MAX_SCREEN_AGE_MS
   ) {
-    throw new Error("CAPMA embedded timestamp is implausibly far from fetch time.");
+    throw new Error(
+      "CAPMA embedded timestamp is implausibly far from fetch time.",
+    );
   }
+
+  // Extended fields are additive evidence: they never veto a frame that the
+  // core temperature/timestamp/TDZ gates accepted, and they are excluded from
+  // the storage-threshold ocrConfidence so existing acceptance is unchanged.
+  const extended = extractCapmaExtendedFields(image, {
+    currentTempC: currentTemperature.value,
+  });
 
   return {
     tdz,
     screenTimeUtc,
-    screenTimestampRaw: `${date.text.slice(0, 2)}/${date.text.slice(2, 4)}/${date.text.slice(4)} ${time.text.slice(0, 2)}:${time.text.slice(2, 4)}:${time.text.slice(4)}`,
+    screenTimestampRaw: `${timestamp.dateText.slice(0, 2)}/${timestamp.dateText.slice(2, 4)}/${timestamp.dateText.slice(4)} ${timestamp.timeText.slice(0, 2)}:${timestamp.timeText.slice(2, 4)}:${timestamp.timeText.slice(4)}`,
     currentTempC: currentTemperature.value,
     twoMinuteTempC: twoMinuteTemperature.value,
+    extended,
     ocrConfidence: Math.min(
-      date.confidence,
-      time.confidence,
+      timestamp.confidence,
       currentTemperature.confidence,
       twoMinuteTemperature.confidence,
       ...tdzMatches.map((match) => match.score),
     ),
-    ocrEngine: "fixed_layout_arial_template_v1",
+    ocrEngine: "fixed_layout_arial_template_v3_extended_dual_palette",
   };
 }
 

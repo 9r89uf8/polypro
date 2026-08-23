@@ -115,6 +115,70 @@ const seoulSolarUpwindSignal = v.union(
   v.literal("unavailable"),
 );
 
+const mexicoEdgeMarketDefinition = v.object({
+  marketId: v.string(),
+  marketSlug: v.string(),
+  conditionId: v.string(),
+  label: v.string(),
+  displayOrder: v.number(),
+  sourceIndex: v.number(),
+  yesTokenId: v.string(),
+  noTokenId: v.optional(v.string()),
+  gammaOutcomePrice: v.optional(v.string()),
+  gammaProbabilityPct: v.optional(v.number()),
+  enableOrderBook: v.boolean(),
+  negRisk: v.boolean(),
+  question: v.optional(v.string()),
+  description: v.optional(v.string()),
+  resolutionSource: v.optional(v.string()),
+});
+
+const mexicoEdgeQuoteFields = {
+  stationIcao: v.string(),
+  date: v.string(),
+  source: v.string(),
+  eventId: v.string(),
+  marketId: v.string(),
+  marketSlug: v.string(),
+  conditionId: v.string(),
+  label: v.string(),
+  yesTokenId: v.string(),
+  displayOrder: v.number(),
+  gammaOutcomePrice: v.optional(v.string()),
+  gammaProbabilityPct: v.optional(v.number()),
+  bookAvailable: v.boolean(),
+  bestBidPrice: v.optional(v.string()),
+  bestBidSize: v.optional(v.string()),
+  bestAskPrice: v.optional(v.string()),
+  bestAskSize: v.optional(v.string()),
+  midpointPrice: v.optional(v.string()),
+  spreadPrice: v.optional(v.string()),
+  lastTradePrice: v.optional(v.string()),
+  lastTradeSide: v.optional(v.string()),
+  lastTradeStatus: v.optional(
+    v.union(v.literal("reported"), v.literal("no_trades")),
+  ),
+  platformDisplayPrice: v.optional(v.string()),
+  platformDisplayProbabilityPct: v.optional(v.number()),
+  platformDisplaySource: v.string(),
+  tickSize: v.optional(v.string()),
+  minOrderSize: v.optional(v.string()),
+  bookHash: v.optional(v.string()),
+  bookTimestamp: v.optional(v.number()),
+  gammaReceivedAt: v.optional(v.number()),
+  bookFetchStartedAt: v.optional(v.number()),
+  bookReceivedAt: v.optional(v.number()),
+  lastTradeFetchStartedAt: v.optional(v.number()),
+  lastTradeReceivedAt: v.optional(v.number()),
+  negRisk: v.boolean(),
+  quoteFingerprint: v.string(),
+  fetchedAt: v.number(),
+  receivedAt: v.number(),
+  lastChangedAt: v.number(),
+  updatedAt: v.number(),
+  createdAt: v.number(),
+};
+
 export default defineSchema({
   notes: defineTable({
     stationIcao: v.optional(v.string()),
@@ -1832,6 +1896,12 @@ export default defineSchema({
     lastAttemptAt: v.number(),
     lastSuccessAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
+    // Ring buffer of the most recent error finishes (newest last, capped at
+    // 20) so multi-minute outages can be diagnosed after the fact; the
+    // single lastError field only ever kept the latest message.
+    recentErrors: v.optional(
+      v.array(v.object({ at: v.number(), message: v.string() })),
+    ),
     httpStatus: v.optional(v.number()),
     responseBytes: v.optional(v.number()),
     etag: v.optional(v.string()),
@@ -2081,6 +2151,179 @@ export default defineSchema({
     .index("by_station_snapshot_key", ["stationIcao", "snapshotKey"])
     .index("by_station_date_captured", ["stationIcao", "date", "capturedAt"]),
 
+  mexicoEdgeMarketEvents: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    seriesId: v.string(),
+    seriesSlug: v.string(),
+    source: v.string(),
+    gammaUrl: v.string(),
+    eventId: v.string(),
+    eventSlug: v.string(),
+    eventTitle: v.string(),
+    eventUrl: v.string(),
+    description: v.optional(v.string()),
+    resolutionSource: v.optional(v.string()),
+    endTimeUtc: v.optional(v.number()),
+    endTimeIso: v.optional(v.string()),
+    eventActive: v.boolean(),
+    eventClosed: v.boolean(),
+    negRisk: v.boolean(),
+    sourceUpdatedAt: v.optional(v.number()),
+    markets: v.array(mexicoEdgeMarketDefinition),
+    marketCount: v.number(),
+    fetchedAt: v.number(),
+    receivedAt: v.number(),
+    updatedAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_station_date", ["stationIcao", "date"]),
+
+  mexicoEdgeMarketQuotes: defineTable({
+    ...mexicoEdgeQuoteFields,
+  })
+    .index("by_station_date", ["stationIcao", "date"])
+    .index("by_station_date_market", ["stationIcao", "date", "marketId"]),
+
+  mexicoEdgeMarketQuoteEvents: defineTable({
+    ...mexicoEdgeQuoteFields,
+    eventType: v.string(),
+    changedFields: v.array(v.string()),
+    trigger: v.string(),
+    // Added after quote-event collection began, so these remain optional in
+    // the schema for legacy rows. Approved evidence writes supply them; the
+    // fail-closed legacy path deliberately omits them.
+    pollGeneration: v.optional(v.string()),
+    detectionStartAt: v.optional(v.number()),
+    detectionEndAt: v.optional(v.number()),
+    detectionIntervalKind: v.optional(
+      v.union(v.literal("bounded"), v.literal("left_unbounded")),
+    ),
+  })
+    .index("by_station_date_received", ["stationIcao", "date", "receivedAt"])
+    .index("by_station_date_market_received", [
+      "stationIcao",
+      "date",
+      "marketId",
+      "receivedAt",
+    ])
+    .index("by_station_date_token_received", [
+      "stationIcao",
+      "date",
+      "yesTokenId",
+      "receivedAt",
+    ])
+    .index("by_station_received_at", ["stationIcao", "receivedAt"])
+    .index("by_received_at", ["receivedAt"]),
+
+  // One compact, immutable row for every accepted per-market CLOB poll. These
+  // rows preserve unchanged polls without copying sizes, hashes, market text,
+  // or the rest of the full quote/event payload.
+  mexicoEdgeMarketQuoteHeartbeats: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    source: v.string(),
+    eventId: v.string(),
+    marketId: v.string(),
+    yesTokenId: v.string(),
+    pollGeneration: v.string(),
+    trigger: v.union(v.literal("manual"), v.literal("scheduled")),
+    quoteFingerprint: v.string(),
+    previousQuoteFingerprint: v.optional(v.string()),
+    quoteChanged: v.boolean(),
+    changedFields: v.array(v.string()),
+    bestBidPrice: v.optional(v.string()),
+    bestAskPrice: v.optional(v.string()),
+    midpointPrice: v.optional(v.string()),
+    spreadPrice: v.optional(v.string()),
+    lastTradePrice: v.optional(v.string()),
+    lastTradeSide: v.optional(v.string()),
+    lastTradeStatus: v.optional(
+      v.union(v.literal("reported"), v.literal("no_trades")),
+    ),
+    platformDisplayPrice: v.optional(v.string()),
+    platformDisplaySource: v.string(),
+    gammaReceivedAt: v.optional(v.number()),
+    bookFetchStartedAt: v.optional(v.number()),
+    bookReceivedAt: v.optional(v.number()),
+    lastTradeFetchStartedAt: v.optional(v.number()),
+    lastTradeReceivedAt: v.optional(v.number()),
+    previousGammaReceivedAt: v.optional(v.number()),
+    previousBookReceivedAt: v.optional(v.number()),
+    previousLastTradeReceivedAt: v.optional(v.number()),
+    fetchedAt: v.number(),
+    receivedAt: v.number(),
+    previousPollReceivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_station_date_market_received", [
+      "stationIcao",
+      "date",
+      "marketId",
+      "receivedAt",
+    ])
+    .index("by_station_date_generation_market", [
+      "stationIcao",
+      "date",
+      "pollGeneration",
+      "marketId",
+    ])
+    .index("by_station_received_at", ["stationIcao", "receivedAt"])
+    .index("by_received_at", ["receivedAt"]),
+
+  mexicoEdgeMarketStreamStatus: defineTable({
+    stationIcao: v.string(),
+    transport: v.string(),
+    websocketStatus: v.string(),
+    websocketReason: v.string(),
+    totalPollCount: v.number(),
+    totalChangedQuoteCount: v.number(),
+    collectionEnabled: v.boolean(),
+    status: v.string(),
+    activeDate: v.string(),
+    generation: v.string(),
+    leaseUntil: v.number(),
+    lastError: v.string(),
+    trigger: v.optional(v.string()),
+    lastAttemptAt: v.optional(v.number()),
+    lastCompletedAt: v.optional(v.number()),
+    lastSuccessAt: v.optional(v.number()),
+    responseBytes: v.optional(v.number()),
+    marketCount: v.optional(v.number()),
+    lastChangedQuoteCount: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_station", ["stationIcao"]),
+
+  // Immutable source-specific daily-high revisions for the edge cockpit.
+  // TAF TX airport guidance and SMN municipal guidance intentionally remain
+  // separate series; sourceInputKey makes repeated derivation idempotent.
+  mexicoEdgeForecastHighSnapshots: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    source: v.union(v.literal("taf_tx"), v.literal("smn_municipal_hourly")),
+    snapshotKey: v.string(),
+    sourceInputKey: v.string(),
+    sourceLabel: v.string(),
+    sourceIssuedAt: v.optional(v.number()),
+    sourceCapturedAt: v.number(),
+    forecastHighC: v.number(),
+    forecastHighF: v.number(),
+    forecastPeakTimeUtc: v.optional(v.number()),
+    forecastPeakTimeLocal: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_station_snapshot_key", ["stationIcao", "snapshotKey"])
+    .index("by_station_date_source_capture", [
+      "stationIcao",
+      "date",
+      "source",
+      "sourceCapturedAt",
+    ])
+    .index("by_station_source_input", [
+      "stationIcao",
+      "source",
+      "sourceInputKey",
+    ]),
+
   mexicoCapmaTdzObservations: defineTable({
     stationIcao: v.string(),
     tdz: v.union(v.literal("05"), v.literal("23")),
@@ -2093,6 +2336,27 @@ export default defineSchema({
     twoMinuteTempC: v.number(),
     twoMinuteTempF: v.number(),
     temperaturePrecisionC: v.number(),
+    // Extended display fields (added 2026-08-22). Optional: each is stored
+    // only when its independent OCR read and cross-checks validated. The dew
+    // point is computed by the display from unrounded T/RH, so together with
+    // integer % humidity these quantized channels support sub-degree
+    // temperature inference over time.
+    dewpointC: v.optional(v.number()),
+    dewpointConfidence: v.optional(v.number()),
+    humidityPercent: v.optional(v.number()),
+    humidityConfidence: v.optional(v.number()),
+    stationPressureHpa: v.optional(v.number()),
+    stationPressureConfidence: v.optional(v.number()),
+    qnhInHg: v.optional(v.number()),
+    qnhConfidence: v.optional(v.number()),
+    twoMinuteDewpointC: v.optional(v.number()),
+    twoMinuteDewpointConfidence: v.optional(v.number()),
+    // Which network path served the frame: "direct" Convex egress, or
+    // "vercel_relay" through the allowlisted alternate-egress relay used
+    // when direct TCP connects to the owner host are dropped.
+    fetchTransport: v.optional(
+      v.union(v.literal("direct"), v.literal("vercel_relay")),
+    ),
     sourceUrl: v.string(),
     sourceSiteLabel: v.string(),
     rawHash: v.string(),

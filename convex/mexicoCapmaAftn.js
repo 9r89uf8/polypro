@@ -1,7 +1,11 @@
+"use node";
+
 import { actionGeneric } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { buildRelayMetarRow, CAPMA_AFTN_SOURCE } from "./mexico.js";
+import { capmaAftnAccessApproved } from "./mexicoCapmaApprovals.js";
+import { fetchCapmaFreshWithRetries } from "../server/mexicoCapmaTransport.js";
 
 const STATION_ICAO = "MMMX";
 // SENEAM/CAPMA's public AFTN report relay. Bounded research on 2026-08-03 and
@@ -12,13 +16,17 @@ const STATION_ICAO = "MMMX";
 const CAPMA_AFTN_URL = "http://capma.mx/reportemetar/buscar_samx.php?id=MMMX";
 const USER_AGENT =
   "polypro-mmmx-weather/1.0 (MMMX weather dashboard; server-side collector)";
-const COOLDOWN_MS = 60_000;
+// Below the one-minute race-parent spacing on purpose: a 60s cooldown raced
+// the 60s launch cadence on scheduling jitter and silently skipped about
+// half the slots as "cooldown", invalidating many paired-race comparisons.
+// The request rate is still one launch per minute from the race parent.
+const COOLDOWN_MS = 45_000;
+const ATTEMPT_LEASE_MS = 75_000;
+const DIRECT_TIMEOUT_MS = 50_000;
+const RELAY_TIMEOUT_MS = 43_000;
+const TOTAL_FETCH_BUDGET_MS = 55_000;
 const MAX_ROWS = 12;
 export { CAPMA_AFTN_SOURCE };
-
-function aftnAccessApproved() {
-  return process.env.SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED === "true";
-}
 
 export function parseCapmaAftnReportLines(html) {
   return [
@@ -48,7 +56,7 @@ export const pollCapmaAftnReports = actionGeneric({
     if (stationIcao !== STATION_ICAO) {
       throw new Error("The CAPMA AFTN collector supports MMMX only.");
     }
-    if (!aftnAccessApproved()) {
+    if (!capmaAftnAccessApproved()) {
       await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
         stationIcao,
         source: CAPMA_AFTN_SOURCE,
@@ -61,30 +69,38 @@ export const pollCapmaAftnReports = actionGeneric({
       stationIcao,
       source: CAPMA_AFTN_SOURCE,
       cooldownMs: COOLDOWN_MS,
+      leaseMs: ATTEMPT_LEASE_MS,
     });
     if (!claim.claimed) {
       return { status: "cooldown", retryAfterAt: claim.retryAfterAt };
     }
     const fetchStartedAt = Date.now();
     // Recheck immediately before the protected external request.
-    if (!aftnAccessApproved()) {
+    if (!capmaAftnAccessApproved()) {
       await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
         stationIcao,
         source: CAPMA_AFTN_SOURCE,
         status: "approval_required",
         lastError: "",
+        attemptAt: claim.attemptAt,
       });
       return { status: "approval_required" };
     }
     try {
-      const response = await fetch(CAPMA_AFTN_URL, {
-        cache: "no-store",
-        redirect: "manual",
-        headers: {
-          "User-Agent": USER_AGENT,
-        },
+      // Prefer the configured alternate egress, then spend any remaining
+      // minute-slot budget on one fresh direct connection. The wall-clock
+      // budget covers both paths, so a stalled run cannot pile up indefinitely
+      // behind the one-minute race parent.
+      const { response } = await fetchCapmaFreshWithRetries(CAPMA_AFTN_URL, {
+        headers: { "User-Agent": USER_AGENT },
+        timeoutsMs: [DIRECT_TIMEOUT_MS],
+        label: "CAPMA AFTN relay",
+        allowRelayFallback: true,
+        preferRelay: true,
+        relayTimeoutMs: RELAY_TIMEOUT_MS,
+        totalTimeoutMs: TOTAL_FETCH_BUDGET_MS,
       });
-      const text = await response.text();
+      const text = response.text();
       const fetchCompletedAt = Date.now();
       if (response.status >= 300 && response.status < 400) {
         throw new Error(
@@ -99,12 +115,13 @@ export const pollCapmaAftnReports = actionGeneric({
       // Approval can be revoked while the request is in flight. Do not parse
       // or retain the protected response after that point; storage mutations
       // enforce the same gate independently.
-      if (!aftnAccessApproved()) {
+      if (!capmaAftnAccessApproved()) {
         await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
           stationIcao,
           source: CAPMA_AFTN_SOURCE,
           status: "approval_required",
           lastError: "",
+          attemptAt: claim.attemptAt,
         });
         return { status: "approval_required" };
       }
@@ -154,6 +171,7 @@ export const pollCapmaAftnReports = actionGeneric({
         httpStatus: response.status,
         responseBytes: text.length,
         rowCount: rows.length,
+        attemptAt: claim.attemptAt,
       });
       return {
         status: "ok",
@@ -172,6 +190,7 @@ export const pollCapmaAftnReports = actionGeneric({
         source: CAPMA_AFTN_SOURCE,
         status: "error",
         lastError: message,
+        attemptAt: claim.attemptAt,
       });
       throw new Error(message);
     }

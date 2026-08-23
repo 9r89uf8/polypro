@@ -6,9 +6,12 @@ import {
   queryGeneric,
 } from "convex/server";
 import { v } from "convex/values";
+import { capmaTdzApprovalState } from "./mexicoCapmaApprovals.js";
 
 const STATION_ICAO = "MMMX";
 const MEXICO_TIMEZONE = "America/Mexico_City";
+const TDZ23_STAGGER_MS = 30_000;
+const REPLACED_IMAGE_DELETE_GRACE_MS = 120_000;
 
 const mexicoDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: MEXICO_TIMEZONE,
@@ -49,14 +52,9 @@ function formatMexicoDateTime(epochMs) {
 }
 
 function capmaGateState() {
-  return {
-    accessApproved:
-      process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_ACCESS_APPROVED === "true",
-    retentionApproved:
-      process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_RETENTION_APPROVED === "true",
-    republicationApproved:
-      process.env.SENEAM_CAPMA_MMMX_TDZ_DATA_REPUBLICATION_APPROVED === "true",
-  };
+  const { accessApproved, retentionApproved, republicationApproved } =
+    capmaTdzApprovalState();
+  return { accessApproved, retentionApproved, republicationApproved };
 }
 
 export function decideCapmaLatestImageUpdate({
@@ -90,6 +88,16 @@ export function capmaStorageDigestMatches({
     actualStorageSha256 === expectedStorageSha256 ||
     actualStorageSha256 === rawHash
   );
+}
+
+export function selectCapmaHttpImageRow(current, requestedRawHash) {
+  if (!current) {
+    return null;
+  }
+  return {
+    row: current,
+    versionMatched: current.rawHash === requestedRawHash,
+  };
 }
 
 async function setApprovalRequiredStatus(ctx, source) {
@@ -130,18 +138,26 @@ async function queueCapmaRefresh(ctx, trigger) {
     };
   }
   await Promise.all([
+    ctx.scheduler.runAfter(0, internal.mexicoCapmaNode.collectCapmaImage, {
+      stationIcao: STATION_ICAO,
+      tdz: "05",
+      trigger,
+    }),
     ctx.scheduler.runAfter(
-      0,
-      internal.mexicoCapmaNode.collectCapmaImage,
-      { stationIcao: STATION_ICAO, tdz: "05", trigger },
-    ),
-    ctx.scheduler.runAfter(
-      0,
+      TDZ23_STAGGER_MS,
       internal.mexicoCapmaNode.collectCapmaImage,
       { stationIcao: STATION_ICAO, tdz: "23", trigger },
     ),
   ]);
-  return { status: "queued", queued: true, gates };
+  return {
+    status: "queued",
+    queued: true,
+    gates,
+    schedule: {
+      tdz05DelayMs: 0,
+      tdz23DelayMs: TDZ23_STAGGER_MS,
+    },
+  };
 }
 
 export const getAccessState = queryGeneric({
@@ -180,6 +196,19 @@ const capmaObservationValidator = v.object({
   currentTempF: v.number(),
   twoMinuteTempC: v.number(),
   twoMinuteTempF: v.number(),
+  dewpointC: v.optional(v.number()),
+  dewpointConfidence: v.optional(v.number()),
+  humidityPercent: v.optional(v.number()),
+  humidityConfidence: v.optional(v.number()),
+  stationPressureHpa: v.optional(v.number()),
+  stationPressureConfidence: v.optional(v.number()),
+  qnhInHg: v.optional(v.number()),
+  qnhConfidence: v.optional(v.number()),
+  twoMinuteDewpointC: v.optional(v.number()),
+  twoMinuteDewpointConfidence: v.optional(v.number()),
+  fetchTransport: v.optional(
+    v.union(v.literal("direct"), v.literal("vercel_relay")),
+  ),
   sourceUrl: v.string(),
   rawHash: v.string(),
   etag: v.optional(v.string()),
@@ -225,14 +254,17 @@ export const storeCapmaObservation = internalMutationGeneric({
       args.latestImage.storageId,
     );
     if (!uploadedMetadata) {
-      throw new Error("The uploaded CAPMA JPEG is no longer present in storage.");
+      throw new Error(
+        "The uploaded CAPMA JPEG is no longer present in storage.",
+      );
     }
     const uploadedHashMatches = capmaStorageDigestMatches({
       actualStorageSha256: uploadedMetadata.sha256,
       expectedStorageSha256: args.latestImage.expectedStorageSha256,
       rawHash: args.row.rawHash,
     });
-    const uploadedSizeMatches = uploadedMetadata.size === args.row.responseBytes;
+    const uploadedSizeMatches =
+      uploadedMetadata.size === args.row.responseBytes;
     const uploadedTypeMatches =
       uploadedMetadata.contentType === args.latestImage.contentType;
     if (!uploadedHashMatches || !uploadedSizeMatches || !uploadedTypeMatches) {
@@ -317,10 +349,10 @@ export const storeCapmaObservation = internalMutationGeneric({
       : null;
     const currentStorageMatchesMetadata = Boolean(
       currentLatest &&
-        currentStorageMetadata &&
-        currentStorageMetadata.sha256 === currentLatest.storageSha256 &&
-        currentStorageMetadata.size === currentLatest.responseBytes &&
-        currentStorageMetadata.contentType === currentLatest.contentType,
+      currentStorageMetadata &&
+      currentStorageMetadata.sha256 === currentLatest.storageSha256 &&
+      currentStorageMetadata.size === currentLatest.responseBytes &&
+      currentStorageMetadata.contentType === currentLatest.contentType,
     );
     const imageDecision = decideCapmaLatestImageUpdate({
       current: currentLatest
@@ -362,7 +394,15 @@ export const storeCapmaObservation = internalMutationGeneric({
         storageId: args.latestImage.storageId,
       });
       if (currentStorageMetadata) {
-        await ctx.storage.delete(currentLatest.storageId);
+        // An image HTTP action may already have resolved the previous singleton
+        // storage ID. Keep that unreferenced object briefly so its subsequent
+        // storage read can finish, then let the idempotent reference check
+        // remove it. Rejected incoming uploads still delete immediately above.
+        await ctx.scheduler.runAfter(
+          REPLACED_IMAGE_DELETE_GRACE_MS,
+          internal.mexicoCapma.deleteUploadIfUnreferenced,
+          { storageId: currentLatest.storageId },
+        );
       }
       latestImageId = currentLatest._id;
     } else {
@@ -466,23 +506,29 @@ export const getLatestImageForHttp = internalQueryGeneric({
         query.eq("stationIcao", STATION_ICAO).eq("tdz", args.tdz),
       )
       .first();
-    if (!row || row.rawHash !== args.rawHash) {
+    // rawHash versions the browser URL so each new singleton produces a fresh
+    // request. It is not immutable object addressing: only the current approved
+    // singleton is public, so a URL that raced replacement serves that current
+    // row instead of returning a transient 404 for the prior version.
+    const selection = selectCapmaHttpImageRow(row, args.rawHash);
+    if (!selection) {
       return null;
     }
-    const metadata = await ctx.db.system.get("_storage", row.storageId);
+    const selectedRow = selection.row;
+    const metadata = await ctx.db.system.get("_storage", selectedRow.storageId);
     if (
       !metadata ||
-      metadata.sha256 !== row.storageSha256 ||
-      metadata.size !== row.responseBytes ||
-      metadata.contentType !== row.contentType
+      metadata.sha256 !== selectedRow.storageSha256 ||
+      metadata.size !== selectedRow.responseBytes ||
+      metadata.contentType !== selectedRow.contentType
     ) {
       return null;
     }
     return {
-      storageId: row.storageId,
-      rawHash: row.rawHash,
-      contentType: row.contentType,
-      responseBytes: row.responseBytes,
+      storageId: selectedRow.storageId,
+      rawHash: selectedRow.rawHash,
+      contentType: selectedRow.contentType,
+      responseBytes: selectedRow.responseBytes,
     };
   },
 });

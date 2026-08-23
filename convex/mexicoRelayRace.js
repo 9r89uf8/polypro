@@ -10,6 +10,7 @@ import {
   formatMexicoDate,
   NOAA_TEXT_SOURCE,
 } from "./mexico.js";
+import { capmaAftnAccessApproved } from "./mexicoCapmaApprovals.js";
 
 const STATION_ICAO = "MMMX";
 const ATTEMPT_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -297,8 +298,7 @@ export const getCapmaNoaaRelayRace = queryGeneric({
     if (!isDateKey(args.date)) {
       throw new Error("Date must be in YYYY-MM-DD format.");
     }
-    const accessApproved =
-      process.env.SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED === "true";
+    const accessApproved = capmaAftnAccessApproved();
     const statuses = await ctx.db
       .query("mexicoCollectorStatus")
       .withIndex("by_station_source", (query) =>

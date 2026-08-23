@@ -1,32 +1,5 @@
 # Agent Docs Index
 
-- KORD route behavior and page content:
-  - `docs/kord-pages.md`
-  - Summary: documents what `/kord/month` and `/kord/day/[date]` show, how compute/force-recompute and skip logic work, what chart/table diagnostics appear on the day page, and which Convex tables back each view.
-- KORD live-today ingest and polling:
-  - `docs/kord-live-today.md`
-  - Summary: documents live METAR ingest behavior on `/kord/day/[date]` (today mode), including NOAA polling + IEM backfill actions, dedupe/upsert logic, and known operational limits.
-- KORD phone-call ingest and transcript parsing:
-  - `docs/kord-phone-calls.md`
-  - Summary: documents `/kord/today` phone UI, cron/manual enqueue flow, Twilio webhook processing, Whisper transcription temperature parsing, and `kordPhoneCalls` data model.
-- KORD forecast snapshots and current temperature sources:
-  - `docs/kord-forecast-snapshots.md`
-  - Summary: documents `/kord/forecast-snapshots` UI, hourly collector in `convex/forecastCollector.js`, Microsoft+source ingest details, NOAA official-max table wiring, and provider-extension plan.
-- Seoul data-source research and collector behavior:
-  - `docs/seoul.md`
-  - Summary: documents RKSI source research, measured latency, GK2A numerical-product discovery, reusable endpoint-research methods, approval requirements, and collector behavior.
-- Seoul route behavior and page content:
-  - `docs/seoul-pages.md`
-  - Summary: documents `/seoul/today` and `/seoul/day/[date]`, their observations, forecast and solar-heating panels, refresh behavior, and backing Convex data.
-- Mexico City/MMMX data-source research:
-  - `docs/mexico.md`
-  - Summary: documents official and high-frequency MMMX temperature-source research, measured cadence and latency, sensor provenance, AVIMET broker tests, SENEAM AWOS/PIIMET and SEMAR AION setup requirements, approval gates, and the future collector contract.
-- High-frequency airport weather source research playbook:
-  - `docs/high-frequency-airport-weather-research.md`
-  - Summary: reusable evidence-led workflow for finding and validating minute-level airport weather sources, including official/provider mapping, hostname and archive research, manuals and procurement forensics, browser/app/APK analysis, image/OCR validation, cadence experiments, sensor provenance, approval gates, Brazil/Argentina localization, and the MMMX/SENEAM continuation checklist.
-- London City/EGLC data-source research:
-  - `docs/london.md`
-  - Summary: documents the fastest verified public EGLC temperature sources, the permission-dependent NATS/LCY native-sensor path, the 2021 owner-linked TraVis/Wayback reconstruction, procurement and sensor-lineage evidence, measured METAR relay latency, WebTrak, nearby high-frequency context, approval boundaries, and the future collector contract.
 
 When editing `/kord/month` or `/kord/day/[date]`, update `docs/kord-pages.md` in the same change.
 When editing live METAR ingest functions in `convex/weather.js` (`pollLatestNoaaMetar`, `backfillTodayOfficialFromIem`, `upsertOfficialObservation`) or `/kord/day/[date]` live-mode polling behavior, update `docs/kord-live-today.md` in the same change.
@@ -34,7 +7,8 @@ When editing `/kord/today`, `convex/kordPhone.js`, `convex/kordPhoneNode.js`, `c
 When editing `/kord/forecast-snapshots`, `convex/forecastCollector.js`, or `kordForecastSnapshots` schema fields/indexes, update `docs/kord-forecast-snapshots.md` in the same change.
 When changing Seoul data sources, collectors, schemas, schedules, or source-selection logic, update `docs/seoul.md` in the same change.
 When editing `/seoul/today`, `/seoul/day/[date]`, or their user-visible refresh and polling behavior, update `docs/seoul-pages.md` in the same change.
-When changing Mexico City/MMMX data sources, collectors, schemas, schedules, or source-selection logic, update `docs/mexico.md` in the same change.
+When changing Mexico City/MMMX data sources, collectors, schemas, schedules, or source-selection logic, update `docs/mexico-current.md` in the same change.
+When editing `/mexico/edge`, its live-market/weather collectors, `mexicoEdge*` schema fields/indexes, or the user-visible timing and reaction-analysis behavior, follow and update `docs/mexico-edge.md` in the same change. Preserve the evidence, uncertainty, source-rejection, and approval boundaries in `docs/mexico-edge-investigation-2026-08-21.md`; update it or add a newer dated investigation when new production evidence changes those conclusions.
 When changing London City/EGLC data sources, collectors, schemas, schedules, or source-selection logic, update `docs/london.md` in the same change.
 
 # Approval-gated external integrations

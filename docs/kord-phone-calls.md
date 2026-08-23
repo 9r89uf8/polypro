@@ -36,7 +36,11 @@ Defined in `convex/crons.js` and `convex/kordPhone.js`.
   - Calls `internal.kordPhone.enqueueScheduledCall` with `stationIcao: "KORD"`
   - Internal mutation checks Chicago local time and enqueues only on `:49`/`:52` within fixed local hours `12..16`.
   - No dependency on forecast-derived fields in `dailyComparisons`.
-  - Note: `convex/crons.js` also includes non-phone jobs (for METAR ingest, hidden NOAA/Synoptic helper collection, Wunderground-backed Weather.com PWS collection, forecast/current snapshots, and Seoul's 15-minute Weather.com forecast capture). Those do not affect phone enqueue rules.
+  - Note: `convex/crons.js` also includes non-phone jobs (for METAR ingest,
+    hidden NOAA/Synoptic helper collection, Mexico Edge weather/market
+    capture, Wunderground-backed Weather.com PWS collection, forecast/current
+    snapshots, and Seoul's 15-minute Weather.com forecast capture). Those do
+    not affect phone enqueue rules.
 - Manual trigger:
   - Public mutation `kordPhone:enqueueManualCall`
   - Uses current Chicago local timestamp as `slotLocal`.
@@ -61,7 +65,9 @@ Defined in `convex/crons.js` and `convex/kordPhone.js`.
    - The same router also serves the independently approval-gated read-only
      `/mexico/capma/latest-image` route. That GET route does not share Twilio
      credentials, parsing, scheduling, or phone-call state and does not change
-     `/twilio/recording` behavior.
+     `/twilio/recording` behavior. Its CAPMA guard now uses the centralized
+     canonical/legacy migration helper documented in `docs/mexico-current.md`;
+     the Twilio webhook gate and payload contract are unchanged.
 3. `internal.kordPhoneNode.processRecording`
    - Validates Twilio + OpenAI env vars.
    - Saves recording metadata via `upsertRecordingFromWebhook` (`status: "recorded"`).

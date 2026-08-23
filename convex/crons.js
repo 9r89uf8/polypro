@@ -183,6 +183,16 @@ crons.cron(
   { stationIcao: "MMMX" },
 );
 
+// Materializes source-separated daily-high revisions from already retained
+// TAF and SMN inputs. It runs one minute after each TAF attempt and two minutes
+// after the hourly SMN capture; the mutation is idempotent and makes no request.
+crons.cron(
+  "mexico_edge_forecast_high_snapshots_every_5_minutes",
+  "2,7,12,17,22,27,32,37,42,47,52,57 * * * *",
+  internal.mexicoEdge.captureForecastHighSnapshotsInternal,
+  { stationIcao: "MMMX" },
+);
+
 // The action resolves the current recurring Mexico City daily-high event and
 // fetches one public Gamma probability snapshot per minute. Its server-side
 // America/Mexico_City guard returns before any request outside 11:00-18:00.
@@ -193,8 +203,29 @@ crons.cron(
   { stationIcao: "MMMX" },
 );
 
+// Captures exact CLOB REST book and last-trade strings for the edge cockpit.
+// The collector performs no Gamma/CLOB request unless the dedicated
+// POLYMARKET_MMMX_LIVE_COLLECTION_ENABLED flag is exactly "true". The old
+// Gamma collector above remains unchanged for the existing Mexico page.
+crons.cron(
+  "mexico_edge_polymarket_clob_every_minute",
+  "* * * * *",
+  internal.mexicoPolymarketLive.pollScheduledLiveMarket,
+  { stationIcao: "MMMX" },
+);
+
+// Detailed quote-change events are intentionally bounded to fourteen days.
+crons.cron(
+  "mexico_edge_polymarket_quote_retention_daily",
+  "17 8 * * *",
+  internal.mexicoPolymarketLive.runQuoteEventRetention,
+  { stationIcao: "MMMX" },
+);
+
 // This mutation checks the exact CAPMA access and retention approval flags
-// before it can queue either one-minute TDZ image worker.
+// before it can queue either one-minute TDZ image worker. TDZ 05 is queued
+// first and TDZ 23 is delayed by 30 seconds so the two protected requests do
+// not compete for the same legacy CAPMA host connection.
 crons.cron(
   "mexico_capma_tdz_images_every_minute",
   "* * * * *",
@@ -211,6 +242,25 @@ crons.cron(
   "* * * * *",
   api.mexicoRelayRace.pollCapmaNoaaRelayRace,
   { stationIcao: "MMMX" },
+);
+
+// Two non-overlapping bounded sessions cover the broad late-hour routine
+// observation window at five-second target receive resolution. The action makes no
+// CAPMA request unless the existing base approval, the dedicated high-rate
+// approval, and the operational kill switch are all the exact string "true".
+// It rechecks all three before every request and storage step.
+crons.cron(
+  "mexico_edge_capma_routine_watch_minute_40",
+  "40 * * * *",
+  internal.mexicoEdgeWatch.watchRoutineMetarWindow,
+  { stationIcao: "MMMX", intervalMs: 5000, durationMs: 525000 },
+);
+
+crons.cron(
+  "mexico_edge_capma_routine_watch_minute_49",
+  "49 * * * *",
+  internal.mexicoEdgeWatch.watchRoutineMetarWindow,
+  { stationIcao: "MMMX", intervalMs: 5000, durationMs: 525000 },
 );
 
 // Runs every minute so the public MeteoAM Deda LIMC endpoint is sampled

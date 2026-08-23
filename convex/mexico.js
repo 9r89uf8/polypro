@@ -6,6 +6,10 @@ import {
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import {
+  capmaAftnAccessApproved,
+  capmaTdzApprovalState,
+} from "./mexicoCapmaApprovals.js";
+import {
   buildCapmaMetarSimilarity,
   CAPMA_METAR_WINDOW_MS,
   resolveCapmaComparisonAnchor,
@@ -20,6 +24,11 @@ const AWC_TAF_URL =
 const USER_AGENT =
   "polypro-mmmx-weather/1.0 (MMMX weather dashboard; server-side collector)";
 const AWC_COOLDOWN_MS = 60_000;
+// NOAA's text file has no documented provider rate rule, unlike AWC's shared
+// 60-second discipline. Its claim cooldown sits below the one-minute race
+// spacing so scheduling jitter cannot skip alternate slots as "cooldown";
+// the launch cadence (one per minute) still bounds the actual request rate.
+const NOAA_TEXT_COOLDOWN_MS = 45_000;
 
 const mexicoDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: MEXICO_TIMEZONE,
@@ -109,10 +118,6 @@ const NOAA_TEXT_METAR_URL =
   "https://tgftp.nws.noaa.gov/data/observations/metar/stations/MMMX.TXT";
 export const NOAA_TEXT_SOURCE = "noaa_text_metar";
 export const CAPMA_AFTN_SOURCE = "capma_aftn_metar";
-
-function capmaAftnAccessApproved() {
-  return process.env.SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED === "true";
-}
 
 // Collapse whitespace and make the leading report-type token explicit so the
 // same official report hashes to the same identity whether it arrives from
@@ -512,11 +517,42 @@ export const getCollectorStatus = queryGeneric({
   },
 });
 
+export function decideCollectorAttemptClaim({
+  existing,
+  now,
+  cooldownMs,
+  leaseMs = cooldownMs,
+}) {
+  if (!existing || !Number.isFinite(existing.lastAttemptAt)) {
+    return { claimed: true };
+  }
+  const effectiveCooldownMs = Math.max(0, cooldownMs);
+  const effectiveLeaseMs = Math.max(effectiveCooldownMs, leaseMs);
+  const activeWindowMs =
+    existing.status === "fetching" ? effectiveLeaseMs : effectiveCooldownMs;
+  if (now - existing.lastAttemptAt >= activeWindowMs) {
+    return { claimed: true };
+  }
+  return {
+    claimed: false,
+    retryAfterAt: existing.lastAttemptAt + activeWindowMs,
+    reason: existing.status === "fetching" ? "in_flight" : "cooldown",
+  };
+}
+
+export function collectorFinishMatchesAttempt(existing, attemptAt) {
+  return (
+    attemptAt === undefined ||
+    Boolean(existing && existing.lastAttemptAt === attemptAt)
+  );
+}
+
 export const claimCollectorAttempt = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
     source: v.string(),
     cooldownMs: v.number(),
+    leaseMs: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -526,15 +562,14 @@ export const claimCollectorAttempt = internalMutationGeneric({
         query.eq("stationIcao", args.stationIcao).eq("source", args.source),
       )
       .first();
-    if (
-      existing &&
-      Number.isFinite(existing.lastAttemptAt) &&
-      now - existing.lastAttemptAt < args.cooldownMs
-    ) {
-      return {
-        claimed: false,
-        retryAfterAt: existing.lastAttemptAt + args.cooldownMs,
-      };
+    const decision = decideCollectorAttemptClaim({
+      existing,
+      now,
+      cooldownMs: args.cooldownMs,
+      leaseMs: args.leaseMs,
+    });
+    if (!decision.claimed) {
+      return decision;
     }
     const value = {
       stationIcao: args.stationIcao,
@@ -573,6 +608,7 @@ export const finishCollectorAttempt = internalMutationGeneric({
     lastModified: v.optional(v.string()),
     cacheControl: v.optional(v.string()),
     rowCount: v.optional(v.number()),
+    attemptAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -581,6 +617,13 @@ export const finishCollectorAttempt = internalMutationGeneric({
         query.eq("stationIcao", args.stationIcao).eq("source", args.source),
       )
       .first();
+    if (!collectorFinishMatchesAttempt(existing, args.attemptAt)) {
+      return {
+        ok: false,
+        stale: true,
+        activeAttemptAt: existing?.lastAttemptAt,
+      };
+    }
     const now = Date.now();
     const patch = {
       stationIcao: args.stationIcao,
@@ -604,6 +647,12 @@ export const finishCollectorAttempt = internalMutationGeneric({
         : {}),
       ...(args.rowCount !== undefined ? { rowCount: args.rowCount } : {}),
     };
+    if (args.status === "error" && args.lastError) {
+      patch.recentErrors = [
+        ...(existing?.recentErrors ?? []),
+        { at: now, message: args.lastError.slice(0, 200) },
+      ].slice(-20);
+    }
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {
@@ -996,7 +1045,7 @@ export const pollNoaaTextMetar = actionGeneric({
     const claim = await ctx.runMutation(internal.mexico.claimCollectorAttempt, {
       stationIcao,
       source: NOAA_TEXT_SOURCE,
-      cooldownMs: AWC_COOLDOWN_MS,
+      cooldownMs: NOAA_TEXT_COOLDOWN_MS,
     });
     if (!claim.claimed) {
       return { status: "cooldown", retryAfterAt: claim.retryAfterAt };
@@ -1453,16 +1502,12 @@ export const getDayDashboard = queryGeneric({
       }) ??
       null;
 
-    const capmaAccessApproved =
-      process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_ACCESS_APPROVED === "true";
-    const capmaRetentionApproved =
-      process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_RETENTION_APPROVED === "true";
-    const capmaRepublicationApproved =
-      process.env.SENEAM_CAPMA_MMMX_TDZ_DATA_REPUBLICATION_APPROVED === "true";
-    const capmaVisible =
-      capmaAccessApproved &&
-      capmaRetentionApproved &&
-      capmaRepublicationApproved;
+    const {
+      accessApproved: capmaAccessApproved,
+      retentionApproved: capmaRetentionApproved,
+      republicationApproved: capmaRepublicationApproved,
+      publicationApproved: capmaVisible,
+    } = capmaTdzApprovalState();
     const capmaRows = capmaVisible
       ? await ctx.db
           .query("mexicoCapmaTdzObservations")

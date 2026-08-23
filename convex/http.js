@@ -1,15 +1,12 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { capmaTdzApprovalState } from "./mexicoCapmaApprovals.js";
 
 const http = httpRouter();
 
 function capmaPublicImageApproved() {
-    return (
-        process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_ACCESS_APPROVED === "true" &&
-        process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_RETENTION_APPROVED === "true" &&
-        process.env.SENEAM_CAPMA_MMMX_TDZ_DATA_REPUBLICATION_APPROVED === "true"
-    );
+    return capmaTdzApprovalState().publicationApproved;
 }
 
 http.route({

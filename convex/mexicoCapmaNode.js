@@ -5,7 +5,9 @@ import { internalActionGeneric } from "convex/server";
 import { v } from "convex/values";
 import jpeg from "jpeg-js";
 import { api, internal } from "./_generated/api.js";
+import { capmaTdzApprovalState } from "./mexicoCapmaApprovals.js";
 import { extractCapmaDisplayFromPixels } from "./mexicoCapmaOcr.js";
+import { fetchCapmaFreshWithRetries } from "../server/mexicoCapmaTransport.js";
 
 const STATION_ICAO = "MMMX";
 const SOURCE_BY_TDZ = {
@@ -13,12 +15,37 @@ const SOURCE_BY_TDZ = {
     source: "capma_tdz05",
     url: "http://capma.mx/banco/pista05.jpg",
   },
-  "23": {
+  23: {
     source: "capma_tdz23",
     url: "http://capma.mx/banco/pista23.JPG",
   },
 };
-const COOLDOWN_MS = 60_000;
+// The scheduled cooldown is deliberately below the one-minute cron spacing.
+// A 60s cooldown raced the 60s cron on scheduling jitter: whenever a cycle's
+// claim landed a few hundred milliseconds earlier than the previous one, the
+// whole cycle was skipped as "cooldown", which silently halved the stored
+// frame cadence to ~2 minutes for months. Actual request rate is still
+// governed by the cron (one cycle per minute); the cooldown only suppresses
+// duplicate concurrent runs. Manual refreshes keep the stricter spacing.
+const SCHEDULED_COOLDOWN_MS = 45_000;
+const MANUAL_COOLDOWN_MS = 60_000;
+// A fetching row holds a longer lease than either launch cooldown. This keeps
+// a delayed worker from overlapping the next minute, while successful workers
+// release the lease as soon as they finish by changing the row out of
+// `fetching`. Attempt-aware finishes prevent an expired worker from replacing
+// the health state of a newer claim.
+const ATTEMPT_LEASE_MS = 75_000;
+// Retained successful-fetch history for these JPEGs is bimodal: median 0.27s
+// at ~600 KB/s, but with a slow mode down to a few KB/s where a ~160 KB body
+// legitimately takes tens of seconds (p95 9.5s, p99 27.5s, max 84s before an
+// application timeout existed). Production also showed Convex-path connect
+// failures while Vercel egress remained reachable. Prefer the configured
+// alternate egress, then spend any remaining cycle budget on one patient
+// direct connection. The shared 55s wall-clock budget includes both paths and
+// leaves time for JPEG validation/OCR/storage before the next minute claim.
+const ATTEMPT_TIMEOUTS_MS = [50_000];
+const RELAY_TIMEOUT_MS = 43_000;
+const TOTAL_FETCH_BUDGET_MS = 55_000;
 
 function roundToTenth(value) {
   return Math.round(value * 10) / 10;
@@ -28,16 +55,36 @@ function toFahrenheit(celsius) {
   return roundToTenth((celsius * 9) / 5 + 32);
 }
 
+function extendedFieldEntries(extended) {
+  if (!extended) {
+    return {};
+  }
+  const entries = {};
+  const roundConfidence = (value) => roundToTenth(value * 100) / 100;
+  for (const [valueKey, confidenceKey] of [
+    ["dewpointC", "dewpointConfidence"],
+    ["humidityPercent", "humidityConfidence"],
+    ["stationPressureHpa", "stationPressureConfidence"],
+    ["qnhInHg", "qnhConfidence"],
+    ["twoMinuteDewpointC", "twoMinuteDewpointConfidence"],
+  ]) {
+    if (
+      Number.isFinite(extended[valueKey]) &&
+      Number.isFinite(extended[confidenceKey])
+    ) {
+      entries[valueKey] = extended[valueKey];
+      entries[confidenceKey] = roundConfidence(extended[confidenceKey]);
+    }
+  }
+  return entries;
+}
+
 function accessApproved() {
-  return (
-    process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_ACCESS_APPROVED === "true"
-  );
+  return capmaTdzApprovalState().accessApproved;
 }
 
 function retentionApproved() {
-  return (
-    process.env.SENEAM_CAPMA_MMMX_TDZ_IMAGES_RETENTION_APPROVED === "true"
-  );
+  return capmaTdzApprovalState().retentionApproved;
 }
 
 function assertGates(stage) {
@@ -45,7 +92,9 @@ function assertGates(stage) {
     throw new Error(`CAPMA image access approval is required before ${stage}.`);
   }
   if (!retentionApproved()) {
-    throw new Error(`CAPMA image retention approval is required before ${stage}.`);
+    throw new Error(
+      `CAPMA image retention approval is required before ${stage}.`,
+    );
   }
 }
 
@@ -68,7 +117,9 @@ export const collectCapmaImage = internalActionGeneric({
     const claim = await ctx.runMutation(internal.mexico.claimCollectorAttempt, {
       stationIcao: STATION_ICAO,
       source: config.source,
-      cooldownMs: COOLDOWN_MS,
+      cooldownMs:
+        args.trigger === "manual" ? MANUAL_COOLDOWN_MS : SCHEDULED_COOLDOWN_MS,
+      leaseMs: ATTEMPT_LEASE_MS,
     });
     if (!claim.claimed) {
       return { status: "cooldown", retryAfterAt: claim.retryAfterAt };
@@ -97,11 +148,18 @@ export const collectCapmaImage = internalActionGeneric({
       if (latestImageState && previousStatus?.lastModified) {
         headers["If-Modified-Since"] = previousStatus.lastModified;
       }
-      const response = await fetch(config.url, {
-        cache: "no-store",
-        headers,
-        redirect: "manual",
-      });
+      const { response, transport } = await fetchCapmaFreshWithRetries(
+        config.url,
+        {
+          headers,
+          timeoutsMs: ATTEMPT_TIMEOUTS_MS,
+          label: `CAPMA TDZ ${args.tdz}`,
+          allowRelayFallback: true,
+          preferRelay: true,
+          relayTimeoutMs: RELAY_TIMEOUT_MS,
+          totalTimeoutMs: TOTAL_FETCH_BUDGET_MS,
+        },
+      );
       const fetchCompletedAt = Date.now();
       assertGates("response handling");
       if (response.status === 304) {
@@ -112,12 +170,14 @@ export const collectCapmaImage = internalActionGeneric({
           lastSuccessAt: previousStatus?.lastSuccessAt ?? fetchCompletedAt,
           lastError: "",
           httpStatus: response.status,
-          etag: response.headers.get("etag") ?? previousStatus?.etag ?? undefined,
+          etag:
+            response.headers.get("etag") ?? previousStatus?.etag ?? undefined,
           lastModified:
             response.headers.get("last-modified") ??
             previousStatus?.lastModified ??
             undefined,
           rowCount: previousStatus?.rowCount,
+          attemptAt: claim.attemptAt,
         });
         return { status: "not_modified", tdz: args.tdz };
       }
@@ -127,9 +187,8 @@ export const collectCapmaImage = internalActionGeneric({
         );
       }
       if (!response.ok) {
-        const text = await response.text();
         throw new Error(
-          `CAPMA TDZ ${args.tdz} request failed (${response.status}): ${text.slice(0, 160)}`,
+          `CAPMA TDZ ${args.tdz} request failed (${response.status}): ${response.text().slice(0, 160)}`,
         );
       }
       const contentType = response.headers.get("content-type") ?? "";
@@ -138,7 +197,7 @@ export const collectCapmaImage = internalActionGeneric({
           `CAPMA TDZ ${args.tdz} returned unexpected content type ${contentType}.`,
         );
       }
-      const body = Buffer.from(await response.arrayBuffer());
+      const body = response.bodyBuffer;
       assertGates("JPEG validation");
       if (body.length < 50_000 || body.length > 1_000_000) {
         throw new Error(
@@ -196,6 +255,8 @@ export const collectCapmaImage = internalActionGeneric({
             currentTempF: toFahrenheit(extracted.currentTempC),
             twoMinuteTempC: extracted.twoMinuteTempC,
             twoMinuteTempF: toFahrenheit(extracted.twoMinuteTempC),
+            ...extendedFieldEntries(extracted.extended),
+            fetchTransport: transport,
             sourceUrl: config.url,
             rawHash,
             ...(response.headers.get("etag")
@@ -229,6 +290,7 @@ export const collectCapmaImage = internalActionGeneric({
         lastModified: relayLastModified ?? undefined,
         cacheControl: response.headers.get("cache-control") ?? undefined,
         rowCount: 1,
+        attemptAt: claim.attemptAt,
       });
       return {
         status: "ok",
@@ -239,6 +301,9 @@ export const collectCapmaImage = internalActionGeneric({
         screenTimeUtc: extracted.screenTimeUtc,
         currentTempC: extracted.currentTempC,
         twoMinuteTempC: extracted.twoMinuteTempC,
+        dewpointC: extracted.extended?.dewpointC ?? null,
+        humidityPercent: extracted.extended?.humidityPercent ?? null,
+        stationPressureHpa: extracted.extended?.stationPressureHpa ?? null,
         ocrConfidence: extracted.ocrConfidence,
       };
     } catch (error) {
@@ -268,6 +333,7 @@ export const collectCapmaImage = internalActionGeneric({
             ? "error"
             : "approval_required",
         lastError: message,
+        attemptAt: claim.attemptAt,
       });
       throw new Error(message);
     }

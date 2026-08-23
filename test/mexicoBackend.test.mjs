@@ -10,6 +10,8 @@ import { resolveConvexSiteOrigin } from "../app/mexico/convex-site.js";
 
 import {
   buildMetarUpdatePatch,
+  collectorFinishMatchesAttempt,
+  decideCollectorAttemptClaim,
   normalizeAwcMetarItem,
   normalizeTafPeriod,
   optionalFiniteNumber,
@@ -27,10 +29,14 @@ import {
   parseSmnHourlyGzipStream,
   parseSmnLocalHour,
 } from "../convex/mexicoForecastNode.js";
-import { extractCapmaDisplayFromPixels } from "../convex/mexicoCapmaOcr.js";
+import {
+  extractCapmaDisplayFromPixels,
+  resolveCapmaScreenTimestamp,
+} from "../convex/mexicoCapmaOcr.js";
 import {
   capmaStorageDigestMatches,
   decideCapmaLatestImageUpdate,
+  selectCapmaHttpImageRow,
 } from "../convex/mexicoCapma.js";
 import {
   buildCapmaMetarSimilarity,
@@ -65,6 +71,44 @@ test("CAPMA image URLs stay on the same hosted Convex deployment as data", () =>
     resolveConvexSiteOrigin("http://unsafe.example.com", "javascript:alert(1)"),
     null,
   );
+});
+
+test("collector claims keep active leases and reject stale finishes", () => {
+  const active = { status: "fetching", lastAttemptAt: 1_000 };
+  assert.deepEqual(
+    decideCollectorAttemptClaim({
+      existing: active,
+      now: 61_000,
+      cooldownMs: 45_000,
+      leaseMs: 75_000,
+    }),
+    {
+      claimed: false,
+      retryAfterAt: 76_000,
+      reason: "in_flight",
+    },
+  );
+  assert.deepEqual(
+    decideCollectorAttemptClaim({
+      existing: { ...active, status: "ok" },
+      now: 61_000,
+      cooldownMs: 45_000,
+      leaseMs: 75_000,
+    }),
+    { claimed: true },
+  );
+  assert.deepEqual(
+    decideCollectorAttemptClaim({
+      existing: active,
+      now: 76_000,
+      cooldownMs: 45_000,
+      leaseMs: 75_000,
+    }),
+    { claimed: true },
+  );
+  assert.equal(collectorFinishMatchesAttempt(active, 1_000), true);
+  assert.equal(collectorFinishMatchesAttempt(active, 2_000), false);
+  assert.equal(collectorFinishMatchesAttempt(active, undefined), true);
 });
 
 function capmaSimilarityRow({
@@ -515,6 +559,30 @@ test("CAPMA OCR matches all manually transcribed image captures when fixtures ex
   }
 });
 
+test("CAPMA timestamp OCR resolves an ambiguous glyph only within the plausible fetch window", () => {
+  const glyph = (expectedDigit, overrides = {}) =>
+    Array.from({ length: 10 }, (_, digit) => ({
+      digit,
+      score: overrides[digit] ?? (digit === expectedDigit ? 0.9 : 0.1),
+    })).sort((left, right) => right.score - left.score);
+  const dateGlyphs = [..."23082026"].map((digit) => glyph(Number(digit)));
+  const timeGlyphs = [..."022543"].map((digit, index) =>
+    index === 0
+      ? glyph(0, { 9: 0.734505, 0: 0.728614, 8: 0.706209, 6: 0.70073 })
+      : glyph(Number(digit)),
+  );
+
+  const result = resolveCapmaScreenTimestamp({
+    dateGlyphs,
+    timeGlyphs,
+    fetchedAt: Date.parse("2026-08-23T02:26:42Z"),
+  });
+  assert.equal(result.dateText, "23082026");
+  assert.equal(result.timeText, "022543");
+  assert.equal(result.screenTimeUtc, Date.parse("2026-08-23T02:25:43Z"));
+  assert.ok(result.confidence > 0.72);
+});
+
 test("CAPMA latest-image selection is monotonic and deterministic", () => {
   const incoming = { rawHash: "incoming", screenTimeUtc: 200 };
 
@@ -578,6 +646,20 @@ test("CAPMA latest-image selection is monotonic and deterministic", () => {
   );
 });
 
+test("CAPMA HTTP image versions always select the current singleton", () => {
+  const current = { rawHash: "current-hash", storageId: "current-storage" };
+
+  assert.equal(selectCapmaHttpImageRow(null, "old-hash"), null);
+  assert.deepEqual(selectCapmaHttpImageRow(current, "current-hash"), {
+    row: current,
+    versionMatched: true,
+  });
+  assert.deepEqual(selectCapmaHttpImageRow(current, "old-hash"), {
+    row: current,
+    versionMatched: false,
+  });
+});
+
 test("CAPMA storage digest validation accepts Convex hex and base64 representations", () => {
   const digest = createHash("sha256").update("CAPMA digest fixture").digest();
   const rawHash = digest.toString("hex");
@@ -612,19 +694,34 @@ test("CAPMA storage digest validation accepts Convex hex and base64 representati
 });
 
 test("CAPMA approval checks bracket queueing, requests, decoding, storage, and reads", async () => {
-  const [queueSource, workerSource, dashboardSource, schemaSource, httpSource] =
-    await Promise.all([
-      readFile(new URL("../convex/mexicoCapma.js", import.meta.url), "utf8"),
-      readFile(
-        new URL("../convex/mexicoCapmaNode.js", import.meta.url),
-        "utf8",
-      ),
-      readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
-      readFile(new URL("../convex/schema.js", import.meta.url), "utf8"),
-      readFile(new URL("../convex/http.js", import.meta.url), "utf8"),
-    ]);
+  const [
+    queueSource,
+    workerSource,
+    ocrSource,
+    dashboardSource,
+    schemaSource,
+    httpSource,
+    approvalSource,
+  ] = await Promise.all([
+    readFile(new URL("../convex/mexicoCapma.js", import.meta.url), "utf8"),
+    readFile(new URL("../convex/mexicoCapmaNode.js", import.meta.url), "utf8"),
+    readFile(new URL("../convex/mexicoCapmaOcr.js", import.meta.url), "utf8"),
+    readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
+    readFile(new URL("../convex/schema.js", import.meta.url), "utf8"),
+    readFile(new URL("../convex/http.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../convex/mexicoCapmaApprovals.js", import.meta.url),
+      "utf8",
+    ),
+  ]);
 
-  assert.match(queueSource, /=== "true"/);
+  assert.match(queueSource, /capmaTdzApprovalState/);
+  assert.match(queueSource, /const TDZ23_STAGGER_MS = 30_000;/);
+  assert.match(
+    queueSource,
+    /runAfter\(\s*0,[\s\S]*?tdz: "05"[\s\S]*?runAfter\(\s*TDZ23_STAGGER_MS,[\s\S]*?tdz: "23"/,
+  );
+  assert.match(approvalSource, /return value === "true"/);
   assert.match(
     queueSource,
     /if \(!gates\.accessApproved \|\| !gates\.retentionApproved\)[\s\S]*?ctx\.scheduler\.runAfter/,
@@ -637,9 +734,24 @@ test("CAPMA approval checks bracket queueing, requests, decoding, storage, and r
   const requestGate = workerSource.indexOf(
     'assertGates("the external request")',
   );
-  const fetchCall = workerSource.indexOf("const response = await fetch");
+  const fetchCall = workerSource.indexOf(
+    "const { response, transport } = await fetchCapmaFreshWithRetries(",
+  );
+  // The legacy host gets a fresh connection and one shared wall-clock budget
+  // across the preferred alternate egress and direct fallback.
+  assert.match(workerSource, /const ATTEMPT_TIMEOUTS_MS = \[50_000\];/);
+  assert.match(workerSource, /const ATTEMPT_LEASE_MS = 75_000;/);
+  assert.match(workerSource, /const TOTAL_FETCH_BUDGET_MS = 55_000;/);
+  assert.match(workerSource, /preferRelay: true/);
+  assert.match(workerSource, /attemptAt: claim\.attemptAt/);
+  assert.match(workerSource, /label: `CAPMA TDZ \$\{args\.tdz\}`/);
+  assert.match(
+    ocrSource,
+    /\["dark_on_light", darkText\][\s\S]*?\["yellow_on_dark", yellowText\]/,
+  );
+  assert.match(ocrSource, /resolveCapmaScreenTimestamp/);
   const responseGate = workerSource.indexOf('assertGates("response handling")');
-  const bodyRead = workerSource.indexOf("response.arrayBuffer()");
+  const bodyRead = workerSource.indexOf("const body = response.bodyBuffer");
   const decodeGate = workerSource.indexOf('assertGates("JPEG validation")');
   const imageStoreGate = workerSource.indexOf(
     'assertGates("protected raw JPEG storage")',
@@ -693,7 +805,9 @@ test("CAPMA approval checks bracket queueing, requests, decoding, storage, and r
     /currentStorageMetadata\.sha256 === currentLatest\.storageSha256/,
   );
   assert.equal(
-    queueSource.match(/metadata\.sha256 !== row\.storageSha256/g)?.length,
+    queueSource.match(
+      /metadata\.sha256 !== (?:row|selectedRow)\.storageSha256/g,
+    )?.length,
     2,
   );
   const observationStore = queueSource.indexOf(
@@ -711,14 +825,35 @@ test("CAPMA approval checks bracket queueing, requests, decoding, storage, and r
     observationStore < latestDecision && latestDecision < staleUploadDelete,
     "historical OCR must be retained before a stale latest-image upload is discarded",
   );
+  const replacementBranch = queueSource.slice(
+    queueSource.indexOf("} else if (currentLatest) {"),
+    queueSource.indexOf(
+      "} else {",
+      queueSource.indexOf("} else if (currentLatest) {"),
+    ),
+  );
   assert.match(
-    queueSource,
-    /ctx\.db\.patch\(currentLatest\._id,[\s\S]*?storageId: args\.latestImage\.storageId,[\s\S]*?ctx\.storage\.delete\(currentLatest\.storageId\)/,
+    replacementBranch,
+    /ctx\.db\.patch\(currentLatest\._id,[\s\S]*?storageId: args\.latestImage\.storageId/,
+  );
+  assert.match(
+    replacementBranch,
+    /ctx\.scheduler\.runAfter\(\s*REPLACED_IMAGE_DELETE_GRACE_MS,\s*internal\.mexicoCapma\.deleteUploadIfUnreferenced,\s*\{ storageId: currentLatest\.storageId \}/,
+  );
+  assert.match(queueSource, /const REPLACED_IMAGE_DELETE_GRACE_MS = 120_000;/);
+  assert.doesNotMatch(
+    replacementBranch,
+    /ctx\.storage\.delete\(currentLatest\.storageId\)/,
   );
   assert.match(
     queueSource,
     /deleteUploadIfUnreferenced[\s\S]*?withIndex\("by_storage_id"[\s\S]*?if \(reference\)[\s\S]*?ctx\.storage\.delete\(args\.storageId\)/,
   );
+  assert.match(
+    queueSource,
+    /const selection = selectCapmaHttpImageRow\(row, args\.rawHash\);/,
+  );
+  assert.doesNotMatch(queueSource, /row\.rawHash !== args\.rawHash/);
   assert.match(
     workerSource,
     /if \(latestImageState && previousStatus\?\.etag\)/,
@@ -727,10 +862,12 @@ test("CAPMA approval checks bracket queueing, requests, decoding, storage, and r
     workerSource,
     /if \(latestImageState && previousStatus\?\.lastModified\)/,
   );
+  // node:http never follows redirects; the worker still refuses 3xx.
   assert.match(
     workerSource,
-    /fetch\(config\.url, \{[\s\S]*?redirect: "manual"/,
+    /fetchCapmaFreshWithRetries\(\s*config\.url,\s*\{[\s\S]*?timeoutsMs: ATTEMPT_TIMEOUTS_MS/,
   );
+  assert.match(workerSource, /rejected redirect status \$\{response\.status\}/);
   const notModifiedResponse = workerSource.indexOf(
     "if (response.status === 304)",
   );
@@ -757,10 +894,7 @@ test("CAPMA approval checks bracket queueing, requests, decoding, storage, and r
     /\.index\("by_station_screen_time", \["stationIcao", "screenTimeUtc"\]\)/,
   );
 
-  assert.match(
-    dashboardSource,
-    /capmaVisible\s*=\s*capmaAccessApproved\s*&&\s*capmaRetentionApproved\s*&&\s*capmaRepublicationApproved/,
-  );
+  assert.match(dashboardSource, /publicationApproved: capmaVisible/);
   assert.match(dashboardSource, /const capmaRows = capmaVisible\s*\?/);
   assert.match(
     dashboardSource,
@@ -835,7 +969,7 @@ test("Mexico chart has one METAR/SPECI series and one CAPMA live series", async 
   assert.match(pageSource, /━ CAPMA live temperature/);
 });
 
-test("Mexico collectors use canonical status keys and one-minute minimum cooldowns", async () => {
+test("Mexico collectors use canonical status keys and beat-safe claim cooldowns", async () => {
   const [awcSource, smnSource, capmaSource, schemaSource] = await Promise.all([
     readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
     readFile(
@@ -846,8 +980,25 @@ test("Mexico collectors use canonical status keys and one-minute minimum cooldow
     readFile(new URL("../convex/schema.js", import.meta.url), "utf8"),
   ]);
 
+  // AWC keeps its documented shared 60-second request discipline. Claim
+  // cooldowns for the one-minute CAPMA/NOAA collectors sit BELOW the cron
+  // spacing: a cooldown equal to the cron interval races scheduling jitter
+  // and silently skips alternate cycles as "cooldown" (observed as a ~2-min
+  // stored TDZ cadence for months).
   assert.match(awcSource, /const AWC_COOLDOWN_MS = 60_000;/);
-  assert.match(capmaSource, /const COOLDOWN_MS = 60_000;/);
+  assert.match(awcSource, /const NOAA_TEXT_COOLDOWN_MS = 45_000;/);
+  assert.match(
+    awcSource,
+    /source: NOAA_TEXT_SOURCE,\s*\n\s*cooldownMs: NOAA_TEXT_COOLDOWN_MS,/,
+  );
+  assert.match(capmaSource, /const SCHEDULED_COOLDOWN_MS = 45_000;/);
+  assert.match(capmaSource, /const MANUAL_COOLDOWN_MS = 60_000;/);
+  assert.match(capmaSource, /const ATTEMPT_LEASE_MS = 75_000;/);
+  assert.match(
+    capmaSource,
+    /args\.trigger === "manual" \? MANUAL_COOLDOWN_MS : SCHEDULED_COOLDOWN_MS/,
+  );
+  assert.match(capmaSource, /leaseMs: ATTEMPT_LEASE_MS/);
   assert.match(smnSource, /const SOURCE = "smn_municipal_hourly";/);
   assert.doesNotMatch(smnSource, /const SOURCE = "smn_hourly";/);
 
@@ -980,21 +1131,47 @@ test("relay obs-time resolution handles midnight and month rollover", () => {
 });
 
 test("CAPMA AFTN relay collector fails closed behind its dedicated gate", async () => {
-  const [aftnSource, mexicoSource, cronsSource] = await Promise.all([
-    readFile(new URL("../convex/mexicoCapmaAftn.js", import.meta.url), "utf8"),
-    readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
-    readFile(new URL("../convex/crons.js", import.meta.url), "utf8"),
-  ]);
+  const [aftnSource, mexicoSource, cronsSource, approvalSource] =
+    await Promise.all([
+      readFile(
+        new URL("../convex/mexicoCapmaAftn.js", import.meta.url),
+        "utf8",
+      ),
+      readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
+      readFile(new URL("../convex/crons.js", import.meta.url), "utf8"),
+      readFile(
+        new URL("../convex/mexicoCapmaApprovals.js", import.meta.url),
+        "utf8",
+      ),
+    ]);
+  assert.match(aftnSource, /capmaAftnAccessApproved/);
+  assert.match(aftnSource, /^"use node";/);
+  assert.match(aftnSource, /const DIRECT_TIMEOUT_MS = 50_000;/);
+  assert.match(aftnSource, /const ATTEMPT_LEASE_MS = 75_000;/);
+  assert.match(aftnSource, /const TOTAL_FETCH_BUDGET_MS = 55_000;/);
+  // Fresh-connection transport with one relay/direct wall-clock budget.
+  assert.match(aftnSource, /fetchCapmaFreshWithRetries\(CAPMA_AFTN_URL/);
+  assert.match(aftnSource, /timeoutsMs: \[DIRECT_TIMEOUT_MS\]/);
+  assert.match(aftnSource, /preferRelay: true/);
+  assert.match(aftnSource, /totalTimeoutMs: TOTAL_FETCH_BUDGET_MS/);
+  assert.match(aftnSource, /attemptAt: claim\.attemptAt/);
+  assert.match(aftnSource, /label: "CAPMA AFTN relay"/);
+  assert.match(approvalSource, /SENEAM_MMMX_AFTN_ACCESS_APPROVED/);
   assert.match(
-    aftnSource,
-    /SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED === "true"/,
+    approvalSource,
+    /SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED/,
   );
   const gateBeforeFetch =
-    aftnSource.indexOf("aftnAccessApproved()") < aftnSource.indexOf("fetch(");
+    aftnSource.indexOf("capmaAftnAccessApproved()") <
+    aftnSource.indexOf("fetchCapmaFreshWithRetries(CAPMA_AFTN_URL");
   assert.ok(gateBeforeFetch);
   assert.match(
-    aftnSource.slice(aftnSource.indexOf("const response = await fetch")),
-    /if \(!aftnAccessApproved\(\)\)/,
+    aftnSource.slice(
+      aftnSource.indexOf(
+        "const { response } = await fetchCapmaFreshWithRetries(",
+      ),
+    ),
+    /if \(!capmaAftnAccessApproved\(\)\)/,
   );
   assert.match(
     mexicoSource,
@@ -1004,8 +1181,10 @@ test("CAPMA AFTN relay collector fails closed behind its dedicated gate", async 
     mexicoSource,
     /CAPMA AFTN approval was removed before official-report storage/,
   );
-  assert.match(aftnSource, /redirect: "manual"/);
-  assert.match(aftnSource, /const COOLDOWN_MS = 60_000;/);
+  // node:http never follows redirects; the caller still refuses 3xx.
+  assert.match(aftnSource, /refusing to follow/);
+  // Below the one-minute race spacing so jitter cannot skip alternate slots.
+  assert.match(aftnSource, /const COOLDOWN_MS = 45_000;/);
   assert.match(cronsSource, /mexico_capma_noaa_relay_race_every_minute/);
   assert.doesNotMatch(cronsSource, /mexico_noaa_text_metar_every_minute/);
   assert.doesNotMatch(cronsSource, /mexico_capma_aftn_reports_every_minute/);
