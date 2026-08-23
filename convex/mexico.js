@@ -547,6 +547,15 @@ export function collectorFinishMatchesAttempt(existing, attemptAt) {
   );
 }
 
+async function currentCollectorStatus(ctx, stationIcao, source) {
+  return await ctx.db
+    .query("mexicoCollectorStatus")
+    .withIndex("by_station_source", (query) =>
+      query.eq("stationIcao", stationIcao).eq("source", source),
+    )
+    .first();
+}
+
 export const claimCollectorAttempt = internalMutationGeneric({
   args: {
     stationIcao: v.string(),
@@ -1197,8 +1206,21 @@ const tafCaptureValidator = v.object({
 });
 
 export const upsertTafCapture = internalMutationGeneric({
-  args: { capture: tafCaptureValidator },
+  args: { capture: tafCaptureValidator, attemptAt: v.number() },
   handler: async (ctx, args) => {
+    const collectorStatus = await currentCollectorStatus(
+      ctx,
+      args.capture.stationIcao,
+      "awc_taf",
+    );
+    if (!collectorFinishMatchesAttempt(collectorStatus, args.attemptAt)) {
+      return {
+        inserted: false,
+        id: null,
+        stale: true,
+        activeAttemptAt: collectorStatus?.lastAttemptAt,
+      };
+    }
     const existing = await ctx.db
       .query("mexicoTafForecasts")
       .withIndex("by_station_taf_key", (query) =>
@@ -1284,6 +1306,7 @@ export const pollAwcTaf = actionGeneric({
       const bulletinTimeUtc = parseEpoch(item?.bulletinTime);
       const awcDatabaseTimeUtc = parseEpoch(item?.dbPopTime);
       const result = await ctx.runMutation(internal.mexico.upsertTafCapture, {
+        attemptAt: claim.attemptAt,
         capture: {
           stationIcao,
           tafKey: `${stationIcao}:${issueTimeUtc}:${rawHash}`,
@@ -1304,17 +1327,27 @@ export const pollAwcTaf = actionGeneric({
           firstSeenAt: receivedAt,
         },
       });
-      await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
-        stationIcao,
-        source: "awc_taf",
-        status: "ok",
-        lastSuccessAt: receivedAt,
-        lastError: "",
-        httpStatus: response.status,
-        responseBytes: text.length,
-        cacheControl: response.headers.get("cache-control") ?? undefined,
-        rowCount: periods.length,
-      });
+      if (result.stale) {
+        return { status: "superseded" };
+      }
+      const finish = await ctx.runMutation(
+        internal.mexico.finishCollectorAttempt,
+        {
+          attemptAt: claim.attemptAt,
+          stationIcao,
+          source: "awc_taf",
+          status: "ok",
+          lastSuccessAt: receivedAt,
+          lastError: "",
+          httpStatus: response.status,
+          responseBytes: text.length,
+          cacheControl: response.headers.get("cache-control") ?? undefined,
+          rowCount: periods.length,
+        },
+      );
+      if (finish.stale) {
+        return { status: "superseded" };
+      }
       return {
         status: "ok",
         inserted: result.inserted,
@@ -1323,12 +1356,19 @@ export const pollAwcTaf = actionGeneric({
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
-        stationIcao,
-        source: "awc_taf",
-        status: "error",
-        lastError: message,
-      });
+      const finish = await ctx.runMutation(
+        internal.mexico.finishCollectorAttempt,
+        {
+          attemptAt: claim.attemptAt,
+          stationIcao,
+          source: "awc_taf",
+          status: "error",
+          lastError: message,
+        },
+      );
+      if (finish.stale) {
+        return { status: "superseded" };
+      }
       throw new Error(message);
     }
   },
@@ -1357,6 +1397,7 @@ const smnHourlyRowValidator = v.object({
 
 export const storeSmnForecastBatch = internalMutationGeneric({
   args: {
+    attemptAt: v.number(),
     stationIcao: v.string(),
     sourceUrl: v.string(),
     capturedAt: v.number(),
@@ -1370,6 +1411,20 @@ export const storeSmnForecastBatch = internalMutationGeneric({
   },
   handler: async (ctx, args) => {
     assertStation(args.stationIcao);
+    const collectorStatus = await currentCollectorStatus(
+      ctx,
+      args.stationIcao,
+      "smn_municipal_hourly",
+    );
+    if (!collectorFinishMatchesAttempt(collectorStatus, args.attemptAt)) {
+      return {
+        captureId: null,
+        insertedCount: 0,
+        updatedCount: 0,
+        stale: true,
+        activeAttemptAt: collectorStatus?.lastAttemptAt,
+      };
+    }
     if (!args.rows.length || args.rows.length > 240) {
       throw new Error("SMN forecast batch has an unexpected target row count.");
     }

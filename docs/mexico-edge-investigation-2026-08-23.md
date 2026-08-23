@@ -282,3 +282,54 @@ invisible), REST last-trade carries no size, three days, and books deepen
 near settlement. A second nuance for any strategy: buying the newly printed
 degree is a bet the climb STOPS there — on 08-22 the 23 °C bucket's ask fell
 0.19→0.09 after the 23 °C print as the market priced a further rise.
+
+## Next-calendar-day forecast source check
+
+Research window: **2026-08-23T20:45Z–21:15Z**. This check affects forecast
+timing and source labels only; it does not change the TDZ provenance or
+sub-degree conclusions above.
+
+CAPMA is SENEAM's aviation meteorology forecast center, not a separate provider.
+The official MMMX TAF contains `TXnn/DDHHZ` maximum groups and is already
+collected through NOAA Aviation Weather Center's documented API. Fourteen
+consecutive 00Z-cycle samples from August 10–23 had issue times from
+`23:02Z–23:52Z` (`17:02–17:52` Mexico City), 24-hour `DD00/(DD+1)00` validity,
+and a TX group for the upcoming local calendar day. Earlier routine cycles
+usually stop before the following afternoon, so tomorrow's airport maximum is
+normally unavailable until that late-afternoon 00Z cycle.
+
+This is an observed bounded sample, not a promised CAPMA publication window.
+The February 2026 MMMX AIP still describes CAPMA TAF validity as 30 hours while
+all checked operational messages were 24 hours. Consumers must parse each raw
+validity group and target-date TX rather than assume either horizon.
+
+Other CAPMA products do not improve next-day-high coverage. The published ETDS
+schedule contains roughly 11–12-hour takeoff-data forecasts; its evening issue
+reaches the next morning but not the next afternoon. Historical FMMX extreme-
+temperature output carried the issue day's maximum and following morning's
+minimum, and the current legacy FMMX path returned an empty body. No direct
+CAPMA UI scrape, supported API contract, or republication grant was established.
+
+SMN/CONAGUA's already collected `method=3` hourly municipal feed spans multiple
+days, so tomorrow's Venustiano Carranza high is derivable from retained rows.
+The separately documented `method=1` product also returns explicit `tmax/tmin`
+for today plus three days, but it is another product from the same provider,
+not a third independent source. It supplies no reliable issue timestamp. The
+implementation therefore reuses method 3 and its existing immutable snapshot,
+status, attribution and cooldown paths rather than add a redundant collector.
+
+Weather.com/The Weather Company was not added. Its licensed ICAO daily/hourly
+API could be a separately labeled secondary comparator after forecast-specific
+approval and an MMMX-local fixed-vintage backtest, but consumer-site scraping
+is not an authorized production interface and the existing `TWC_MMMX_RES_*`
+flags are reserved for settlement observations.
+
+Primary references:
+
+- SENEAM CAPMA: <https://www.gob.mx/seneam/acciones-y-programas/centro-de-analisis-y-pronosticos-capma>
+- MMMX AIP: <https://aipmexico.seneam.gob.mx/AIP/doc/AD/AD_2/38_MMMX/AD_2-MMMX-2.pdf>
+- AWC TAF API: <https://aviationweather.gov/api/data/taf?ids=MMMX&format=raw>
+- AWC API documentation: <https://connect.aviationweather.gov/data/api/>
+- CAPMA ETDS schedule: <http://capma.mx/vigilancia/itinerarios.php>
+- SMN web-service documentation: <https://smn.conagua.gob.mx/es/web-service-api>
+- SMN municipal forecast page: <https://smn.conagua.gob.mx/es/pronosticos/pronostico-del-tiempo-por-municipios>

@@ -181,10 +181,64 @@ first-seen intervals and honest tie states.
 
 ### 5. Forecast maximum revisions
 
-Keep TAF TX and SMN/CONAGUA municipal guidance separate. For each, show today's
-forecast maximum, prior value, delta, forecast peak time, capture/issue time,
-and the time the maximum last changed. Never relabel the municipal forecast as
-an airport forecast.
+Keep TAF TX and SMN/CONAGUA municipal guidance separate. The page shows both
+the current Mexico City calendar date and the following calendar date. A
+lightweight `mexicoEdge:getForecastDate` query reads only the target date's
+retained forecast inputs and immutable maximum snapshots; it does not duplicate
+the composite dashboard's METAR, CAPMA image, relay, or reaction-history reads.
+
+The tomorrow header counts down to the next `America/Mexico_City` midnight.
+Each provider card separately counts down to its next **scheduled collector
+attempt**: AWC TAF at minutes `1,6,...,56`, and SMN at minute `20`. These are
+cron clocks, not promises that the provider will publish a changed forecast or
+that a network request will occur then. A still-active lease or server cooldown
+can make a scheduled slot a no-op.
+When tomorrow's TAF TX is absent, the card shows an explicitly estimated
+`17:00–18:00` local 00Z-issue window based on the bounded operational sample in
+the [2026-08-23 investigation](./mexico-edge-investigation-2026-08-23.md). It
+switches to `window open` or `passed` without inventing a publication deadline.
+
+For each source, show the target date, current maximum, prior distinct maximum,
+signed delta, forecast peak time, provider issue/update time when supplied,
+current snapshot capture, first application sighting of the current value, last
+data-bearing network fetch, and latest fetch attempt/status. Those clocks are not
+interchangeable: an unchanged TAF can be fetched many times while preserving
+its original issue and first-seen-value times, and SMN does not supply a
+trustworthy issuance timestamp. `mexicoCollectorStatus.lastSuccessAt` supports
+the data-bearing-fetch clock; `lastAttemptAt` and `status` describe the latest
+attempt, including `not_modified`, without presenting an error or empty check as
+new forecast data.
+
+The retained revision rail compresses consecutive equal maxima and marks the
+first capture of each changed value. A transition such as `20 °C → 19 °C`
+therefore retains the first-seen change time even if later fetches repeat
+`19 °C`. Text, arrow, signed delta and time remain visible so color is not the
+only change signal.
+
+Each tomorrow card has its own server-side live fetch action and direct source
+link. `Fetch latest TAF` reuses `mexico:pollAwcTaf` and its 60-second cooldown;
+`Fetch latest SMN` reuses `mexicoForecastNode:pollSmnHourlyForecast` and its
+30-minute cooldown. A manual click cannot bypass the same lease/cooldown used
+by crons, and `cooldown` responses expose their retry time. The source links are
+the live AWC MMMX TAF response and the official SMN municipal forecast page.
+A reported `fetching` state disables the button only while that collector's
+server lease is still active; an expired lease is labeled and permits a retry.
+TAF and SMN writes and status finishes carry the claim's `attemptAt` generation,
+so a late expired request is rejected as `superseded` instead of overwriting a
+newer retry.
+
+The next-day SMN availability label also reports target-date hourly coverage.
+Coverage and the fallback maximum are filtered to one coherent latest
+`forecastCaptureId`; stale hours left in the mutable per-hour table by an older
+capture cannot complete or raise a newer partial forecast. Only 24 distinct
+retained forecast hours from that capture are labeled complete. If fewer hours
+exist, the retained maximum remains visible but is explicitly `partial coverage`
+and provisional rather than being presented as a complete daily maximum.
+
+The TAF remains official MMMX aerodrome guidance authored through the
+SENEAM/CAPMA chain and fetched from NOAA/AWC's documented relay. SMN remains
+municipal guidance for Venustiano Carranza, approximately 4.8 km from MMMX.
+Never relabel the municipal forecast as an airport or settlement forecast.
 
 ### 6. Exact live market ladder
 
@@ -499,6 +553,15 @@ every edge query, action, image URL and refresh path. The optional fast AFTN
 watch has its own additional access gate and kill switch described above. The
 approving authority is SENEAM/CAPMA for explicitly bounded sub-minute automated
 requests to the existing MMMX AFTN report page.
+
+The next-day cards add no direct CAPMA request and no new provider. Their manual
+buttons invoke the already documented AWC TAF and SMN hourly actions, so they
+inherit those collectors' source attribution, validation, cooldown and status
+paths. The CAPMA legacy FTMX UI is not scraped. Weather.com is not used as the
+second provider: a Weather Company forecast collector would require an
+owner-supported licensed API plus forecast-specific access, retention and
+publication approval gates distinct from the settlement-observation flags
+below.
 
 The canonical CAPMA gates are:
 

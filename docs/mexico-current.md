@@ -1174,8 +1174,28 @@ Forecast maxima are immutable, source-separated revisions in
 - `smn_municipal_hourly` is nearby Venustiano Carranza municipal guidance.
 
 Each row keeps its source input identity, issue/capture time, maximum and peak
-time. The page shows current, previous, delta and changed-at without collapsing
-the two forecast roles. The idempotent
+time. The page now shows current-day and next-day cards for both roles. Tomorrow
+is the next `America/Mexico_City` calendar date, with a countdown to local
+midnight; a focused `mexicoEdge:getForecastDate` query avoids rereading the
+full live dashboard for that date. Each card separates provider issue/update,
+current snapshot capture, first application sighting of the current value, last
+data-bearing collector fetch, and latest attempt/status; it links to the live
+source and shows the next scheduled collector attempt. A scheduled slot can be
+skipped by an active lease or cooldown. The two tomorrow cards also offer manual
+fetch buttons that reuse the existing server cooldowns; an expired `fetching`
+lease is shown as expired and no longer disables retry. Forecast writes and
+status finishes are attempt-generation guarded, so an expired late request
+cannot overwrite a newer retry.
+
+The revision rail compresses consecutive equal maxima and marks the first
+capture of each changed value, so a `20 °C → 19 °C` revision shows both values,
+the signed delta and the first-seen change time without relying on color. When
+tomorrow's TAF TX is not yet present, the page labels its recent
+`17:00–18:00` local arrival interval as an estimate, not a deadline; SMN's
+multi-day hourly guidance remains explicitly municipal. SMN is labeled complete
+only with 24 distinct retained target-date hours from one coherent latest
+capture; older per-hour rows cannot fill gaps or raise its maximum. A maximum
+derived from fewer hours is visibly provisional and `partial coverage`. The idempotent
 `mexico_edge_forecast_high_snapshots_every_5_minutes` job derives revisions at
 minutes `2,7,...,57` without making another external request. The dashboard
 also merges a just-retained TAF or SMN input with persisted revisions, so a

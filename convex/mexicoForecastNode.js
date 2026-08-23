@@ -427,19 +427,26 @@ export const pollSmnHourlyForecast = actionGeneric({
       });
       const completedAt = Date.now();
       if (response.status === 304) {
-        await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
-          stationIcao,
-          source: SOURCE,
-          status: "not_modified",
-          lastSuccessAt: previousStatus?.lastSuccessAt ?? completedAt,
-          lastError: "",
-          httpStatus: response.status,
-          lastModified:
-            response.headers.get("last-modified") ??
-            previousStatus?.lastModified ??
-            undefined,
-          rowCount: previousStatus?.rowCount,
-        });
+        const finish = await ctx.runMutation(
+          internal.mexico.finishCollectorAttempt,
+          {
+            attemptAt: claim.attemptAt,
+            stationIcao,
+            source: SOURCE,
+            status: "not_modified",
+            lastSuccessAt: previousStatus?.lastSuccessAt ?? completedAt,
+            lastError: "",
+            httpStatus: response.status,
+            lastModified:
+              response.headers.get("last-modified") ??
+              previousStatus?.lastModified ??
+              undefined,
+            rowCount: previousStatus?.rowCount,
+          },
+        );
+        if (finish.stale) {
+          return { status: "superseded" };
+        }
         return { status: "not_modified" };
       }
       if (!response.ok) {
@@ -480,6 +487,7 @@ export const pollSmnHourlyForecast = actionGeneric({
       const result = await ctx.runMutation(
         internal.mexico.storeSmnForecastBatch,
         {
+          attemptAt: claim.attemptAt,
           stationIcao,
           sourceUrl: SOURCE_URL,
           capturedAt: completedAt,
@@ -494,18 +502,28 @@ export const pollSmnHourlyForecast = actionGeneric({
           rows,
         },
       );
-      await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
-        stationIcao,
-        source: SOURCE,
-        status: "ok",
-        lastSuccessAt: completedAt,
-        lastError: "",
-        httpStatus: response.status,
-        responseBytes: parsed.compressedBytes,
-        lastModified: sourceLastModified ?? undefined,
-        cacheControl: response.headers.get("cache-control") ?? undefined,
-        rowCount: rows.length,
-      });
+      if (result.stale) {
+        return { status: "superseded" };
+      }
+      const finish = await ctx.runMutation(
+        internal.mexico.finishCollectorAttempt,
+        {
+          attemptAt: claim.attemptAt,
+          stationIcao,
+          source: SOURCE,
+          status: "ok",
+          lastSuccessAt: completedAt,
+          lastError: "",
+          httpStatus: response.status,
+          responseBytes: parsed.compressedBytes,
+          lastModified: sourceLastModified ?? undefined,
+          cacheControl: response.headers.get("cache-control") ?? undefined,
+          rowCount: rows.length,
+        },
+      );
+      if (finish.stale) {
+        return { status: "superseded" };
+      }
       return {
         status: "ok",
         rowCount: rows.length,
@@ -516,12 +534,19 @@ export const pollSmnHourlyForecast = actionGeneric({
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await ctx.runMutation(internal.mexico.finishCollectorAttempt, {
-        stationIcao,
-        source: SOURCE,
-        status: "error",
-        lastError: message,
-      });
+      const finish = await ctx.runMutation(
+        internal.mexico.finishCollectorAttempt,
+        {
+          attemptAt: claim.attemptAt,
+          stationIcao,
+          source: SOURCE,
+          status: "error",
+          lastError: message,
+        },
+      );
+      if (finish.stale) {
+        return { status: "superseded" };
+      }
       throw new Error(message);
     }
   },

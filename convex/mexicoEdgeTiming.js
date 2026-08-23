@@ -236,7 +236,18 @@ export function buildForecastRevision(snapshots) {
       deltaC: null,
       changedAt: null,
       snapshotCount: 0,
+      history: [],
     };
+  }
+  const history = [];
+  for (const snapshot of ordered) {
+    const previousChange = history.at(-1);
+    if (
+      !previousChange ||
+      previousChange.forecastHighC !== snapshot.forecastHighC
+    ) {
+      history.push(snapshot);
+    }
   }
   let previous = null;
   let changedAt = current.sourceCapturedAt;
@@ -258,5 +269,6 @@ export function buildForecastRevision(snapshots) {
     changedAt,
     changed: Boolean(previous),
     snapshotCount: ordered.length,
+    history: history.slice(-12),
   };
 }

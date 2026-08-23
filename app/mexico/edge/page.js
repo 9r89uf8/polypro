@@ -28,10 +28,24 @@ import {
   selectReactionSignal,
   tdzDailySeriesStates,
 } from "./reaction-metrics.mjs";
+import {
+  FORECAST_SOURCE_SMN,
+  FORECAST_SOURCE_TAF,
+  nextAutomaticForecastCheck,
+  nextDayTafAvailabilityWindow,
+} from "./forecast-timing.mjs";
 
 const STATION_ICAO = "MMMX";
 const MEXICO_TIMEZONE = "America/Mexico_City";
 const MARKET_STALE_AFTER_MS = 90 * 1000;
+const FORECAST_COLLECTOR_LEASE_MS = {
+  awc_taf: 60 * 1000,
+  smn_municipal_hourly: 30 * 60 * 1000,
+};
+const AWC_MMMX_TAF_URL =
+  "https://aviationweather.gov/api/data/taf?ids=MMMX&format=raw";
+const SMN_MUNICIPAL_FORECAST_URL =
+  "https://smn.conagua.gob.mx/es/pronosticos/pronostico-del-tiempo-por-municipios";
 const POLYMARKET_MARKET_WEBSOCKET_URL =
   "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 const REACTION_WINDOWS = [
@@ -261,6 +275,20 @@ function formatDateTime(epochMs, timeZone = MEXICO_TIMEZONE) {
     hour: "numeric",
     minute: "2-digit",
     second: "2-digit",
+    hour12: true,
+  }).format(new Date(epochMs));
+}
+
+function formatCompactDateTime(epochMs, timeZone = MEXICO_TIMEZONE) {
+  if (!Number.isFinite(epochMs)) {
+    return "—";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     hour12: true,
   }).format(new Date(epochMs));
 }
@@ -1297,6 +1325,7 @@ function normalizeCapma(dashboard) {
 
 function normalizeForecast(source, fallback, kind) {
   const value = source || {};
+  const currentSnapshot = value.current || null;
   let current = firstFinite(
     value.currentMaxC,
     value.maxTempC,
@@ -1324,6 +1353,14 @@ function normalizeForecast(source, fallback, kind) {
     value.previousMaximumTempC,
     value.previousForecastMaxC,
   );
+  const history = (Array.isArray(value.history) ? value.history : [])
+    .map((row, index) => ({
+      key: String(row?.snapshotKey || `${kind}-revision-${index}`),
+      tempC: firstFinite(row?.forecastHighC, row?.currentMaxC, row?.valueC),
+      at: firstFinite(row?.sourceCapturedAt, row?.capturedAt),
+    }))
+    .filter((row) => Number.isFinite(row.tempC) && Number.isFinite(row.at))
+    .sort((left, right) => left.at - right.at);
   return {
     ...value,
     current,
@@ -1342,6 +1379,16 @@ function normalizeForecast(source, fallback, kind) {
       value.capturedAt,
     ),
     issuedAt: firstFinite(value.issuedAt, value.fetchedAt, value.capturedAt),
+    providerIssuedAt:
+      kind === "smn"
+        ? null
+        : firstFinite(value.providerIssuedAt, currentSnapshot?.sourceIssuedAt),
+    forecastCapturedAt: firstFinite(
+      value.forecastCapturedAt,
+      currentSnapshot?.sourceCapturedAt,
+      value.capturedAt,
+    ),
+    history,
   };
 }
 
@@ -1376,6 +1423,12 @@ function safeHttpsUrl(value) {
 function actionSummary(label, settled) {
   if (settled.status === "rejected") {
     return `${label}: error`;
+  }
+  if (
+    settled.value?.status === "cooldown" &&
+    Number.isFinite(settled.value?.retryAfterAt)
+  ) {
+    return `${label}: cooldown until ${formatDateTime(settled.value.retryAfterAt)}`;
   }
   const status = String(settled.value?.status || "synced").replaceAll("_", " ");
   return `${label}: ${status}`;
@@ -2184,47 +2237,305 @@ function TemperatureCard({
   );
 }
 
-function ForecastCard({ label, forecast, accent, nowMs }) {
+function ForecastCard({
+  label,
+  forecast,
+  accent,
+  nowMs,
+  targetDate,
+  collectorStatus,
+  nextCheckAt,
+  availability,
+  sourceAttribution,
+  sourceLink,
+  onRefresh,
+  refreshLabel,
+  refreshing = false,
+  refreshDisabled = false,
+  refreshMessage = "",
+  loading = false,
+  digits = 0,
+}) {
+  const available = Number.isFinite(forecast.current);
   const changed = Number.isFinite(forecast.delta) && forecast.delta !== 0;
+  const lastAttemptAt = firstFinite(
+    collectorStatus?.lastAttemptAt,
+    collectorStatus?.updatedAt,
+  );
+  const collectorLeaseMs =
+    FORECAST_COLLECTOR_LEASE_MS[collectorStatus?.source] ?? null;
+  const collectorFetchingReported = collectorStatus?.status === "fetching";
+  const collectorFetching =
+    collectorFetchingReported &&
+    (!Number.isFinite(lastAttemptAt) ||
+      !Number.isFinite(nowMs) ||
+      !Number.isFinite(collectorLeaseMs) ||
+      nowMs < lastAttemptAt + collectorLeaseMs);
+  const collectorLeaseExpired = collectorFetchingReported && !collectorFetching;
+  const collectorError = collectorStatus?.status === "error";
+  const busy = loading || refreshing || collectorFetching;
+  const lastSuccessfulFetchAt = firstFinite(
+    collectorStatus?.lastSuccessAt,
+    forecast.forecastCapturedAt,
+  );
+  const rawLastAttemptStatus = exactString(collectorStatus?.status)?.replaceAll(
+    "_",
+    " ",
+  );
+  const lastAttemptStatus = collectorLeaseExpired
+    ? "fetching lease expired"
+    : rawLastAttemptStatus;
+  const history = (forecast.history || []).slice(-6);
+  const statusLabel = loading
+    ? "loading forecast"
+    : refreshing || collectorFetching
+      ? "fetching"
+      : collectorLeaseExpired
+        ? "fetch lease expired"
+        : collectorError
+          ? "fetch error"
+          : !available
+            ? "awaiting forecast"
+            : changed
+              ? "changed"
+              : "no recorded change";
+  const transitionLabel = changed
+    ? `Forecast changed from ${formatTemperature(forecast.previous, digits)} to ${formatTemperature(forecast.current, digits)}; first seen at ${formatDateTime(forecast.changedAt)}.`
+    : null;
   return (
     <article
-      className={styles.forecastCard}
+      className={`${styles.forecastCard} ${changed ? styles.forecastCardChanged : ""}`}
       style={{ "--forecast-accent": accent }}
+      aria-busy={busy}
     >
       <div className={styles.cardEyebrowRow}>
         <p className={styles.eyebrow}>{label}</p>
-        <StatusPill tone={changed ? "watch" : "muted"}>
-          {changed ? "changed" : "no recorded change"}
+        <StatusPill
+          tone={
+            busy
+              ? "live"
+              : collectorError
+                ? "danger"
+                : collectorLeaseExpired || changed || !available
+                  ? "watch"
+                  : "muted"
+          }
+        >
+          {statusLabel}
         </StatusPill>
       </div>
+      {sourceAttribution ? (
+        <p className={styles.forecastAttribution}>{sourceAttribution}</p>
+      ) : null}
       <div className={styles.forecastValue}>
-        <strong>{formatTemperature(forecast.current, 0)}</strong>
+        <strong>{formatTemperature(forecast.current, digits)}</strong>
         <span className={changed ? styles.deltaChanged : styles.deltaQuiet}>
           {Number.isFinite(forecast.delta)
             ? formatSignedTemperature(forecast.delta)
             : "no baseline"}
         </span>
       </div>
+      {availability ? (
+        <div className={styles.forecastAvailability}>
+          <span>{availability.label}</span>
+          <strong>
+            {Number.isFinite(availability.targetAt)
+              ? formatCountdown(availability.targetAt, nowMs)
+              : availability.value}
+          </strong>
+          {availability.detail ? <small>{availability.detail}</small> : null}
+        </div>
+      ) : null}
+      {changed ? (
+        <div className={styles.revisionTransition} aria-label={transitionLabel}>
+          <div>
+            <span>Previous</span>
+            <strong>{formatTemperature(forecast.previous, digits)}</strong>
+          </div>
+          <span className={styles.revisionArrow} aria-hidden="true">
+            →
+          </span>
+          <div>
+            <span>Now</span>
+            <strong>{formatTemperature(forecast.current, digits)}</strong>
+          </div>
+          <small>First seen changed {formatDateTime(forecast.changedAt)}</small>
+        </div>
+      ) : null}
+      {history.length ? (
+        <div className={styles.forecastHistory}>
+          <span>Retained revision trail</span>
+          <div
+            className={styles.revisionRail}
+            role="list"
+            tabIndex={0}
+            aria-label={`Retained revision history for ${label}`}
+          >
+            {history.map((revision, index) => (
+              <div
+                className={styles.revisionPoint}
+                key={revision.key}
+                role="listitem"
+                title={formatDateTime(revision.at)}
+              >
+                <i aria-hidden="true" />
+                <strong>{formatTemperature(revision.tempC, digits)}</strong>
+                <time dateTime={new Date(revision.at).toISOString()}>
+                  {index === 0 && history.length === 1 ? "First seen " : ""}
+                  {formatCompactDateTime(revision.at)}
+                </time>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <dl className={styles.forecastMeta}>
         <div>
-          <dt>Previous</dt>
-          <dd>{formatTemperature(forecast.previous, 0)}</dd>
+          <dt>Provider issued / updated</dt>
+          <dd>
+            {Number.isFinite(forecast.providerIssuedAt)
+              ? formatDateTime(forecast.providerIssuedAt)
+              : "Not supplied"}
+          </dd>
         </div>
         <div>
-          <dt>Changed</dt>
-          <dd>{formatDateTime(forecast.changedAt)}</dd>
+          <dt>Current snapshot captured</dt>
+          <dd>{formatDateTime(forecast.forecastCapturedAt)}</dd>
         </div>
         <div>
-          <dt>Snapshot age</dt>
-          <dd>{formatAge(forecast.issuedAt, nowMs)}</dd>
+          <dt>Last data-bearing fetch</dt>
+          <dd>
+            {formatDateTime(lastSuccessfulFetchAt)}
+            {Number.isFinite(lastSuccessfulFetchAt) ? (
+              <small>{formatAge(lastSuccessfulFetchAt, nowMs)}</small>
+            ) : null}
+          </dd>
+        </div>
+        <div>
+          <dt>Latest fetch attempt</dt>
+          <dd>
+            {lastAttemptStatus ? `${lastAttemptStatus} · ` : ""}
+            {formatDateTime(lastAttemptAt)}
+            {Number.isFinite(lastAttemptAt) ? (
+              <small>{formatAge(lastAttemptAt, nowMs)}</small>
+            ) : null}
+          </dd>
+        </div>
+        {Number.isFinite(nextCheckAt) ? (
+          <div>
+            <dt>Next scheduled attempt</dt>
+            <dd>{formatCountdown(nextCheckAt, nowMs)}</dd>
+          </div>
+        ) : null}
+        {Number.isFinite(forecast.changedAt) ? (
+          <div>
+            <dt>Current value first seen</dt>
+            <dd>{formatDateTime(forecast.changedAt)}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Target date</dt>
+          <dd>{targetDate || "today"}</dd>
         </div>
         <div>
           <dt>Forecast peak</dt>
           <dd>{formatDateTime(forecast.forecastPeakTimeUtc)}</dd>
         </div>
       </dl>
+      {onRefresh || sourceLink ? (
+        <div className={styles.forecastActions}>
+          {onRefresh ? (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              onClick={onRefresh}
+              disabled={refreshDisabled || busy}
+              aria-label={`${refreshLabel || "Fetch latest forecast"}${targetDate ? ` for ${targetDate}` : ""}`}
+            >
+              {refreshing ? "Fetching…" : refreshLabel || "Fetch latest"}
+            </button>
+          ) : null}
+          {sourceLink ? (
+            <a
+              className={styles.forecastSourceLink}
+              href={sourceLink.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${sourceLink.label} (opens in new tab)`}
+            >
+              {sourceLink.label} <span aria-hidden="true">↗</span>
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+      {refreshMessage ? (
+        <p className={styles.forecastRefreshMessage} aria-live="polite">
+          {refreshMessage}
+        </p>
+      ) : null}
     </article>
   );
+}
+
+function nextDayTafAvailability(forecast, window, nowMs) {
+  if (Number.isFinite(forecast?.current)) {
+    return {
+      label: "Next-day TAF TX",
+      value: "available now",
+      detail: "Official airport guidance is available for the target date.",
+    };
+  }
+  if (!Number.isFinite(window?.startAt) || !Number.isFinite(nowMs)) {
+    return {
+      label: "Next-day TAF TX",
+      value: "awaiting data",
+      detail: "The app is waiting for an eligible MMMX TAF maximum group.",
+    };
+  }
+  if (nowMs < window.startAt) {
+    return {
+      label: "Estimated issue window in",
+      targetAt: window.startAt,
+      detail:
+        "Recent 00Z cycles have supplied tomorrow’s TX around 17:00–18:00 Mexico City time; this is an estimate, not a deadline.",
+    };
+  }
+  if (nowMs <= window.endAt) {
+    return {
+      label: "Estimated issue window",
+      value: "open now",
+      detail:
+        "The app checks AWC every five minutes for the next eligible MMMX TAF TX.",
+    };
+  }
+  return {
+    label: "Estimated issue window",
+    value: "passed",
+    detail:
+      "No eligible next-day TX has been captured yet; automatic five-minute checks continue.",
+  };
+}
+
+function nextDaySmnAvailability(forecast, coverage) {
+  if (Number.isFinite(forecast?.current) && coverage?.status === "complete") {
+    return {
+      label: "Next-day municipal guidance",
+      value: "available now",
+      detail: `Derived from all ${coverage.hourCount} retained hourly temperatures for Venustiano Carranza.`,
+    };
+  }
+  if (Number.isFinite(forecast?.current)) {
+    return {
+      label: "Next-day municipal guidance",
+      value: "partial coverage",
+      detail: `${coverage?.hourCount ?? "Some"} of ${coverage?.expectedHourCount ?? 24} expected hourly temperatures are retained; the displayed maximum is provisional.`,
+    };
+  }
+  return {
+    label: "Next-day municipal guidance",
+    value: "awaiting data",
+    detail: "The hourly SMN collector checks again at :20 each hour.",
+  };
 }
 
 function ImageCard({ tdz, image, fallbackObservation, nowMs }) {
@@ -3909,13 +4220,24 @@ export default function MexicoEdgePage() {
   const [selectedReactionQuoteId, setSelectedReactionQuoteId] = useState("");
   const [preferredReactionBucketLabel, setPreferredReactionBucketLabel] =
     useState("");
-  const [refreshState, setRefreshState] = useState({ kind: null, message: "" });
+  const [refreshState, setRefreshState] = useState({
+    kind: null,
+    source: null,
+    message: "",
+  });
   const date = Number.isFinite(nowMs) ? mexicoDateKey(nowMs) : "";
+  const tomorrowDate = date ? shiftDateKey(date, 1) : "";
 
   const dashboard = useQuery(
     "mexicoEdge:getDashboard",
     date ? { stationIcao: STATION_ICAO, date } : "skip",
   );
+  const nextDayForecastDashboard = useQuery(
+    "mexicoEdge:getForecastDate",
+    tomorrowDate ? { stationIcao: STATION_ICAO, date: tomorrowDate } : "skip",
+  );
+  const nextDayForecastLoading =
+    Boolean(tomorrowDate) && nextDayForecastDashboard === undefined;
   const market = useQuery(
     "mexicoPolymarketLive:getLiveMarket",
     date ? { stationIcao: STATION_ICAO, date, limit: 1200 } : "skip",
@@ -4254,6 +4576,26 @@ export default function MexicoEdgePage() {
       "smn",
     ),
   };
+  const nextDayForecasts = {
+    taf: normalizeForecast(
+      nextDayForecastDashboard?.forecasts?.taf,
+      null,
+      "taf",
+    ),
+    smn: normalizeForecast(
+      nextDayForecastDashboard?.forecasts?.smn,
+      null,
+      "smn",
+    ),
+  };
+  const forecastCollectorStatuses =
+    nextDayForecastDashboard?.collectorStatuses ||
+    dashboard?.collectorStatuses ||
+    {};
+  const tomorrowStartsAt = mexicoMidnightUtc(tomorrowDate);
+  const tafAvailabilityWindow = nextDayTafAvailabilityWindow(tomorrowStartsAt);
+  const nextTafCheckAt = nextAutomaticForecastCheck(FORECAST_SOURCE_TAF, nowMs);
+  const nextSmnCheckAt = nextAutomaticForecastCheck(FORECAST_SOURCE_SMN, nowMs);
   const metarTemperatureValues = metars
     .map((row) => row?.tempC)
     .filter(Number.isFinite);
@@ -4295,6 +4637,39 @@ export default function MexicoEdgePage() {
     refreshLiveMarket,
     refreshState.kind,
   ]);
+
+  const refreshForecastSource = useCallback(
+    async (source) => {
+      if (refreshState.kind) return;
+      const isTaf = source === FORECAST_SOURCE_TAF;
+      const kind = isTaf ? "forecast-taf" : "forecast-smn";
+      const label = isTaf ? "TAF" : "SMN";
+      const action = isTaf ? pollAwcTaf : pollSmnForecast;
+      setRefreshState({
+        kind,
+        source,
+        message: `Fetching the latest ${label} forecast from the provider…`,
+      });
+      try {
+        const result = await action({ stationIcao: STATION_ICAO });
+        setRefreshState({
+          kind: null,
+          source,
+          message: actionSummary(label, {
+            status: "fulfilled",
+            value: result,
+          }),
+        });
+      } catch {
+        setRefreshState({
+          kind: null,
+          source,
+          message: `${label}: live fetch failed`,
+        });
+      }
+    },
+    [pollAwcTaf, pollSmnForecast, refreshState.kind],
+  );
 
   const refreshImages = useCallback(async () => {
     if (refreshState.kind) return;
@@ -4340,7 +4715,10 @@ export default function MexicoEdgePage() {
   }, [date, refreshLiveMarket, refreshState.kind]);
 
   const loading =
-    dashboard === undefined || market === undefined || !Number.isFinite(nowMs);
+    dashboard === undefined ||
+    market === undefined ||
+    nextDayForecastLoading ||
+    !Number.isFinite(nowMs);
   const eventResolutionSource = exactString(market?.event?.resolutionSource);
   const eventResolutionUrl = safeHttpsUrl(eventResolutionSource);
   const acquisition = dashboard?.resolutionSource || {};
@@ -4565,26 +4943,150 @@ export default function MexicoEdgePage() {
           <div className={styles.sectionHeading}>
             <div>
               <p className={styles.eyebrow}>Forecast revision watch</p>
-              <h2 id="forecast-title">Maximum forecasted</h2>
+              <h2 id="forecast-title">Daily maximum forecasts</h2>
             </div>
             <p>
               TAF aerodrome groups and SMN/CONAGUA municipal guidance stay
               distinct; neither is relabeled as the settlement source.
             </p>
           </div>
-          <div className={styles.forecastGrid}>
-            <ForecastCard
-              label="TAF · MMMX aerodrome"
-              forecast={forecasts.taf}
-              accent="#50e3ff"
-              nowMs={nowMs}
-            />
-            <ForecastCard
-              label="SMN / CONAGUA · Venustiano Carranza"
-              forecast={forecasts.smn}
-              accent="#b8ff56"
-              nowMs={nowMs}
-            />
+          <div className={styles.forecastDayBlock}>
+            <div className={styles.forecastDayHeader}>
+              <div>
+                <p className={styles.eyebrow}>Today · {date || "—"}</p>
+                <h3>Current-day guidance</h3>
+              </div>
+            </div>
+            <div className={styles.forecastGrid}>
+              <ForecastCard
+                label="TAF · MMMX aerodrome"
+                forecast={forecasts.taf}
+                accent="#50e3ff"
+                nowMs={nowMs}
+                targetDate={date}
+                collectorStatus={forecastCollectorStatuses.awc_taf}
+                nextCheckAt={nextTafCheckAt}
+                sourceAttribution="SENEAM/CAPMA authored · fetched through NOAA/AWC"
+                sourceLink={{
+                  href: AWC_MMMX_TAF_URL,
+                  label: "View live MMMX TAF",
+                }}
+              />
+              <ForecastCard
+                label="SMN / CONAGUA · Venustiano Carranza"
+                forecast={forecasts.smn}
+                accent="#b8ff56"
+                digits={1}
+                nowMs={nowMs}
+                targetDate={date}
+                collectorStatus={forecastCollectorStatuses.smn_municipal_hourly}
+                nextCheckAt={nextSmnCheckAt}
+                sourceAttribution="Official municipal guidance · 4.8 km from MMMX"
+                sourceLink={{
+                  href: SMN_MUNICIPAL_FORECAST_URL,
+                  label: "Open SMN municipal forecast portal",
+                }}
+              />
+            </div>
+          </div>
+          <div className={styles.forecastDayBlock}>
+            <div className={styles.forecastDayHeader}>
+              <div>
+                <p className={styles.eyebrow}>
+                  Tomorrow · {tomorrowDate || "—"}
+                </p>
+                <h3>Next-day guidance</h3>
+              </div>
+              <div className={styles.forecastDayCountdown} aria-live="off">
+                <span>Tomorrow begins in</span>
+                <strong>{formatCountdown(tomorrowStartsAt, nowMs)}</strong>
+                {Number.isFinite(tomorrowStartsAt) ? (
+                  <time dateTime={new Date(tomorrowStartsAt).toISOString()}>
+                    {formatDateTime(tomorrowStartsAt)}
+                  </time>
+                ) : null}
+              </div>
+            </div>
+            <div className={styles.forecastGrid}>
+              <ForecastCard
+                label="TAF · MMMX aerodrome"
+                forecast={nextDayForecasts.taf}
+                accent="#50e3ff"
+                nowMs={nowMs}
+                targetDate={tomorrowDate}
+                collectorStatus={forecastCollectorStatuses.awc_taf}
+                nextCheckAt={nextTafCheckAt}
+                availability={
+                  nextDayForecastLoading
+                    ? {
+                        label: "Next-day forecast",
+                        value: "loading…",
+                        detail: "Reading retained provider snapshots.",
+                      }
+                    : nextDayTafAvailability(
+                        nextDayForecasts.taf,
+                        tafAvailabilityWindow,
+                        nowMs,
+                      )
+                }
+                sourceAttribution="SENEAM/CAPMA authored · fetched through NOAA/AWC"
+                sourceLink={{
+                  href: AWC_MMMX_TAF_URL,
+                  label: "View live MMMX TAF",
+                }}
+                onRefresh={() => refreshForecastSource(FORECAST_SOURCE_TAF)}
+                refreshLabel="Fetch latest TAF"
+                refreshing={refreshState.kind === "forecast-taf"}
+                refreshDisabled={
+                  Boolean(refreshState.kind) || nextDayForecastLoading
+                }
+                refreshMessage={
+                  refreshState.source === FORECAST_SOURCE_TAF
+                    ? refreshState.message
+                    : ""
+                }
+                loading={nextDayForecastLoading}
+              />
+              <ForecastCard
+                label="SMN / CONAGUA · Venustiano Carranza"
+                forecast={nextDayForecasts.smn}
+                accent="#b8ff56"
+                digits={1}
+                nowMs={nowMs}
+                targetDate={tomorrowDate}
+                collectorStatus={forecastCollectorStatuses.smn_municipal_hourly}
+                nextCheckAt={nextSmnCheckAt}
+                availability={
+                  nextDayForecastLoading
+                    ? {
+                        label: "Next-day forecast",
+                        value: "loading…",
+                        detail: "Reading retained provider snapshots.",
+                      }
+                    : nextDaySmnAvailability(
+                        nextDayForecasts.smn,
+                        nextDayForecastDashboard?.coverage?.smn,
+                      )
+                }
+                sourceAttribution="Official municipal guidance · 4.8 km from MMMX"
+                sourceLink={{
+                  href: SMN_MUNICIPAL_FORECAST_URL,
+                  label: "Open SMN municipal forecast portal",
+                }}
+                onRefresh={() => refreshForecastSource(FORECAST_SOURCE_SMN)}
+                refreshLabel="Fetch latest SMN"
+                refreshing={refreshState.kind === "forecast-smn"}
+                refreshDisabled={
+                  Boolean(refreshState.kind) || nextDayForecastLoading
+                }
+                refreshMessage={
+                  refreshState.source === FORECAST_SOURCE_SMN
+                    ? refreshState.message
+                    : ""
+                }
+                loading={nextDayForecastLoading}
+              />
+            </div>
           </div>
         </section>
 

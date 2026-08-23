@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildOfficialDailyMaximumEvidence,
+  buildSmnDateCoverage,
   buildTdzDailyMaximumEvidence,
   buildSourceEvents,
   capmaEdgePublicationGates,
@@ -10,6 +11,7 @@ import {
   deriveSmnHighSnapshots,
   deriveTafHighSnapshots,
   mergeForecastHighSnapshots,
+  selectLatestSmnCaptureRows,
   sanitizeCapmaPublicPayload,
   temperatureTimeline,
   weatherCompanyResolutionStatus,
@@ -20,6 +22,12 @@ import {
   estimateCircularHourPhase,
   estimateRoutineMetarWindow,
 } from "../convex/mexicoEdgeTiming.js";
+import {
+  FORECAST_SOURCE_SMN,
+  FORECAST_SOURCE_TAF,
+  nextAutomaticForecastCheck,
+  nextDayTafAvailabilityWindow,
+} from "../app/mexico/edge/forecast-timing.mjs";
 
 const HOUR_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
@@ -464,6 +472,51 @@ test("SMN snapshots derive each retained raw capture without coercing missing te
   );
 });
 
+test("SMN date coverage distinguishes a partial daily maximum from 24 retained hours", () => {
+  const rows = Array.from({ length: 24 }, (_, hour) => ({
+    date: "2026-08-24",
+    forecastTimeUtc: Date.parse(
+      `2026-08-24T${String(hour).padStart(2, "0")}:00:00Z`,
+    ),
+  }));
+  assert.deepEqual(buildSmnDateCoverage(rows.slice(0, 3), "2026-08-24"), {
+    status: "partial",
+    hourCount: 3,
+    expectedHourCount: 24,
+    coverageStartAt: rows[0].forecastTimeUtc,
+    coverageEndAt: rows[2].forecastTimeUtc,
+  });
+  assert.equal(buildSmnDateCoverage(rows, "2026-08-24").status, "complete");
+});
+
+test("SMN daily high and coverage use one coherent latest capture", () => {
+  const oldRows = Array.from({ length: 24 }, (_, hour) => ({
+    date: "2026-08-24",
+    forecastTimeUtc: hour,
+    forecastCaptureId: "old",
+    capturedAt: 1_000,
+    tempC: hour === 15 ? 30 : 15,
+  }));
+  const latestRows = Array.from({ length: 3 }, (_, hour) => ({
+    date: "2026-08-24",
+    forecastTimeUtc: hour,
+    forecastCaptureId: "latest",
+    capturedAt: 2_000,
+    tempC: 18 + hour,
+  }));
+  const mixedRows = [...oldRows, ...latestRows];
+  const selected = selectLatestSmnCaptureRows(mixedRows, "2026-08-24");
+  assert.equal(selected.length, 3);
+  assert.equal(Math.max(...selected.map((row) => row.tempC)), 20);
+  assert.deepEqual(buildSmnDateCoverage(mixedRows, "2026-08-24"), {
+    status: "partial",
+    hourCount: 3,
+    expectedHourCount: 24,
+    coverageStartAt: 0,
+    coverageEndAt: 2,
+  });
+});
+
 test("forecast revision reports the previous distinct maximum and true change time", () => {
   const snapshots = [
     { snapshotKey: "a", forecastHighC: 23, sourceCapturedAt: 1_000 },
@@ -476,6 +529,70 @@ test("forecast revision reports the previous distinct maximum and true change ti
   assert.equal(revision.deltaC, 2);
   assert.equal(revision.changedAt, 2_000);
   assert.equal(revision.snapshotCount, 3);
+  assert.deepEqual(
+    revision.history.map((row) => [row.forecastHighC, row.sourceCapturedAt]),
+    [
+      [23, 1_000],
+      [25, 2_000],
+    ],
+  );
+});
+
+test("forecast revision trail records the first sighting of 20 to 19 change", () => {
+  const revision = buildForecastRevision([
+    { snapshotKey: "20-a", forecastHighC: 20, sourceCapturedAt: 1_000 },
+    { snapshotKey: "20-b", forecastHighC: 20, sourceCapturedAt: 2_000 },
+    { snapshotKey: "19-a", forecastHighC: 19, sourceCapturedAt: 3_000 },
+    { snapshotKey: "19-b", forecastHighC: 19, sourceCapturedAt: 4_000 },
+  ]);
+
+  assert.equal(revision.previous.forecastHighC, 20);
+  assert.equal(revision.current.forecastHighC, 19);
+  assert.equal(revision.deltaC, -1);
+  assert.equal(revision.changedAt, 3_000);
+  assert.deepEqual(
+    revision.history.map((row) => row.snapshotKey),
+    ["20-a", "19-a"],
+  );
+});
+
+test("forecast clocks expose the next scheduled cron attempt without promising a provider issue", () => {
+  assert.equal(
+    nextAutomaticForecastCheck(
+      FORECAST_SOURCE_TAF,
+      Date.parse("2026-08-23T12:00:59Z"),
+    ),
+    Date.parse("2026-08-23T12:01:00Z"),
+  );
+  assert.equal(
+    nextAutomaticForecastCheck(
+      FORECAST_SOURCE_TAF,
+      Date.parse("2026-08-23T12:01:00Z"),
+    ),
+    Date.parse("2026-08-23T12:06:00Z"),
+  );
+  assert.equal(
+    nextAutomaticForecastCheck(
+      FORECAST_SOURCE_TAF,
+      Date.parse("2026-08-23T12:56:00Z"),
+    ),
+    Date.parse("2026-08-23T13:01:00Z"),
+  );
+  assert.equal(
+    nextAutomaticForecastCheck(
+      FORECAST_SOURCE_SMN,
+      Date.parse("2026-08-23T12:20:00Z"),
+    ),
+    Date.parse("2026-08-23T13:20:00Z"),
+  );
+});
+
+test("next-day TAF estimate is a one-hour window before Mexico midnight", () => {
+  const tomorrowStartsAt = Date.parse("2026-08-24T06:00:00Z");
+  assert.deepEqual(nextDayTafAvailabilityWindow(tomorrowStartsAt), {
+    startAt: Date.parse("2026-08-23T23:00:00Z"),
+    endAt: Date.parse("2026-08-24T00:00:00Z"),
+  });
 });
 
 test("fresh forecast rows bridge the snapshot cron without losing history", () => {

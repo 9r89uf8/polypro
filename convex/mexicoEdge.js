@@ -26,6 +26,7 @@ const MAX_CAPMA_DAY_ROWS = 6_000;
 const MAX_REACTION_CAPMA_ROWS = 1_800;
 const MAX_RELAY_SIGHTINGS = 300;
 const MAX_SOURCE_EVENTS = 700;
+const MAX_FORECAST_DATE_SNAPSHOTS = 240;
 const CAPMA_COVERAGE_GAP_MS = 5 * 60 * 1000;
 
 const mexicoDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -549,8 +550,8 @@ export function buildSourceEvents(metarRows, relaySightings, capmaApproved) {
 }
 
 function snapshotFallbackFromSmnRows(rows, stationIcao, date) {
-  const usable = rows.filter(
-    (row) => row.date === date && Number.isFinite(row.tempC),
+  const usable = selectLatestSmnCaptureRows(rows, date).filter((row) =>
+    Number.isFinite(row.tempC),
   );
   if (!usable.length) {
     return [];
@@ -575,6 +576,56 @@ function snapshotFallbackFromSmnRows(rows, stationIcao, date) {
       persisted: false,
     },
   ];
+}
+
+export function selectLatestSmnCaptureRows(rows, date) {
+  const usable = (rows ?? []).filter(
+    (row) => row?.date === date && Number.isFinite(row?.forecastTimeUtc),
+  );
+  if (!usable.length) {
+    return [];
+  }
+  const latest = usable.reduce((current, row) => {
+    const currentCapturedAt = Number.isFinite(current?.capturedAt)
+      ? current.capturedAt
+      : Number.NEGATIVE_INFINITY;
+    const rowCapturedAt = Number.isFinite(row?.capturedAt)
+      ? row.capturedAt
+      : Number.NEGATIVE_INFINITY;
+    return !current || rowCapturedAt > currentCapturedAt ? row : current;
+  }, null);
+  if (latest?.forecastCaptureId !== undefined) {
+    const latestCaptureId = String(latest.forecastCaptureId);
+    return usable.filter(
+      (row) => String(row.forecastCaptureId) === latestCaptureId,
+    );
+  }
+  if (Number.isFinite(latest?.capturedAt)) {
+    return usable.filter((row) => row.capturedAt === latest.capturedAt);
+  }
+  // Fixture/legacy rows without capture identity are treated as one capture.
+  return usable;
+}
+
+export function buildSmnDateCoverage(rows, date) {
+  const forecastTimes = new Set(
+    selectLatestSmnCaptureRows(rows, date).map((row) => row.forecastTimeUtc),
+  );
+  const orderedTimes = [...forecastTimes].sort((left, right) => left - right);
+  const hourCount = orderedTimes.length;
+  const expectedHourCount = 24;
+  return {
+    status:
+      hourCount >= expectedHourCount
+        ? "complete"
+        : hourCount > 0
+          ? "partial"
+          : "unavailable",
+    hourCount,
+    expectedHourCount,
+    coverageStartAt: orderedTimes[0] ?? null,
+    coverageEndAt: orderedTimes.at(-1) ?? null,
+  };
 }
 
 export function mergeForecastHighSnapshots(
@@ -826,6 +877,153 @@ export function buildOfficialDailyMaximumEvidence({
     retainedRelayCount: relayRows?.length ?? 0,
   };
 }
+
+function publicForecastSnapshot(
+  snapshot,
+  { providerIssuedAtSupported = true } = {},
+) {
+  if (!snapshot || providerIssuedAtSupported) {
+    return snapshot;
+  }
+  const { sourceIssuedAt: _untrustedSourceIssuedAt, ...publicSnapshot } =
+    snapshot;
+  return publicSnapshot;
+}
+
+function publicForecastRevision(
+  revision,
+  { providerIssuedAtSupported = true } = {},
+) {
+  const current = publicForecastSnapshot(revision.current, {
+    providerIssuedAtSupported,
+  });
+  const previous = publicForecastSnapshot(revision.previous, {
+    providerIssuedAtSupported,
+  });
+  return {
+    ...revision,
+    current,
+    previous,
+    history: (revision.history ?? []).map((snapshot) =>
+      publicForecastSnapshot(snapshot, { providerIssuedAtSupported }),
+    ),
+    currentMaxC: current?.forecastHighC ?? null,
+    previousMaxC: previous?.forecastHighC ?? null,
+    issuedAt: providerIssuedAtSupported
+      ? (current?.sourceIssuedAt ?? current?.sourceCapturedAt ?? null)
+      : null,
+    providerIssuedAt: providerIssuedAtSupported
+      ? (current?.sourceIssuedAt ?? null)
+      : null,
+    forecastCapturedAt: current?.sourceCapturedAt ?? null,
+    forecastPeakTimeUtc: current?.forecastPeakTimeUtc ?? null,
+  };
+}
+
+function publicForecastSnapshots(snapshots) {
+  return snapshots.map((snapshot) =>
+    publicForecastSnapshot(snapshot, {
+      providerIssuedAtSupported: snapshot.source !== "smn_municipal_hourly",
+    }),
+  );
+}
+
+export const getForecastDate = queryGeneric({
+  args: {
+    stationIcao: v.string(),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = assertStation(args.stationIcao);
+    const date = assertDate(args.date);
+    const [
+      smnRows,
+      tafCaptures,
+      persistedForecastSnapshots,
+      tafStatus,
+      smnStatus,
+    ] = await Promise.all([
+      ctx.db
+        .query("mexicoSmnHourlyForecasts")
+        .withIndex("by_station_date_time", (query) =>
+          query.eq("stationIcao", stationIcao).eq("date", date),
+        )
+        .take(240),
+      ctx.db
+        .query("mexicoTafForecasts")
+        .withIndex("by_station_issue_time", (query) =>
+          query.eq("stationIcao", stationIcao),
+        )
+        .order("desc")
+        .take(80),
+      ctx.db
+        .query("mexicoEdgeForecastHighSnapshots")
+        .withIndex("by_station_date_source_capture", (query) =>
+          query.eq("stationIcao", stationIcao).eq("date", date),
+        )
+        .order("desc")
+        .take(MAX_FORECAST_DATE_SNAPSHOTS),
+      ctx.db
+        .query("mexicoCollectorStatus")
+        .withIndex("by_station_source", (query) =>
+          query.eq("stationIcao", stationIcao).eq("source", "awc_taf"),
+        )
+        .unique(),
+      ctx.db
+        .query("mexicoCollectorStatus")
+        .withIndex("by_station_source", (query) =>
+          query
+            .eq("stationIcao", stationIcao)
+            .eq("source", "smn_municipal_hourly"),
+        )
+        .unique(),
+    ]);
+    const fallbackSnapshots = [
+      ...deriveTafHighSnapshots(tafCaptures, date).map((row) => ({
+        ...row,
+        persisted: false,
+      })),
+      ...snapshotFallbackFromSmnRows(smnRows, stationIcao, date),
+    ];
+    const persistedSnapshots = persistedForecastSnapshots.map((row) => ({
+      ...row,
+      persisted: true,
+    }));
+    const snapshots = mergeForecastHighSnapshots(
+      persistedSnapshots,
+      fallbackSnapshots,
+    ).sort((left, right) => left.sourceCapturedAt - right.sourceCapturedAt);
+    const tafRevision = buildForecastRevision(
+      snapshots.filter((row) => row.source === "taf_tx"),
+    );
+    const smnRevision = buildForecastRevision(
+      snapshots.filter((row) => row.source === "smn_municipal_hourly"),
+    );
+
+    return {
+      stationIcao,
+      date,
+      timezone: MEXICO_TIMEZONE,
+      generatedAt: Date.now(),
+      forecasts: {
+        taf: publicForecastRevision(tafRevision),
+        smn: publicForecastRevision(smnRevision, {
+          providerIssuedAtSupported: false,
+        }),
+        snapshots: publicForecastSnapshots(
+          snapshots.slice(-MAX_FORECAST_DATE_SNAPSHOTS),
+        ),
+      },
+      coverage: {
+        smn: buildSmnDateCoverage(smnRows, date),
+      },
+      collectorStatuses: {
+        awc_taf: tafStatus,
+        smn_municipal_hourly: smnStatus,
+      },
+    };
+  },
+});
 
 export const getDashboard = queryGeneric({
   args: {
@@ -1092,26 +1290,10 @@ export const getDashboard = queryGeneric({
     const publicLatestMetar = latestMetar
       ? { ...latestMetar, rawText: latestMetar.rawMetar }
       : null;
-    const publicTafRevision = {
-      ...tafRevision,
-      currentMaxC: tafRevision.current?.forecastHighC ?? null,
-      previousMaxC: tafRevision.previous?.forecastHighC ?? null,
-      issuedAt:
-        tafRevision.current?.sourceIssuedAt ??
-        tafRevision.current?.sourceCapturedAt ??
-        null,
-      forecastPeakTimeUtc: tafRevision.current?.forecastPeakTimeUtc ?? null,
-    };
-    const publicSmnRevision = {
-      ...smnRevision,
-      currentMaxC: smnRevision.current?.forecastHighC ?? null,
-      previousMaxC: smnRevision.previous?.forecastHighC ?? null,
-      issuedAt:
-        smnRevision.current?.sourceIssuedAt ??
-        smnRevision.current?.sourceCapturedAt ??
-        null,
-      forecastPeakTimeUtc: smnRevision.current?.forecastPeakTimeUtc ?? null,
-    };
+    const publicTafRevision = publicForecastRevision(tafRevision);
+    const publicSmnRevision = publicForecastRevision(smnRevision, {
+      providerIssuedAtSupported: false,
+    });
     const latestRelevantTaf =
       tafCaptures.find((capture) =>
         capture.temperatureGroups?.some((group) => group.date === date),
@@ -1162,9 +1344,13 @@ export const getDashboard = queryGeneric({
       forecasts: {
         taf: publicTafRevision,
         smn: publicSmnRevision,
-        snapshots: snapshots
-          .sort((left, right) => left.sourceCapturedAt - right.sourceCapturedAt)
-          .slice(-240),
+        snapshots: publicForecastSnapshots(
+          snapshots
+            .sort(
+              (left, right) => left.sourceCapturedAt - right.sourceCapturedAt,
+            )
+            .slice(-240),
+        ),
         smnRows,
       },
       capma: {
