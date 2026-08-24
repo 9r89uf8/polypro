@@ -80,11 +80,11 @@ posterior) → mean plus 10–90 % band. First results on ~11 h of
 extended-field frames (mostly flat overnight hours — the weakest regime,
 with zero temperature ticks):
 
-| Metric                                             | TDZ 05 | TDZ 23 |
-| -------------------------------------------------- | -----: | -----: |
-| Median 10–90 % band width                          | 0.45 °C | 0.50 °C |
-| Dew point predicted after refit **without** it     | 77.4 % | 94.1 % |
-| … baseline from rounded inputs alone               | 71.1 % | 80.8 % |
+| Metric                                         |  TDZ 05 |  TDZ 23 |
+| ---------------------------------------------- | ------: | ------: |
+| Median 10–90 % band width                      | 0.45 °C | 0.50 °C |
+| Dew point predicted after refit **without** it |  77.4 % |  94.1 % |
+| … baseline from rounded inputs alone           |  71.1 % |  80.8 % |
 
 Review-corrected interpretation of that table:
 
@@ -310,13 +310,23 @@ temperature output carried the issue day's maximum and following morning's
 minimum, and the current legacy FMMX path returned an empty body. No direct
 CAPMA UI scrape, supported API contract, or republication grant was established.
 
-SMN/CONAGUA's already collected `method=3` hourly municipal feed spans multiple
-days, so tomorrow's Venustiano Carranza high is derivable from retained rows.
-The separately documented `method=1` product also returns explicit `tmax/tmin`
-for today plus three days, but it is another product from the same provider,
-not a third independent source. It supplies no reliable issue timestamp. The
-implementation therefore reuses method 3 and its existing immutable snapshot,
-status, attribution and cooldown paths rather than add a redundant collector.
+SMN/CONAGUA publishes two documented municipal products for the same
+Venustiano Carranza point. Method=1 carries explicit `tmax/tmin` for today plus
+three days; method=3 carries an hourly temperature profile. They are products
+from one provider, not independent forecast votes, and neither supplies a
+reliable issue timestamp. The earlier implementation used only method=3 and
+derived its displayed maximum from hourly rows.
+
+Live comparison showed that method=1 `tmax` is not a simple maximum of the
+published method=3 temperatures. For August 23–26, the daily-versus-hourly
+maximum pairs were `16.6/15.0`, `20.7/19.2`, `22.1/20.5`, and `24.1/22.6 °C`:
+a systematic `1.5–1.6 °C` separation at identical municipality IDs and
+coordinates. SMN documents no reconciliation, calibration, or processing rule,
+so the cause beyond separate product processing is unknown. The user selected
+the explicit daily `tmax` as the primary SMN maximum. The implementation now
+collects method=1 as a separate `smn_municipal_daily` series while retaining
+method=3 only for approximate peak timing. It does not backfill daily history or
+reinterpret old hourly snapshots as daily revisions.
 
 The human SMN municipal page cannot be deep-linked to Venustiano Carranza. A
 live browser/network check found that it initializes Miguel Hidalgo with
@@ -324,12 +334,12 @@ live browser/network check found that it initializes Miguel Hidalgo with
 ignored, and choosing `Venustiano Carranza, Ciudad de México` changes only
 in-page JavaScript state. That selection requests official controller rows with
 `edo=9&mun=17` without changing the URL. The Edge UI therefore links directly
-and explicitly to target-date `leeJsonHorario.php` hourly rows that corroborate
-the displayed method-3-derived maximum for the same location and date, plus the
-separately labeled `getDataJson2String.php` daily rows. In the checked
-August 24 forecast, those products differed: the hourly-row maximum was
-`19.2 °C`, while the daily
-product returned `20.7 °C`, rendered as `21 °C` by the visual portal. These are
+and explicitly to `getDataJson2String.php` daily rows supporting the primary
+headline plus target-date `leeJsonHorario.php` hourly rows supporting the
+timing callout. In the checked August 24 forecast, the daily product returned
+`20.7 °C` while the hourly profile peaked at `19.2 °C` at `14:00` local. The UI
+therefore says `Around 2:00 PM` and identifies the separate hourly value; it
+does not claim that SMN published `20.7 °C at 2:00 PM`. These are
 internal UI controller references, not documented API contracts. Their
 responses also advertised an anomalous one-year cache lifetime, so UI evidence
 links include a changing `kche` parameter.

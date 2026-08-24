@@ -183,9 +183,19 @@ crons.cron(
   { stationIcao: "MMMX" },
 );
 
+// Collect the separately documented method=1 daily tmax product on the same
+// post-publication cadence. Its claim/cooldown is independent from method=3.
+crons.cron(
+  "mexico_smn_daily_forecast_minute_20",
+  "20 * * * *",
+  api.mexicoForecastNode.pollSmnDailyForecast,
+  { stationIcao: "MMMX" },
+);
+
 // Materializes source-separated daily-high revisions from already retained
 // TAF and SMN inputs. It runs one minute after each TAF attempt and two minutes
-// after the hourly SMN capture; the mutation is idempotent and makes no request.
+// after the daily/hourly SMN captures; the mutation is idempotent and makes no
+// request.
 crons.cron(
   "mexico_edge_forecast_high_snapshots_every_5_minutes",
   "2,7,12,17,22,27,32,37,42,47,52,57 * * * *",

@@ -181,15 +181,18 @@ first-seen intervals and honest tie states.
 
 ### 5. Forecast maximum revisions
 
-Keep TAF TX and SMN/CONAGUA municipal guidance separate. The page shows both
-the current Mexico City calendar date and the following calendar date. A
+Keep TAF TX and SMN/CONAGUA municipal guidance separate. Within SMN, method=1's
+explicit daily `tmax` is the primary maximum while method=3's hourly profile is
+retained only for approximate peak-time context. The page shows both the
+current Mexico City calendar date and the following calendar date. A
 lightweight `mexicoEdge:getForecastDate` query reads only the target date's
 retained forecast inputs and immutable maximum snapshots; it does not duplicate
 the composite dashboard's METAR, CAPMA image, relay, or reaction-history reads.
 
 The tomorrow header counts down to the next `America/Mexico_City` midnight.
 Each provider card separately counts down to its next **scheduled collector
-attempt**: AWC TAF at minutes `1,6,...,56`, and SMN at minute `20`. These are
+attempt**: AWC TAF at minutes `1,6,...,56`, and both independent SMN collectors
+at minute `20`. These are
 cron clocks, not promises that the provider will publish a changed forecast or
 that a network request will occur then. A still-active lease or server cooldown
 can make a scheduled slot a no-op.
@@ -199,15 +202,22 @@ the [2026-08-23 investigation](./mexico-edge-investigation-2026-08-23.md). It
 switches to `window open` or `passed` without inventing a publication deadline.
 
 For each source, show the target date, current maximum, prior distinct maximum,
-signed delta, forecast peak time, provider issue/update time when supplied,
-current snapshot capture, first application sighting of the current value, last
-data-bearing network fetch, and latest fetch attempt/status. Those clocks are not
-interchangeable: an unchanged TAF can be fetched many times while preserving
-its original issue and first-seen-value times, and SMN does not supply a
-trustworthy issuance timestamp. `mexicoCollectorStatus.lastSuccessAt` supports
-the data-bearing-fetch clock; `lastAttemptAt` and `status` describe the latest
-attempt, including `not_modified`, without presenting an error or empty check as
-new forecast data.
+signed delta, provider issue/update time when supplied, current snapshot
+capture, first application sighting of the current value, last data-bearing
+network fetch, and latest fetch attempt/status. TAF supplies its own peak time.
+SMN method=1 does not, so its card separately shows `Around h:mm AM/PM` from the
+highest point in a complete 24-hour method=3 curve, identifies that point's
+temperature, and states that this is timing guidance rather than the published
+time of method=1's `tmax`. Partial curves withhold the time instead of
+presenting a retained hour as the expected peak. The callout also exposes the
+hourly product's last data-bearing fetch and latest error state independently
+from the daily collector. Those clocks are not interchangeable: an unchanged TAF can be fetched
+many times while preserving its original issue and first-seen-value times, and
+neither SMN product supplies a trustworthy issuance timestamp.
+`mexicoCollectorStatus.lastSuccessAt` supports the data-bearing-fetch clock;
+`lastAttemptAt` and `status` describe the latest attempt, including
+`not_modified`, without presenting an error or empty check as new forecast
+data.
 
 The retained revision rail compresses consecutive equal maxima and marks the
 first capture of each changed value. A transition such as `20 °C → 19 °C`
@@ -217,34 +227,39 @@ only change signal.
 
 Each tomorrow card has its own server-side live fetch action and direct source
 link. `Fetch latest TAF` reuses `mexico:pollAwcTaf` and its 60-second cooldown;
-`Fetch latest SMN` reuses `mexicoForecastNode:pollSmnHourlyForecast` and its
-30-minute cooldown. A manual click cannot bypass the same lease/cooldown used
-by crons, and `cooldown` responses expose their retry time. The source links are
-the live AWC MMMX TAF response and exact official SMN controller responses for
-Venustiano Carranza (`edo=9`, `mun=17`). The SMN hourly link is scoped to the
-card's target date and exposes matching controller rows for the same product,
-location, and date as the displayed method-3-derived high. It is corroborating
-raw data, not the immutable response fetched and retained by the collector. The
-separately labeled daily link exposes SMN's explicit daily maximum product,
-which can differ. The public visual portal is not used as a direct
-source link because it defaults to Miguel Hidalgo (`9/16`), ignores municipality
-query parameters, and does not retain a search selection in its URL. The
-controller links are evidence links used by the public UI, not a claim that
-those internal routes are documented production APIs. A rotating `kche` query
-avoids the controller's anomalous one-year browser cache header.
+`Fetch latest SMN` invokes both
+`mexicoForecastNode:pollSmnDailyForecast` and
+`mexicoForecastNode:pollSmnHourlyForecast`. Each has its own status, lease and
+30-minute cooldown, so a failure in one product does not misstate or suppress
+the other. A manual click cannot bypass the same lease/cooldown used by crons,
+and `cooldown` responses expose their retry time. Production collection uses
+SMN's documented method=1 and method=3 gzip services. The visible evidence
+links open exact official controller responses for Venustiano Carranza
+(`edo=9`, `mun=17`): the daily rows first because they support the headline,
+then target-date hourly rows for timing. They are corroborating raw views, not
+the immutable responses fetched and retained by the collectors. The public
+visual portal is not used as a direct source link because it defaults to Miguel
+Hidalgo (`9/16`), ignores municipality query parameters, and does not retain a
+search selection in its URL. The controller links are not a claim that those
+internal routes are documented production APIs. A rotating `kche` query avoids
+the controller's anomalous one-year browser cache header.
 A reported `fetching` state disables the button only while that collector's
 server lease is still active; an expired lease is labeled and permits a retry.
 TAF and SMN writes and status finishes carry the claim's `attemptAt` generation,
 so a late expired request is rejected as `superseded` instead of overwriting a
 newer retry.
 
-The next-day SMN availability label also reports target-date hourly coverage.
-Coverage and the fallback maximum are filtered to one coherent latest
-`forecastCaptureId`; stale hours left in the mutable per-hour table by an older
-capture cannot complete or raise a newer partial forecast. Only 24 distinct
-retained forecast hours from that capture are labeled complete. If fewer hours
-exist, the retained maximum remains visible but is explicitly `partial coverage`
-and provisional rather than being presented as a complete daily maximum.
+The next-day SMN availability label is driven by the explicit daily row, not by
+hourly completeness. Missing or partial method=3 coverage makes only the peak
+timing unavailable; it never demotes a retained method=1 `tmax` or promotes an
+hourly maximum into its place. Each accepted method=1 batch atomically
+reconciles the mutable daily horizon: a date omitted by a newer batch is removed
+from the current projection and remains unavailable even if immutable historical
+snapshots exist. Hourly coverage and its profile
+maximum are filtered to one coherent latest `forecastCaptureId`; stale hours
+left in the mutable per-hour table by an older capture cannot complete or raise
+a newer partial profile. Only 24 distinct retained forecast hours from that
+capture are labeled complete.
 
 The TAF remains official MMMX aerodrome guidance authored through the
 SENEAM/CAPMA chain and fetched from NOAA/AWC's documented relay. SMN remains
@@ -402,8 +417,10 @@ silently treat the newest bounded suffix as a complete daily baseline.
   recent observation and receipt history with a robust method, minimum sample
   count and confidence metadata. Never substitute that learned estimate for
   the documented start/deadline or invent an exact publication second.
-- Derive immutable forecast-high revision snapshots from each TAF issue and
-  SMN raw capture so previous maximum and changed-at remain auditable.
+- Derive immutable, source-separated forecast-high revision snapshots from
+  each TAF issue, SMN method=1 daily capture, and SMN method=3 hourly capture so
+  previous maximum and changed-at remain auditable without creating a false
+  hourly-to-daily revision.
 - Keep WU/Weather Company settlement-source acquisition behind dedicated
   exact-`true` access, retention and republication approval gates. Until an
   owner-supported interface and scope exist, expose `approval required` or
@@ -548,8 +565,8 @@ not create it in a new environment.
 - `mexicoEdgeMarketStreamStatus`: REST attempt/freshness counters, generation
   and lease protection, plus explicit WebSocket-unavailable,
   operational-enable and error state.
-- `mexicoEdgeForecastHighSnapshots`: immutable source-specific maximum
-  revisions derived from TAF/SMN captures.
+- `mexicoEdgeForecastHighSnapshots`: immutable `taf_tx`,
+  `smn_municipal_daily`, and `smn_municipal_hourly` maximum revisions.
 - `mexicoEdgeResolutionObservations`: separately gated settlement-source
   observations and first-seen timing when an approved interface exists.
 
@@ -566,9 +583,10 @@ approving authority is SENEAM/CAPMA for explicitly bounded sub-minute automated
 requests to the existing MMMX AFTN report page.
 
 The next-day cards add no direct CAPMA request and no new provider. Their manual
-buttons invoke the already documented AWC TAF and SMN hourly actions, so they
-inherit those collectors' source attribution, validation, cooldown and status
-paths. The CAPMA legacy FTMX UI is not scraped. Weather.com is not used as the
+buttons invoke the already documented AWC TAF action and both documented SMN
+municipal actions, so they inherit those collectors' source attribution,
+validation, independent cooldown and status paths. The CAPMA legacy FTMX UI is
+not scraped. Weather.com is not used as the
 second provider: a Weather Company forecast collector would require an
 owner-supported licensed API plus forecast-specific access, retention and
 publication approval gates distinct from the settlement-observation flags

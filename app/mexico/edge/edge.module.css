@@ -1369,6 +1369,39 @@
   line-height: 1.55;
 }
 
+.forecastPeakGuidance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 1rem;
+  margin: -0.35rem 0 1rem;
+  padding: 0.8rem 0.85rem;
+  border: 1px solid
+    color-mix(in srgb, var(--forecast-accent) 38%, var(--edge-line));
+  background: color-mix(in srgb, var(--forecast-accent) 8%, transparent);
+  font-family: var(--font-ibm-mono), monospace;
+}
+
+.forecastPeakGuidance span {
+  color: var(--edge-muted);
+  font-size: 0.55rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.forecastPeakGuidance strong {
+  color: var(--forecast-accent);
+  font-size: 0.84rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.forecastPeakGuidance small {
+  grid-column: 1 / -1;
+  color: #a8b7be;
+  font-size: 0.55rem;
+  line-height: 1.55;
+}
+
 .revisionTransition {
   display: grid;
   grid-template-columns: 1fr auto 1fr;

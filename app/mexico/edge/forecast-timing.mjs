@@ -47,6 +47,18 @@ export function nextDayTafAvailabilityWindow(tomorrowStartsAt) {
   };
 }
 
+export function formatForecastClock(epochMs, timeZone = "America/Mexico_City") {
+  if (!Number.isFinite(epochMs)) {
+    return "—";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(epochMs));
+}
+
 function smnCacheSuffix(cacheAt) {
   if (!Number.isFinite(cacheAt)) {
     return "";

@@ -364,10 +364,114 @@ export function deriveSmnHighSnapshots(captures, requestedDate) {
   return snapshots;
 }
 
+function normalizeSmnDailySnapshotRow(rawRow) {
+  if (
+    String(rawRow?.ides ?? "") !== "9" ||
+    String(rawRow?.idmun ?? "") !== "17" ||
+    String(rawRow?.nmun ?? "") !== "Venustiano Carranza"
+  ) {
+    return null;
+  }
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})$/.exec(
+    String(rawRow?.dloc ?? "").trim(),
+  );
+  if (
+    !match ||
+    rawRow?.tmax === null ||
+    rawRow?.tmax === undefined ||
+    String(rawRow.tmax).trim() === ""
+  ) {
+    return null;
+  }
+  const tempC = Number(rawRow.tmax);
+  const forecastDayNumber =
+    rawRow?.ndia === null ||
+    rawRow?.ndia === undefined ||
+    String(rawRow.ndia).trim() === ""
+      ? undefined
+      : Number(rawRow.ndia);
+  const utcOffsetHours =
+    rawRow?.dh === null ||
+    rawRow?.dh === undefined ||
+    String(rawRow.dh).trim() === ""
+      ? undefined
+      : Number(rawRow.dh);
+  const date = `${match[1]}-${match[2]}-${match[3]}`;
+  const check = new Date(
+    Date.UTC(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+    ),
+  );
+  if (
+    !Number.isFinite(tempC) ||
+    match[4] !== "00" ||
+    (Number.isFinite(forecastDayNumber) &&
+      (!Number.isInteger(forecastDayNumber) ||
+        forecastDayNumber < 0 ||
+        forecastDayNumber > 10)) ||
+    (Number.isFinite(utcOffsetHours) &&
+      (!Number.isInteger(utcOffsetHours) ||
+        utcOffsetHours < -14 ||
+        utcOffsetHours > 14)) ||
+    check.getUTCFullYear() !== Number(match[1]) ||
+    check.getUTCMonth() !== Number(match[2]) - 1 ||
+    check.getUTCDate() !== Number(match[3]) ||
+    check.getUTCHours() !== Number(match[4])
+  ) {
+    return null;
+  }
+  return { date, tempC: Math.round(tempC * 10) / 10 };
+}
+
+export function deriveSmnDailyHighSnapshots(captures, requestedDate) {
+  const snapshots = [];
+  for (const capture of captures ?? []) {
+    if (
+      !capture?.rawHash ||
+      !Number.isFinite(capture?.capturedAt) ||
+      typeof capture?.rawMunicipalityRows !== "string"
+    ) {
+      continue;
+    }
+    let rawRows;
+    try {
+      rawRows = JSON.parse(capture.rawMunicipalityRows);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(rawRows) || rawRows.length > 10) {
+      continue;
+    }
+    for (const rawRow of rawRows) {
+      const row = normalizeSmnDailySnapshotRow(rawRow);
+      if (!row || (requestedDate && row.date !== requestedDate)) {
+        continue;
+      }
+      snapshots.push(
+        buildSnapshot({
+          stationIcao: capture.stationIcao ?? STATION_ICAO,
+          date: row.date,
+          source: "smn_municipal_daily",
+          sourceInputKey: capture.rawHash,
+          sourceLabel:
+            "SMN/CONAGUA explicit daily tmax · Venustiano Carranza · 4.8 km from MMMX",
+          sourceIssuedAt: capture.sourceLastModifiedAt,
+          sourceCapturedAt: capture.capturedAt,
+          forecastHighC: row.tempC,
+        }),
+      );
+    }
+  }
+  return snapshots;
+}
+
 async function captureForecastHighSnapshotsHandler(ctx, args) {
   const stationIcao = assertStation(args.stationIcao);
   const date = args.date === undefined ? undefined : assertDate(args.date);
-  const [tafCaptures, smnCaptures] = await Promise.all([
+  const [tafCaptures, smnDailyCaptures, smnHourlyCaptures] = await Promise.all([
     ctx.db
       .query("mexicoTafForecasts")
       .withIndex("by_station_issue_time", (query) =>
@@ -375,6 +479,13 @@ async function captureForecastHighSnapshotsHandler(ctx, args) {
       )
       .order("desc")
       .take(date ? 80 : 12),
+    ctx.db
+      .query("mexicoSmnDailyForecastCaptures")
+      .withIndex("by_station_captured_at", (query) =>
+        query.eq("stationIcao", stationIcao),
+      )
+      .order("desc")
+      .take(date ? 40 : 4),
     ctx.db
       .query("mexicoSmnForecastCaptures")
       .withIndex("by_station_captured_at", (query) =>
@@ -385,7 +496,8 @@ async function captureForecastHighSnapshotsHandler(ctx, args) {
   ]);
   const candidates = [
     ...deriveTafHighSnapshots(tafCaptures, date),
-    ...deriveSmnHighSnapshots(smnCaptures, date),
+    ...deriveSmnDailyHighSnapshots(smnDailyCaptures, date),
+    ...deriveSmnHighSnapshots(smnHourlyCaptures, date),
   ];
   const uniqueCandidates = [
     ...new Map(candidates.map((row) => [row.snapshotKey, row])).values(),
@@ -578,6 +690,36 @@ function snapshotFallbackFromSmnRows(rows, stationIcao, date) {
   ];
 }
 
+function snapshotFallbackFromSmnDailyRows(rows, stationIcao, date) {
+  const latest = (rows ?? [])
+    .filter(
+      (row) =>
+        row?.date === date &&
+        Number.isFinite(row?.tmaxC) &&
+        Number.isFinite(row?.capturedAt) &&
+        row?.sourceInputKey,
+    )
+    .sort((left, right) => right.capturedAt - left.capturedAt)[0];
+  if (!latest) {
+    return [];
+  }
+  return [
+    {
+      ...buildSnapshot({
+        stationIcao,
+        date,
+        source: "smn_municipal_daily",
+        sourceInputKey: latest.sourceInputKey,
+        sourceLabel: latest.sourceSiteLabel,
+        sourceIssuedAt: latest.sourceLastModifiedAt,
+        sourceCapturedAt: latest.capturedAt,
+        forecastHighC: latest.tmaxC,
+      }),
+      persisted: false,
+    },
+  ];
+}
+
 export function selectLatestSmnCaptureRows(rows, date) {
   const usable = (rows ?? []).filter(
     (row) => row?.date === date && Number.isFinite(row?.forecastTimeUtc),
@@ -625,6 +767,43 @@ export function buildSmnDateCoverage(rows, date) {
     expectedHourCount,
     coverageStartAt: orderedTimes[0] ?? null,
     coverageEndAt: orderedTimes.at(-1) ?? null,
+  };
+}
+
+export function buildSmnDailyCoverage(rows, date) {
+  const latest = (rows ?? [])
+    .filter(
+      (row) =>
+        row?.date === date &&
+        Number.isFinite(row?.tmaxC) &&
+        Number.isFinite(row?.capturedAt),
+    )
+    .sort((left, right) => right.capturedAt - left.capturedAt)[0];
+  return latest
+    ? {
+        status: "available",
+        capturedAt: latest.capturedAt,
+        forecastHighC: latest.tmaxC,
+      }
+    : {
+        status: "unavailable",
+        capturedAt: null,
+        forecastHighC: null,
+      };
+}
+
+export function maskForecastRevisionWhenUnavailable(revision, available) {
+  if (available) {
+    return revision;
+  }
+  return {
+    ...revision,
+    status: "unavailable",
+    current: null,
+    previous: null,
+    deltaC: null,
+    changedAt: null,
+    changed: false,
   };
 }
 
@@ -923,7 +1102,10 @@ function publicForecastRevision(
 function publicForecastSnapshots(snapshots) {
   return snapshots.map((snapshot) =>
     publicForecastSnapshot(snapshot, {
-      providerIssuedAtSupported: snapshot.source !== "smn_municipal_hourly",
+      providerIssuedAtSupported: ![
+        "smn_municipal_daily",
+        "smn_municipal_hourly",
+      ].includes(snapshot.source),
     }),
   );
 }
@@ -937,12 +1119,20 @@ export const getForecastDate = queryGeneric({
     const stationIcao = assertStation(args.stationIcao);
     const date = assertDate(args.date);
     const [
-      smnRows,
+      smnDailyRows,
+      smnHourlyRows,
       tafCaptures,
       persistedForecastSnapshots,
       tafStatus,
-      smnStatus,
+      smnDailyStatus,
+      smnHourlyStatus,
     ] = await Promise.all([
+      ctx.db
+        .query("mexicoSmnDailyForecasts")
+        .withIndex("by_station_date", (query) =>
+          query.eq("stationIcao", stationIcao).eq("date", date),
+        )
+        .take(10),
       ctx.db
         .query("mexicoSmnHourlyForecasts")
         .withIndex("by_station_date_time", (query) =>
@@ -974,6 +1164,14 @@ export const getForecastDate = queryGeneric({
         .withIndex("by_station_source", (query) =>
           query
             .eq("stationIcao", stationIcao)
+            .eq("source", "smn_municipal_daily"),
+        )
+        .unique(),
+      ctx.db
+        .query("mexicoCollectorStatus")
+        .withIndex("by_station_source", (query) =>
+          query
+            .eq("stationIcao", stationIcao)
             .eq("source", "smn_municipal_hourly"),
         )
         .unique(),
@@ -983,7 +1181,8 @@ export const getForecastDate = queryGeneric({
         ...row,
         persisted: false,
       })),
-      ...snapshotFallbackFromSmnRows(smnRows, stationIcao, date),
+      ...snapshotFallbackFromSmnDailyRows(smnDailyRows, stationIcao, date),
+      ...snapshotFallbackFromSmnRows(smnHourlyRows, stationIcao, date),
     ];
     const persistedSnapshots = persistedForecastSnapshots.map((row) => ({
       ...row,
@@ -996,9 +1195,22 @@ export const getForecastDate = queryGeneric({
     const tafRevision = buildForecastRevision(
       snapshots.filter((row) => row.source === "taf_tx"),
     );
-    const smnRevision = buildForecastRevision(
+    const smnDailyCoverage = buildSmnDailyCoverage(smnDailyRows, date);
+    const smnDailyRevision = maskForecastRevisionWhenUnavailable(
+      buildForecastRevision(
+        snapshots.filter((row) => row.source === "smn_municipal_daily"),
+      ),
+      smnDailyCoverage.status === "available",
+    );
+    const smnHourlyRevision = buildForecastRevision(
       snapshots.filter((row) => row.source === "smn_municipal_hourly"),
     );
+    const publicSmnDailyRevision = publicForecastRevision(smnDailyRevision, {
+      providerIssuedAtSupported: false,
+    });
+    const publicSmnHourlyRevision = publicForecastRevision(smnHourlyRevision, {
+      providerIssuedAtSupported: false,
+    });
 
     return {
       stationIcao,
@@ -1007,19 +1219,24 @@ export const getForecastDate = queryGeneric({
       generatedAt: Date.now(),
       forecasts: {
         taf: publicForecastRevision(tafRevision),
-        smn: publicForecastRevision(smnRevision, {
-          providerIssuedAtSupported: false,
-        }),
+        // `smn` is the primary explicit daily-tmax product. The method=3
+        // maximum and its peak hour remain available only as hourly guidance.
+        smn: publicSmnDailyRevision,
+        smnDaily: publicSmnDailyRevision,
+        smnHourly: publicSmnHourlyRevision,
         snapshots: publicForecastSnapshots(
           snapshots.slice(-MAX_FORECAST_DATE_SNAPSHOTS),
         ),
       },
       coverage: {
-        smn: buildSmnDateCoverage(smnRows, date),
+        smn: smnDailyCoverage,
+        smnDaily: smnDailyCoverage,
+        smnHourly: buildSmnDateCoverage(smnHourlyRows, date),
       },
       collectorStatuses: {
         awc_taf: tafStatus,
-        smn_municipal_hourly: smnStatus,
+        smn_municipal_daily: smnDailyStatus,
+        smn_municipal_hourly: smnHourlyStatus,
       },
     };
   },
@@ -1043,7 +1260,8 @@ export const getDashboard = queryGeneric({
     const [
       storedDayMetarPage,
       storedHistoryByDate,
-      smnRows,
+      smnDailyRows,
+      smnHourlyRows,
       tafCaptures,
       collectorStatusRows,
       persistedForecastSnapshots,
@@ -1067,6 +1285,12 @@ export const getDashboard = queryGeneric({
             .take(MAX_HISTORY_METARS_PER_DAY),
         ),
       ),
+      ctx.db
+        .query("mexicoSmnDailyForecasts")
+        .withIndex("by_station_date", (query) =>
+          query.eq("stationIcao", stationIcao).eq("date", date),
+        )
+        .take(10),
       ctx.db
         .query("mexicoSmnHourlyForecasts")
         .withIndex("by_station_date_time", (query) =>
@@ -1241,7 +1465,8 @@ export const getDashboard = queryGeneric({
         ...row,
         persisted: false,
       })),
-      ...snapshotFallbackFromSmnRows(smnRows, stationIcao, date),
+      ...snapshotFallbackFromSmnDailyRows(smnDailyRows, stationIcao, date),
+      ...snapshotFallbackFromSmnRows(smnHourlyRows, stationIcao, date),
     ];
     const persistedSnapshots = persistedForecastSnapshots.map((row) => ({
       ...row,
@@ -1256,7 +1481,14 @@ export const getDashboard = queryGeneric({
     const tafRevision = buildForecastRevision(
       snapshots.filter((row) => row.source === "taf_tx"),
     );
-    const smnRevision = buildForecastRevision(
+    const smnDailyCoverage = buildSmnDailyCoverage(smnDailyRows, date);
+    const smnDailyRevision = maskForecastRevisionWhenUnavailable(
+      buildForecastRevision(
+        snapshots.filter((row) => row.source === "smn_municipal_daily"),
+      ),
+      smnDailyCoverage.status === "available",
+    );
+    const smnHourlyRevision = buildForecastRevision(
       snapshots.filter((row) => row.source === "smn_municipal_hourly"),
     );
     const collectorStatuses = Object.fromEntries(
@@ -1291,7 +1523,10 @@ export const getDashboard = queryGeneric({
       ? { ...latestMetar, rawText: latestMetar.rawMetar }
       : null;
     const publicTafRevision = publicForecastRevision(tafRevision);
-    const publicSmnRevision = publicForecastRevision(smnRevision, {
+    const publicSmnDailyRevision = publicForecastRevision(smnDailyRevision, {
+      providerIssuedAtSupported: false,
+    });
+    const publicSmnHourlyRevision = publicForecastRevision(smnHourlyRevision, {
       providerIssuedAtSupported: false,
     });
     const latestRelevantTaf =
@@ -1315,7 +1550,10 @@ export const getDashboard = queryGeneric({
       sourceEvents,
       speci: speciClock,
       taf: latestRelevantTaf,
-      smnRows: smnRows.sort(
+      smnDailyRows: smnDailyRows.sort((left, right) =>
+        left.date.localeCompare(right.date),
+      ),
+      smnRows: smnHourlyRows.sort(
         (left, right) => left.forecastTimeUtc - right.forecastTimeUtc,
       ),
       temperature: {
@@ -1343,7 +1581,9 @@ export const getDashboard = queryGeneric({
       },
       forecasts: {
         taf: publicTafRevision,
-        smn: publicSmnRevision,
+        smn: publicSmnDailyRevision,
+        smnDaily: publicSmnDailyRevision,
+        smnHourly: publicSmnHourlyRevision,
         snapshots: publicForecastSnapshots(
           snapshots
             .sort(
@@ -1351,7 +1591,13 @@ export const getDashboard = queryGeneric({
             )
             .slice(-240),
         ),
-        smnRows,
+        smnDailyRows,
+        smnRows: smnHourlyRows,
+      },
+      coverage: {
+        smn: smnDailyCoverage,
+        smnDaily: smnDailyCoverage,
+        smnHourly: buildSmnDateCoverage(smnHourlyRows, date),
       },
       capma: {
         ...capmaGates,

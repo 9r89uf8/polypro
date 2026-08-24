@@ -10,9 +10,12 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api.js";
 
 const STATION_ICAO = "MMMX";
-const SOURCE = "smn_municipal_hourly";
-const SOURCE_URL =
+const HOURLY_SOURCE = "smn_municipal_hourly";
+const HOURLY_SOURCE_URL =
   "https://smn.conagua.gob.mx/tools/GUI/webservices/?method=3";
+const DAILY_SOURCE = "smn_municipal_daily";
+const DAILY_SOURCE_URL =
+  "https://smn.conagua.gob.mx/tools/GUI/webservices/?method=1";
 const TARGET_STATE_ID = "9";
 const TARGET_MUNICIPALITY_ID = "17";
 const TARGET_MUNICIPALITY_NAME = "Venustiano Carranza";
@@ -156,7 +159,11 @@ export function normalizeSmnRow(row) {
     conditionText: description,
     conditionKey: conditionKey(description, precipitationMm),
     ...(Number.isFinite(precipitationProbabilityPct)
-      ? { precipitationProbabilityPct: roundToTenth(precipitationProbabilityPct) }
+      ? {
+          precipitationProbabilityPct: roundToTenth(
+            precipitationProbabilityPct,
+          ),
+        }
       : {}),
     ...(Number.isFinite(precipitationMm)
       ? { precipitationMm: roundToTenth(precipitationMm) }
@@ -186,9 +193,101 @@ export function normalizeSmnRow(row) {
   };
 }
 
-export async function parseSmnHourlyGzipStream(input) {
+export function normalizeSmnDailyRow(row) {
+  if (
+    String(row?.ides ?? "") !== TARGET_STATE_ID ||
+    String(row?.idmun ?? "") !== TARGET_MUNICIPALITY_ID ||
+    String(row?.nmun ?? "") !== TARGET_MUNICIPALITY_NAME
+  ) {
+    return null;
+  }
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})$/.exec(
+    String(row?.dloc ?? "").trim(),
+  );
+  const forecastDayNumber = optionalNumber(row?.ndia);
+  const tmaxC = optionalNumber(row?.tmax);
+  const tminC = optionalNumber(row?.tmin);
+  const utcOffsetHours = optionalNumber(row?.dh);
+  if (
+    !match ||
+    match[4] !== "00" ||
+    !Number.isFinite(tmaxC) ||
+    (forecastDayNumber !== undefined &&
+      (!Number.isInteger(forecastDayNumber) ||
+        forecastDayNumber < 0 ||
+        forecastDayNumber > 10)) ||
+    (utcOffsetHours !== undefined &&
+      (!Number.isInteger(utcOffsetHours) ||
+        utcOffsetHours < -14 ||
+        utcOffsetHours > 14))
+  ) {
+    return null;
+  }
+  const localClockUtc = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+  );
+  const check = new Date(localClockUtc);
+  if (
+    check.getUTCFullYear() !== Number(match[1]) ||
+    check.getUTCMonth() !== Number(match[2]) - 1 ||
+    check.getUTCDate() !== Number(match[3]) ||
+    check.getUTCHours() !== Number(match[4])
+  ) {
+    return null;
+  }
+  const precipitationMm = optionalNumber(row?.prec);
+  const precipitationProbabilityPct = optionalNumber(row?.probprec);
+  const windSpeedKph = optionalNumber(row?.velvien);
+  const windDirectionDeg = optionalNumber(row?.dirvieng);
+  const windGustKph = optionalNumber(row?.raf);
+  const cloudCoverPct = optionalNumber(row?.cc);
+  const description = String(row?.desciel ?? "Sin descripción").trim();
+  return {
+    date: `${match[1]}-${match[2]}-${match[3]}`,
+    ...(Number.isInteger(forecastDayNumber) ? { forecastDayNumber } : {}),
+    tmaxC: roundToTenth(tmaxC),
+    tmaxF: toFahrenheit(tmaxC),
+    ...(Number.isFinite(tminC)
+      ? { tminC: roundToTenth(tminC), tminF: toFahrenheit(tminC) }
+      : {}),
+    conditionText: description,
+    conditionKey: conditionKey(description, precipitationMm),
+    ...(Number.isFinite(precipitationProbabilityPct)
+      ? {
+          precipitationProbabilityPct: roundToTenth(
+            precipitationProbabilityPct,
+          ),
+        }
+      : {}),
+    ...(Number.isFinite(precipitationMm)
+      ? { precipitationMm: roundToTenth(precipitationMm) }
+      : {}),
+    ...(Number.isFinite(cloudCoverPct)
+      ? { cloudCoverPct: roundToTenth(cloudCoverPct) }
+      : {}),
+    ...(Number.isFinite(windSpeedKph)
+      ? { windSpeedKph: roundToTenth(windSpeedKph) }
+      : {}),
+    ...(row?.dirvienc
+      ? { windDirectionText: String(row.dirvienc).trim() }
+      : {}),
+    ...(Number.isFinite(windDirectionDeg)
+      ? { windDirectionDeg: roundToTenth(windDirectionDeg) }
+      : {}),
+    ...(Number.isFinite(windGustKph)
+      ? { windGustKph: roundToTenth(windGustKph) }
+      : {}),
+    ...(Number.isInteger(utcOffsetHours) ? { utcOffsetHours } : {}),
+    sourceRowJson: JSON.stringify(row),
+  };
+}
+
+async function parseSmnGzipStream(input, productLabel) {
   if (!input) {
-    throw new Error("SMN hourly response had no body stream.");
+    throw new Error(`${productLabel} response had no body stream.`);
   }
   const hash = createHash("sha256");
   let compressedBytes = 0;
@@ -200,7 +299,9 @@ export async function parseSmnHourlyGzipStream(input) {
     transform(chunk, _encoding, callback) {
       compressedBytes += chunk.length;
       if (compressedBytes > MAX_COMPRESSED_BYTES) {
-        callback(new Error("SMN hourly gzip exceeded the compressed size limit."));
+        callback(
+          new Error(`${productLabel} gzip exceeded the compressed size limit.`),
+        );
         return;
       }
       hash.update(chunk);
@@ -232,7 +333,7 @@ export async function parseSmnHourlyGzipStream(input) {
     const parsed = JSON.parse(objectText);
     totalObjectCount += 1;
     if (totalObjectCount > MAX_TOTAL_OBJECTS) {
-      throw new Error("SMN hourly gzip exceeded the object-count limit.");
+      throw new Error(`${productLabel} gzip exceeded the object-count limit.`);
     }
     if (
       String(parsed?.ides ?? "") === TARGET_STATE_ID &&
@@ -240,7 +341,7 @@ export async function parseSmnHourlyGzipStream(input) {
     ) {
       targetRows.push(parsed);
       if (targetRows.length > MAX_TARGET_ROWS) {
-        throw new Error("SMN hourly gzip exceeded the target-row limit.");
+        throw new Error(`${productLabel} gzip exceeded the target-row limit.`);
       }
     }
     objectText = "";
@@ -254,7 +355,7 @@ export async function parseSmnHourlyGzipStream(input) {
           continue;
         }
         if (character !== "[") {
-          throw new Error("SMN hourly JSON root must open with an array.");
+          throw new Error(`${productLabel} JSON root must open with an array.`);
         }
         rootState = "expect_value_or_end";
         continue;
@@ -269,7 +370,9 @@ export async function parseSmnHourlyGzipStream(input) {
           continue;
         }
         if (character !== "{") {
-          throw new Error("SMN hourly JSON array entries must be objects.");
+          throw new Error(
+            `${productLabel} JSON array entries must be objects.`,
+          );
         }
         startObject();
         continue;
@@ -281,7 +384,7 @@ export async function parseSmnHourlyGzipStream(input) {
         }
         if (character !== "{") {
           throw new Error(
-            "SMN hourly JSON array has a missing object or trailing comma.",
+            `${productLabel} JSON array has a missing object or trailing comma.`,
           );
         }
         startObject();
@@ -301,14 +404,14 @@ export async function parseSmnHourlyGzipStream(input) {
           continue;
         }
         throw new Error(
-          "SMN hourly JSON array is missing a comma or closing bracket.",
+          `${productLabel} JSON array is missing a comma or closing bracket.`,
         );
       }
 
       if (rootState === "after_array") {
         if (!isJsonWhitespace(character)) {
           throw new Error(
-            "SMN hourly JSON has non-whitespace data after the root array.",
+            `${productLabel} JSON has non-whitespace data after the root array.`,
           );
         }
         continue;
@@ -316,7 +419,9 @@ export async function parseSmnHourlyGzipStream(input) {
 
       objectText += character;
       if (objectText.length > 32_000) {
-        throw new Error("SMN hourly JSON object exceeded the safe parser limit.");
+        throw new Error(
+          `${productLabel} JSON object exceeded the safe parser limit.`,
+        );
       }
       if (inString) {
         if (escaped) {
@@ -347,7 +452,7 @@ export async function parseSmnHourlyGzipStream(input) {
         decompressedBytes += chunk.length;
         if (decompressedBytes > MAX_DECOMPRESSED_BYTES) {
           throw new Error(
-            "SMN hourly gzip exceeded the decompressed size limit.",
+            `${productLabel} gzip exceeded the decompressed size limit.`,
           );
         }
         consume(decoder.write(chunk));
@@ -365,11 +470,11 @@ export async function parseSmnHourlyGzipStream(input) {
           inString ||
           escaped
         ) {
-          throw new Error("SMN hourly gzip ended inside a JSON object.");
+          throw new Error(`${productLabel} gzip ended inside a JSON object.`);
         }
         if (rootState !== "after_array") {
           throw new Error(
-            "SMN hourly gzip did not contain a complete JSON root array.",
+            `${productLabel} gzip did not contain a complete JSON root array.`,
           );
         }
         callback();
@@ -390,6 +495,17 @@ export async function parseSmnHourlyGzipStream(input) {
   };
 }
 
+export async function parseSmnHourlyGzipStream(input) {
+  return await parseSmnGzipStream(input, "SMN hourly");
+}
+
+// Both documented SMN municipal products use the same gzip-wrapped root JSON
+// array. The streaming parser retains only Venustiano Carranza rows, keeping
+// the all-Mexico payload out of Convex memory and storage.
+export async function parseSmnDailyGzipStream(input) {
+  return await parseSmnGzipStream(input, "SMN daily");
+}
+
 export const pollSmnHourlyForecast = actionGeneric({
   args: {
     stationIcao: v.optional(v.string()),
@@ -401,11 +517,11 @@ export const pollSmnHourlyForecast = actionGeneric({
     }
     const previousStatus = await ctx.runQuery(api.mexico.getCollectorStatus, {
       stationIcao,
-      source: SOURCE,
+      source: HOURLY_SOURCE,
     });
     const claim = await ctx.runMutation(internal.mexico.claimCollectorAttempt, {
       stationIcao,
-      source: SOURCE,
+      source: HOURLY_SOURCE,
       cooldownMs: COLLECTOR_COOLDOWN_MS,
     });
     if (!claim.claimed) {
@@ -421,7 +537,7 @@ export const pollSmnHourlyForecast = actionGeneric({
       if (previousStatus?.lastModified) {
         headers["If-Modified-Since"] = previousStatus.lastModified;
       }
-      const response = await fetch(SOURCE_URL, {
+      const response = await fetch(HOURLY_SOURCE_URL, {
         cache: "no-store",
         headers,
       });
@@ -432,7 +548,7 @@ export const pollSmnHourlyForecast = actionGeneric({
           {
             attemptAt: claim.attemptAt,
             stationIcao,
-            source: SOURCE,
+            source: HOURLY_SOURCE,
             status: "not_modified",
             lastSuccessAt: previousStatus?.lastSuccessAt ?? completedAt,
             lastError: "",
@@ -489,7 +605,7 @@ export const pollSmnHourlyForecast = actionGeneric({
         {
           attemptAt: claim.attemptAt,
           stationIcao,
-          sourceUrl: SOURCE_URL,
+          sourceUrl: HOURLY_SOURCE_URL,
           capturedAt: completedAt,
           ...(Number.isFinite(sourceLastModifiedAt)
             ? { sourceLastModifiedAt }
@@ -510,7 +626,7 @@ export const pollSmnHourlyForecast = actionGeneric({
         {
           attemptAt: claim.attemptAt,
           stationIcao,
-          source: SOURCE,
+          source: HOURLY_SOURCE,
           status: "ok",
           lastSuccessAt: completedAt,
           lastError: "",
@@ -539,7 +655,170 @@ export const pollSmnHourlyForecast = actionGeneric({
         {
           attemptAt: claim.attemptAt,
           stationIcao,
-          source: SOURCE,
+          source: HOURLY_SOURCE,
+          status: "error",
+          lastError: message,
+        },
+      );
+      if (finish.stale) {
+        return { status: "superseded" };
+      }
+      throw new Error(message);
+    }
+  },
+});
+
+export const pollSmnDailyForecast = actionGeneric({
+  args: {
+    stationIcao: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const stationIcao = (args.stationIcao ?? STATION_ICAO).trim().toUpperCase();
+    if (stationIcao !== STATION_ICAO) {
+      throw new Error("The SMN daily collector supports MMMX only.");
+    }
+    const previousStatus = await ctx.runQuery(api.mexico.getCollectorStatus, {
+      stationIcao,
+      source: DAILY_SOURCE,
+    });
+    const claim = await ctx.runMutation(internal.mexico.claimCollectorAttempt, {
+      stationIcao,
+      source: DAILY_SOURCE,
+      cooldownMs: COLLECTOR_COOLDOWN_MS,
+    });
+    if (!claim.claimed) {
+      return { status: "cooldown", retryAfterAt: claim.retryAfterAt };
+    }
+
+    try {
+      const headers = {
+        Accept: "application/octet-stream",
+        "User-Agent":
+          "polypro-mmmx-weather/1.0 (SMN documented municipal forecast collector)",
+      };
+      if (previousStatus?.lastModified) {
+        headers["If-Modified-Since"] = previousStatus.lastModified;
+      }
+      const response = await fetch(DAILY_SOURCE_URL, {
+        cache: "no-store",
+        headers,
+      });
+      const completedAt = Date.now();
+      if (response.status === 304) {
+        const finish = await ctx.runMutation(
+          internal.mexico.finishCollectorAttempt,
+          {
+            attemptAt: claim.attemptAt,
+            stationIcao,
+            source: DAILY_SOURCE,
+            status: "not_modified",
+            lastSuccessAt: previousStatus?.lastSuccessAt ?? completedAt,
+            lastError: "",
+            httpStatus: response.status,
+            lastModified:
+              response.headers.get("last-modified") ??
+              previousStatus?.lastModified ??
+              undefined,
+            rowCount: previousStatus?.rowCount,
+          },
+        );
+        if (finish.stale) {
+          return { status: "superseded" };
+        }
+        return { status: "not_modified" };
+      }
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(
+          `SMN daily request failed (${response.status}): ${text.slice(0, 200)}`,
+        );
+      }
+      const contentType = response.headers.get("content-type") ?? "";
+      if (
+        !/(?:application\/octet-stream|application\/(?:x-)?gzip)/i.test(
+          contentType,
+        )
+      ) {
+        throw new Error(`Unexpected SMN daily content type: ${contentType}`);
+      }
+
+      const parsed = await parseSmnDailyGzipStream(response.body);
+      const rowsByDate = new Map();
+      for (const rawRow of parsed.targetRows) {
+        const normalized = normalizeSmnDailyRow(rawRow);
+        if (normalized) {
+          rowsByDate.set(normalized.date, normalized);
+        }
+      }
+      const rows = Array.from(rowsByDate.values()).sort((left, right) =>
+        left.date.localeCompare(right.date),
+      );
+      if (rows.length < 2 || rows.length > 10) {
+        throw new Error(
+          `SMN daily stream returned ${rows.length} usable Venustiano Carranza rows; expected 2–10.`,
+        );
+      }
+      const sourceLastModified = response.headers.get("last-modified");
+      const sourceLastModifiedAt = sourceLastModified
+        ? Date.parse(sourceLastModified)
+        : null;
+      const result = await ctx.runMutation(
+        internal.mexico.storeSmnDailyForecastBatch,
+        {
+          attemptAt: claim.attemptAt,
+          stationIcao,
+          sourceUrl: DAILY_SOURCE_URL,
+          capturedAt: completedAt,
+          ...(Number.isFinite(sourceLastModifiedAt)
+            ? { sourceLastModifiedAt }
+            : {}),
+          rawHash: parsed.rawHash,
+          compressedBytes: parsed.compressedBytes,
+          decompressedBytes: parsed.decompressedBytes,
+          totalObjectCount: parsed.totalObjectCount,
+          rawMunicipalityRows: JSON.stringify(parsed.targetRows),
+          rows,
+        },
+      );
+      if (result.stale) {
+        return { status: "superseded" };
+      }
+      const finish = await ctx.runMutation(
+        internal.mexico.finishCollectorAttempt,
+        {
+          attemptAt: claim.attemptAt,
+          stationIcao,
+          source: DAILY_SOURCE,
+          status: "ok",
+          lastSuccessAt: completedAt,
+          lastError: "",
+          httpStatus: response.status,
+          responseBytes: parsed.compressedBytes,
+          lastModified: sourceLastModified ?? undefined,
+          cacheControl: response.headers.get("cache-control") ?? undefined,
+          rowCount: rows.length,
+        },
+      );
+      if (finish.stale) {
+        return { status: "superseded" };
+      }
+      return {
+        status: "ok",
+        rowCount: rows.length,
+        insertedCount: result.insertedCount,
+        updatedCount: result.updatedCount,
+        removedCount: result.removedCount,
+        compressedBytes: parsed.compressedBytes,
+        decompressedBytes: parsed.decompressedBytes,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const finish = await ctx.runMutation(
+        internal.mexico.finishCollectorAttempt,
+        {
+          attemptAt: claim.attemptAt,
+          stationIcao,
+          source: DAILY_SOURCE,
           status: "error",
           lastError: message,
         },

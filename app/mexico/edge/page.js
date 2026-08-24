@@ -31,6 +31,7 @@ import {
 import {
   FORECAST_SOURCE_SMN,
   FORECAST_SOURCE_TAF,
+  formatForecastClock,
   nextAutomaticForecastCheck,
   nextDayTafAvailabilityWindow,
   smnVenustianoDailyForecastUrl,
@@ -42,8 +43,11 @@ const MEXICO_TIMEZONE = "America/Mexico_City";
 const MARKET_STALE_AFTER_MS = 90 * 1000;
 const FORECAST_COLLECTOR_LEASE_MS = {
   awc_taf: 60 * 1000,
+  smn_municipal_daily: 30 * 60 * 1000,
   smn_municipal_hourly: 30 * 60 * 1000,
 };
+const SMN_DAILY_SNAPSHOT_SOURCE = "smn_municipal_daily";
+const SMN_HOURLY_SNAPSHOT_SOURCE = "smn_municipal_hourly";
 const AWC_MMMX_TAF_URL =
   "https://aviationweather.gov/api/data/taf?ids=MMMX&format=raw";
 const POLYMARKET_MARKET_WEBSOCKET_URL =
@@ -1392,6 +1396,14 @@ function normalizeForecast(source, fallback, kind) {
   };
 }
 
+function forecastRevisionForSource(revision, expectedSource) {
+  if (!revision) {
+    return null;
+  }
+  const currentSource = revision?.current?.source;
+  return !currentSource || currentSource === expectedSource ? revision : null;
+}
+
 function capmaImageUrl(path) {
   const siteOrigin = resolveConvexSiteOrigin(
     process.env.NEXT_PUBLIC_CONVEX_URL,
@@ -2246,6 +2258,7 @@ function ForecastCard({
   collectorStatus,
   nextCheckAt,
   availability,
+  peakTiming,
   sourceAttribution,
   sourceLinks = [],
   onRefresh,
@@ -2288,6 +2301,28 @@ function ForecastCard({
   const lastAttemptStatus = collectorLeaseExpired
     ? "fetching lease expired"
     : rawLastAttemptStatus;
+  const peakCoverage = peakTiming?.coverage;
+  const peakCoverageComplete = peakCoverage?.status === "complete";
+  const peakTimingAvailable =
+    peakCoverageComplete &&
+    Number.isFinite(peakTiming?.at) &&
+    Number.isFinite(peakTiming?.tempC);
+  const peakTimingFetchAt = firstFinite(
+    peakTiming?.collectorStatus?.lastSuccessAt,
+    peakTiming?.capturedAt,
+  );
+  const peakTimingFetchError = peakTiming?.collectorStatus?.status === "error";
+  const peakTimingDetail = peakTimingAvailable
+    ? `Mexico City time · From all ${peakCoverage.hourCount} retained SMN hourly temperatures, whose curve peaks at ${formatTemperature(peakTiming.tempC, 1)}. The daily maximum product does not publish an exact peak time.`
+    : peakCoverage?.status === "partial"
+      ? `Only ${peakCoverage.hourCount} of ${peakCoverage.expectedHourCount ?? 24} hourly temperatures are retained, so a peak-time estimate is withheld. The daily maximum remains valid.`
+      : "SMN's daily maximum product does not publish a peak time, and no complete hourly curve is currently retained.";
+  const peakTimingFreshness = Number.isFinite(peakTimingFetchAt)
+    ? ` Hourly data-bearing fetch: ${formatDateTime(peakTimingFetchAt)} (${formatAge(peakTimingFetchAt, nowMs)}).`
+    : " Hourly fetch time is unavailable.";
+  const peakTimingHealth = peakTimingFetchError
+    ? " The latest hourly fetch attempt failed; the retained curve may be stale."
+    : "";
   const history = (forecast.history || []).slice(-6);
   const statusLabel = loading
     ? "loading forecast"
@@ -2338,6 +2373,32 @@ function ForecastCard({
             : "no baseline"}
         </span>
       </div>
+      {peakTiming ? (
+        <div className={styles.forecastPeakGuidance}>
+          <span>
+            {peakCoverageComplete
+              ? "Expected warmest hour"
+              : "Warmest-hour guidance"}
+          </span>
+          <strong>
+            {peakTimingAvailable ? (
+              <>
+                Around{" "}
+                <time dateTime={new Date(peakTiming.at).toISOString()}>
+                  {formatForecastClock(peakTiming.at)}
+                </time>
+              </>
+            ) : (
+              "Timing unavailable"
+            )}
+          </strong>
+          <small>
+            {peakTimingDetail}
+            {peakTimingFreshness}
+            {peakTimingHealth}
+          </small>
+        </div>
+      ) : null}
       {availability ? (
         <div className={styles.forecastAvailability}>
           <span>{availability.label}</span>
@@ -2440,10 +2501,12 @@ function ForecastCard({
           <dt>Target date</dt>
           <dd>{targetDate || "today"}</dd>
         </div>
-        <div>
-          <dt>Forecast peak</dt>
-          <dd>{formatDateTime(forecast.forecastPeakTimeUtc)}</dd>
-        </div>
+        {Number.isFinite(forecast.forecastPeakTimeUtc) ? (
+          <div>
+            <dt>Forecast peak</dt>
+            <dd>{formatDateTime(forecast.forecastPeakTimeUtc)}</dd>
+          </div>
+        ) : null}
       </dl>
       {onRefresh || validSourceLinks.length ? (
         <div className={styles.forecastActions}>
@@ -2524,25 +2587,39 @@ function nextDayTafAvailability(forecast, window, nowMs) {
   };
 }
 
-function nextDaySmnAvailability(forecast, coverage) {
-  if (Number.isFinite(forecast?.current) && coverage?.status === "complete") {
+function nextDaySmnAvailability(forecast, hourlyForecast, coverage) {
+  const dailyAvailable = Number.isFinite(forecast?.current);
+  const hourlyAvailable = Number.isFinite(hourlyForecast?.current);
+  const hourlyComplete = hourlyAvailable && coverage?.status === "complete";
+  if (dailyAvailable && hourlyComplete) {
     return {
-      label: "Next-day municipal guidance",
+      label: "Next-day SMN daily maximum",
       value: "available now",
-      detail: `Derived from all ${coverage.hourCount} retained hourly temperatures for Venustiano Carranza.`,
+      detail: `The explicit daily tmax is available; all ${coverage.hourCount} hourly temperatures are retained for approximate peak timing.`,
     };
   }
-  if (Number.isFinite(forecast?.current)) {
+  if (dailyAvailable) {
     return {
-      label: "Next-day municipal guidance",
-      value: "partial coverage",
-      detail: `${coverage?.hourCount ?? "Some"} of ${coverage?.expectedHourCount ?? 24} expected hourly temperatures are retained; the displayed maximum is provisional.`,
+      label: "Next-day SMN daily maximum",
+      value: "available now",
+      detail: hourlyAvailable
+        ? `The explicit daily tmax is available; only ${coverage?.hourCount ?? "some"} of ${coverage?.expectedHourCount ?? 24} hourly temperatures are retained, so peak timing is withheld.`
+        : "The explicit daily tmax is available, but hourly peak timing is not currently retained.",
+    };
+  }
+  if (hourlyAvailable) {
+    return {
+      label: "Next-day SMN daily maximum",
+      value: "awaiting daily tmax",
+      detail: hourlyComplete
+        ? "A complete hourly curve is retained, but SMN's explicit daily maximum has not been captured yet."
+        : `Only ${coverage?.hourCount ?? "some"} of ${coverage?.expectedHourCount ?? 24} hourly temperatures are retained; peak timing is withheld and the explicit daily maximum is still missing.`,
     };
   }
   return {
-    label: "Next-day municipal guidance",
+    label: "Next-day SMN daily maximum",
     value: "awaiting data",
-    detail: "The hourly SMN collector checks again at :20 each hour.",
+    detail: "The daily and hourly SMN collectors check again at :20 each hour.",
   };
 }
 
@@ -4268,7 +4345,12 @@ export default function MexicoEdgePage() {
   );
   const pollAwcMetars = useAction("mexico:pollAwcMetars");
   const pollAwcTaf = useAction("mexico:pollAwcTaf");
-  const pollSmnForecast = useAction("mexicoForecastNode:pollSmnHourlyForecast");
+  const pollSmnDailyForecast = useAction(
+    "mexicoForecastNode:pollSmnDailyForecast",
+  );
+  const pollSmnHourlyForecast = useAction(
+    "mexicoForecastNode:pollSmnHourlyForecast",
+  );
   const refreshLiveMarket = useAction("mexicoPolymarketLive:refreshLiveMarket");
   const requestCapmaRefresh = useMutation("mexicoCapma:requestCapmaRefresh");
 
@@ -4503,10 +4585,10 @@ export default function MexicoEdgePage() {
   );
   const reactionHistoryLoading = Boolean(
     validDateKey(reactionDate) &&
-    (reactionDashboard === undefined ||
-      reactionMarket === undefined ||
-      (effectiveReactionQuotes.length > 0 && !selectedReactionRestQuote) ||
-      (selectedReactionRestQuote?.marketId && quoteHistory === undefined)),
+      (reactionDashboard === undefined ||
+        reactionMarket === undefined ||
+        (effectiveReactionQuotes.length > 0 && !selectedReactionRestQuote) ||
+        (selectedReactionRestQuote?.marketId && quoteHistory === undefined)),
   );
   const selectLiveQuote = useCallback(
     (id) => {
@@ -4576,10 +4658,37 @@ export default function MexicoEdgePage() {
     clock: observationClock,
     relayLagModel,
   });
+  const smnDailyForecastRevision = forecastRevisionForSource(
+    dashboard?.forecasts?.smnDaily,
+    SMN_DAILY_SNAPSHOT_SOURCE,
+  );
+  const smnHourlyForecastRevision =
+    forecastRevisionForSource(
+      dashboard?.forecasts?.smnHourly,
+      SMN_HOURLY_SNAPSHOT_SOURCE,
+    ) ||
+    forecastRevisionForSource(
+      dashboard?.forecasts?.smn,
+      SMN_HOURLY_SNAPSHOT_SOURCE,
+    );
+  const nextDaySmnDailyForecastRevision = forecastRevisionForSource(
+    nextDayForecastDashboard?.forecasts?.smnDaily,
+    SMN_DAILY_SNAPSHOT_SOURCE,
+  );
+  const nextDaySmnHourlyForecastRevision =
+    forecastRevisionForSource(
+      nextDayForecastDashboard?.forecasts?.smnHourly,
+      SMN_HOURLY_SNAPSHOT_SOURCE,
+    ) ||
+    forecastRevisionForSource(
+      nextDayForecastDashboard?.forecasts?.smn,
+      SMN_HOURLY_SNAPSHOT_SOURCE,
+    );
   const forecasts = {
     taf: normalizeForecast(dashboard?.forecasts?.taf, dashboard?.taf, "taf"),
-    smn: normalizeForecast(
-      dashboard?.forecasts?.smn,
+    smn: normalizeForecast(smnDailyForecastRevision, null, "smn"),
+    smnHourly: normalizeForecast(
+      smnHourlyForecastRevision,
       dashboard?.smnRows,
       "smn",
     ),
@@ -4590,11 +4699,8 @@ export default function MexicoEdgePage() {
       null,
       "taf",
     ),
-    smn: normalizeForecast(
-      nextDayForecastDashboard?.forecasts?.smn,
-      null,
-      "smn",
-    ),
+    smn: normalizeForecast(nextDaySmnDailyForecastRevision, null, "smn"),
+    smnHourly: normalizeForecast(nextDaySmnHourlyForecastRevision, null, "smn"),
   };
   const forecastCollectorStatuses =
     nextDayForecastDashboard?.collectorStatuses ||
@@ -4627,10 +4733,11 @@ export default function MexicoEdgePage() {
     const results = await Promise.allSettled([
       pollAwcMetars({ stationIcao: STATION_ICAO }),
       pollAwcTaf({ stationIcao: STATION_ICAO }),
-      pollSmnForecast({ stationIcao: STATION_ICAO }),
+      pollSmnDailyForecast({ stationIcao: STATION_ICAO }),
+      pollSmnHourlyForecast({ stationIcao: STATION_ICAO }),
       refreshLiveMarket({ stationIcao: STATION_ICAO, date }),
     ]);
-    const labels = ["METAR", "TAF", "SMN", "Market"];
+    const labels = ["METAR", "TAF", "SMN daily", "SMN hourly", "Market"];
     setRefreshState({
       kind: null,
       message: results
@@ -4641,7 +4748,8 @@ export default function MexicoEdgePage() {
     date,
     pollAwcMetars,
     pollAwcTaf,
-    pollSmnForecast,
+    pollSmnDailyForecast,
+    pollSmnHourlyForecast,
     refreshLiveMarket,
     refreshState.kind,
   ]);
@@ -4652,21 +4760,41 @@ export default function MexicoEdgePage() {
       const isTaf = source === FORECAST_SOURCE_TAF;
       const kind = isTaf ? "forecast-taf" : "forecast-smn";
       const label = isTaf ? "TAF" : "SMN";
-      const action = isTaf ? pollAwcTaf : pollSmnForecast;
       setRefreshState({
         kind,
         source,
         message: `Fetching the latest ${label} forecast from the provider…`,
       });
       try {
-        const result = await action({ stationIcao: STATION_ICAO });
+        const results = isTaf
+          ? [
+              {
+                label: "TAF",
+                result: await pollAwcTaf({ stationIcao: STATION_ICAO }),
+              },
+            ]
+          : (
+              await Promise.allSettled([
+                pollSmnDailyForecast({ stationIcao: STATION_ICAO }),
+                pollSmnHourlyForecast({ stationIcao: STATION_ICAO }),
+              ])
+            ).map((result, index) => ({
+              label: index === 0 ? "SMN daily" : "SMN hourly",
+              result,
+            }));
         setRefreshState({
           kind: null,
           source,
-          message: actionSummary(label, {
-            status: "fulfilled",
-            value: result,
-          }),
+          message: isTaf
+            ? actionSummary("TAF", {
+                status: "fulfilled",
+                value: results[0].result,
+              })
+            : results
+                .map(({ label: resultLabel, result }) =>
+                  actionSummary(resultLabel, result),
+                )
+                .join(" · "),
         });
       } catch {
         setRefreshState({
@@ -4676,7 +4804,12 @@ export default function MexicoEdgePage() {
         });
       }
     },
-    [pollAwcTaf, pollSmnForecast, refreshState.kind],
+    [
+      pollAwcTaf,
+      pollSmnDailyForecast,
+      pollSmnHourlyForecast,
+      refreshState.kind,
+    ],
   );
 
   const refreshImages = useCallback(async () => {
@@ -4954,8 +5087,10 @@ export default function MexicoEdgePage() {
               <h2 id="forecast-title">Daily maximum forecasts</h2>
             </div>
             <p>
-              TAF aerodrome groups and SMN/CONAGUA municipal guidance stay
-              distinct; neither is relabeled as the settlement source.
+              SMN's explicit daily maximum is the primary municipal signal; its
+              hourly profile supplies approximate peak timing. TAF aerodrome
+              guidance remains separate, and neither is relabeled as the
+              settlement source.
             </p>
           </div>
           <div className={styles.forecastDayBlock}>
@@ -4966,6 +5101,35 @@ export default function MexicoEdgePage() {
               </div>
             </div>
             <div className={styles.forecastGrid}>
+              <ForecastCard
+                label="SMN daily max · Venustiano Carranza"
+                forecast={forecasts.smn}
+                accent="#b8ff56"
+                digits={1}
+                nowMs={nowMs}
+                targetDate={date}
+                collectorStatus={forecastCollectorStatuses.smn_municipal_daily}
+                nextCheckAt={nextSmnCheckAt}
+                peakTiming={{
+                  at: forecasts.smnHourly.forecastPeakTimeUtc,
+                  tempC: forecasts.smnHourly.current,
+                  capturedAt: forecasts.smnHourly.forecastCapturedAt,
+                  coverage: dashboard?.coverage?.smnHourly,
+                  collectorStatus:
+                    forecastCollectorStatuses.smn_municipal_hourly,
+                }}
+                sourceAttribution="Official daily maximum · timing from SMN hourly guidance · Venustiano Carranza (SMN 9/17) · 4.8 km from MMMX"
+                sourceLinks={[
+                  {
+                    href: smnVenustianoDailyForecastUrl(nowMs),
+                    label: "View Venustiano daily maximum data",
+                  },
+                  {
+                    href: smnVenustianoHourlyForecastUrl(date, nowMs),
+                    label: "View hourly timing data",
+                  },
+                ]}
+              />
               <ForecastCard
                 label="TAF · MMMX aerodrome"
                 forecast={forecasts.taf}
@@ -4979,27 +5143,6 @@ export default function MexicoEdgePage() {
                   {
                     href: AWC_MMMX_TAF_URL,
                     label: "View live MMMX TAF",
-                  },
-                ]}
-              />
-              <ForecastCard
-                label="SMN / CONAGUA · Venustiano Carranza"
-                forecast={forecasts.smn}
-                accent="#b8ff56"
-                digits={1}
-                nowMs={nowMs}
-                targetDate={date}
-                collectorStatus={forecastCollectorStatuses.smn_municipal_hourly}
-                nextCheckAt={nextSmnCheckAt}
-                sourceAttribution="Official hourly municipal guidance · Venustiano Carranza (SMN 9/17) · 4.8 km from MMMX"
-                sourceLinks={[
-                  {
-                    href: smnVenustianoHourlyForecastUrl(date, nowMs),
-                    label: "View matching Venustiano hourly data",
-                  },
-                  {
-                    href: smnVenustianoDailyForecastUrl(nowMs),
-                    label: "Compare separate SMN daily product",
                   },
                 ]}
               />
@@ -5024,6 +5167,65 @@ export default function MexicoEdgePage() {
               </div>
             </div>
             <div className={styles.forecastGrid}>
+              <ForecastCard
+                label="SMN daily max · Venustiano Carranza"
+                forecast={nextDayForecasts.smn}
+                accent="#b8ff56"
+                digits={1}
+                nowMs={nowMs}
+                targetDate={tomorrowDate}
+                collectorStatus={forecastCollectorStatuses.smn_municipal_daily}
+                nextCheckAt={nextSmnCheckAt}
+                peakTiming={
+                  nextDayForecastLoading
+                    ? null
+                    : {
+                        at: nextDayForecasts.smnHourly.forecastPeakTimeUtc,
+                        tempC: nextDayForecasts.smnHourly.current,
+                        capturedAt:
+                          nextDayForecasts.smnHourly.forecastCapturedAt,
+                        coverage: nextDayForecastDashboard?.coverage?.smnHourly,
+                        collectorStatus:
+                          forecastCollectorStatuses.smn_municipal_hourly,
+                      }
+                }
+                availability={
+                  nextDayForecastLoading
+                    ? {
+                        label: "Next-day forecast",
+                        value: "loading…",
+                        detail: "Reading retained provider snapshots.",
+                      }
+                    : nextDaySmnAvailability(
+                        nextDayForecasts.smn,
+                        nextDayForecasts.smnHourly,
+                        nextDayForecastDashboard?.coverage?.smnHourly,
+                      )
+                }
+                sourceAttribution="Official daily maximum · timing from SMN hourly guidance · Venustiano Carranza (SMN 9/17) · 4.8 km from MMMX"
+                sourceLinks={[
+                  {
+                    href: smnVenustianoDailyForecastUrl(nowMs),
+                    label: "View Venustiano daily maximum data",
+                  },
+                  {
+                    href: smnVenustianoHourlyForecastUrl(tomorrowDate, nowMs),
+                    label: "View hourly timing data",
+                  },
+                ]}
+                onRefresh={() => refreshForecastSource(FORECAST_SOURCE_SMN)}
+                refreshLabel="Fetch latest SMN"
+                refreshing={refreshState.kind === "forecast-smn"}
+                refreshDisabled={
+                  Boolean(refreshState.kind) || nextDayForecastLoading
+                }
+                refreshMessage={
+                  refreshState.source === FORECAST_SOURCE_SMN
+                    ? refreshState.message
+                    : ""
+                }
+                loading={nextDayForecastLoading}
+              />
               <ForecastCard
                 label="TAF · MMMX aerodrome"
                 forecast={nextDayForecasts.taf}
@@ -5060,51 +5262,6 @@ export default function MexicoEdgePage() {
                 }
                 refreshMessage={
                   refreshState.source === FORECAST_SOURCE_TAF
-                    ? refreshState.message
-                    : ""
-                }
-                loading={nextDayForecastLoading}
-              />
-              <ForecastCard
-                label="SMN / CONAGUA · Venustiano Carranza"
-                forecast={nextDayForecasts.smn}
-                accent="#b8ff56"
-                digits={1}
-                nowMs={nowMs}
-                targetDate={tomorrowDate}
-                collectorStatus={forecastCollectorStatuses.smn_municipal_hourly}
-                nextCheckAt={nextSmnCheckAt}
-                availability={
-                  nextDayForecastLoading
-                    ? {
-                        label: "Next-day forecast",
-                        value: "loading…",
-                        detail: "Reading retained provider snapshots.",
-                      }
-                    : nextDaySmnAvailability(
-                        nextDayForecasts.smn,
-                        nextDayForecastDashboard?.coverage?.smn,
-                      )
-                }
-                sourceAttribution="Official hourly municipal guidance · Venustiano Carranza (SMN 9/17) · 4.8 km from MMMX"
-                sourceLinks={[
-                  {
-                    href: smnVenustianoHourlyForecastUrl(tomorrowDate, nowMs),
-                    label: "View matching Venustiano hourly data",
-                  },
-                  {
-                    href: smnVenustianoDailyForecastUrl(nowMs),
-                    label: "Compare separate SMN daily product",
-                  },
-                ]}
-                onRefresh={() => refreshForecastSource(FORECAST_SOURCE_SMN)}
-                refreshLabel="Fetch latest SMN"
-                refreshing={refreshState.kind === "forecast-smn"}
-                refreshDisabled={
-                  Boolean(refreshState.kind) || nextDayForecastLoading
-                }
-                refreshMessage={
-                  refreshState.source === FORECAST_SOURCE_SMN
                     ? refreshState.message
                     : ""
                 }

@@ -21,11 +21,14 @@ import {
   parseMetarTempGroup,
   publicMetarRowsForCapmaApproval,
   resolveReportObsTimeUtc,
+  selectSmnDailyRowsOmittedByBatch,
 } from "../convex/mexico.js";
 import { parseCapmaAftnReportLines } from "../convex/mexicoCapmaAftn.js";
 import { buildRelayRaceSummary } from "../convex/mexicoRelayRace.js";
 import {
+  normalizeSmnDailyRow,
   normalizeSmnRow,
+  parseSmnDailyGzipStream,
   parseSmnHourlyGzipStream,
   parseSmnLocalHour,
 } from "../convex/mexicoForecastNode.js";
@@ -109,6 +112,21 @@ test("collector claims keep active leases and reject stale finishes", () => {
   assert.equal(collectorFinishMatchesAttempt(active, 1_000), true);
   assert.equal(collectorFinishMatchesAttempt(active, 2_000), false);
   assert.equal(collectorFinishMatchesAttempt(active, undefined), true);
+});
+
+test("SMN daily mutable horizon removes dates omitted by a newer batch", () => {
+  const existingRows = [
+    { _id: "today", date: "2026-08-23" },
+    { _id: "tomorrow", date: "2026-08-24" },
+    { _id: "later", date: "2026-08-25" },
+  ];
+  assert.deepEqual(
+    selectSmnDailyRowsOmittedByBatch(
+      existingRows,
+      new Set(["2026-08-23", "2026-08-25"]),
+    ).map((row) => row._id),
+    ["tomorrow"],
+  );
 });
 
 function capmaSimilarityRow({
@@ -338,6 +356,36 @@ test("SMN rows reject a missing temperature and preserve valid zero values", () 
   assert.equal("windDirectionDeg" in row, false);
 });
 
+test("SMN daily rows preserve explicit tmax without requiring unrelated tmin", () => {
+  const baseRow = {
+    ides: "9",
+    idmun: "17",
+    nmun: "Venustiano Carranza",
+    dloc: "20260824T00",
+    ndia: "1",
+    dh: "6",
+    desciel: "Cielo nublado",
+    tmax: "20.7",
+  };
+  assert.deepEqual(normalizeSmnDailyRow(baseRow), {
+    date: "2026-08-24",
+    forecastDayNumber: 1,
+    tmaxC: 20.7,
+    tmaxF: 69.3,
+    conditionText: "Cielo nublado",
+    conditionKey: "cloudy",
+    utcOffsetHours: 6,
+    sourceRowJson: JSON.stringify(baseRow),
+  });
+  assert.equal(normalizeSmnDailyRow({ ...baseRow, tmax: null }), null);
+  assert.equal(normalizeSmnDailyRow({ ...baseRow, dloc: "20260230T00" }), null);
+  assert.equal(normalizeSmnDailyRow({ ...baseRow, dloc: "20260824T01" }), null);
+  assert.equal(normalizeSmnDailyRow({ ...baseRow, dloc: "20260824T99" }), null);
+  assert.equal(normalizeSmnDailyRow({ ...baseRow, ndia: "1.5" }), null);
+  assert.equal(normalizeSmnDailyRow({ ...baseRow, dh: "15" }), null);
+  assert.equal(normalizeSmnDailyRow({ ...baseRow, idmun: "16" }), null);
+});
+
 test("SMN gzip parser handles arbitrary chunks, escapes, and nested objects", async () => {
   const rows = [
     {
@@ -398,6 +446,33 @@ test("SMN gzip parser propagates incomplete JSON as a stream failure", async () 
   await assert.rejects(
     parseSmnHourlyGzipStream(Readable.from([compressed])),
     /ended inside a JSON object/i,
+  );
+});
+
+test("SMN daily gzip parser retains only the requested municipality", async () => {
+  const rows = [
+    {
+      ides: "9",
+      idmun: "17",
+      nmun: "Venustiano Carranza",
+      dloc: "20260824T00",
+      tmax: "20.7",
+    },
+    {
+      ides: "9",
+      idmun: "16",
+      nmun: "Miguel Hidalgo",
+      dloc: "20260824T00",
+      tmax: "18.1",
+    },
+  ];
+  const compressed = gzipSync(Buffer.from(JSON.stringify(rows), "utf8"));
+  const result = await parseSmnDailyGzipStream(Readable.from([compressed]));
+  assert.equal(result.totalObjectCount, 2);
+  assert.deepEqual(result.targetRows, [rows[0]]);
+  await assert.rejects(
+    parseSmnDailyGzipStream(null),
+    /SMN daily response had no body stream/,
   );
 });
 
@@ -970,15 +1045,20 @@ test("Mexico chart has one METAR/SPECI series and one CAPMA live series", async 
 });
 
 test("Mexico collectors use canonical status keys and beat-safe claim cooldowns", async () => {
-  const [awcSource, smnSource, capmaSource, schemaSource] = await Promise.all([
-    readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
-    readFile(
-      new URL("../convex/mexicoForecastNode.js", import.meta.url),
-      "utf8",
-    ),
-    readFile(new URL("../convex/mexicoCapmaNode.js", import.meta.url), "utf8"),
-    readFile(new URL("../convex/schema.js", import.meta.url), "utf8"),
-  ]);
+  const [awcSource, smnSource, capmaSource, schemaSource, cronSource] =
+    await Promise.all([
+      readFile(new URL("../convex/mexico.js", import.meta.url), "utf8"),
+      readFile(
+        new URL("../convex/mexicoForecastNode.js", import.meta.url),
+        "utf8",
+      ),
+      readFile(
+        new URL("../convex/mexicoCapmaNode.js", import.meta.url),
+        "utf8",
+      ),
+      readFile(new URL("../convex/schema.js", import.meta.url), "utf8"),
+      readFile(new URL("../convex/crons.js", import.meta.url), "utf8"),
+    ]);
 
   // AWC keeps its documented shared 60-second request discipline. Claim
   // cooldowns for the one-minute CAPMA/NOAA collectors sit BELOW the cron
@@ -999,7 +1079,13 @@ test("Mexico collectors use canonical status keys and beat-safe claim cooldowns"
     /args\.trigger === "manual" \? MANUAL_COOLDOWN_MS : SCHEDULED_COOLDOWN_MS/,
   );
   assert.match(capmaSource, /leaseMs: ATTEMPT_LEASE_MS/);
-  assert.match(smnSource, /const SOURCE = "smn_municipal_hourly";/);
+  assert.match(smnSource, /const HOURLY_SOURCE = "smn_municipal_hourly";/);
+  assert.match(smnSource, /const DAILY_SOURCE = "smn_municipal_daily";/);
+  assert.match(smnSource, /webservices\/\?method=1/);
+  assert.match(
+    cronSource,
+    /"mexico_smn_daily_forecast_minute_20",\s*\n\s*"20 \* \* \* \*",/,
+  );
   assert.doesNotMatch(smnSource, /const SOURCE = "smn_hourly";/);
 
   const validatorBlock = awcSource.slice(

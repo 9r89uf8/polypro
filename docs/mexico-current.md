@@ -530,16 +530,17 @@ not reject the now-old URL with a replacement-race 404.
 
 Important tables:
 
-| Table                        | Purpose                                                             |
-| ---------------------------- | ------------------------------------------------------------------- |
-| `mexicoMetarObservations`    | Canonical official rows, including CAPMA-first/AWC-enriched reports |
-| `mexicoRelaySightings`       | Source-specific CAPMA or NOAA first sightings                       |
-| `mexicoRelayRaceAttempts`    | Shared minute success/failure evidence, retained for 14 days        |
-| `mexicoCollectorStatus`      | Per-source health, cooldown, and HTTP metadata                      |
-| `mexicoCapmaTdzObservations` | Parsed TDZ 05/23 screenshot readings                                |
-| `mexicoCapmaLatestImages`    | Only the latest validated JPEG per TDZ, not a raw image archive     |
-| `mexicoTafForecasts`         | AWC TAF captures and parsed TX/TN/condition periods                 |
-| `mexicoSmnHourlyForecasts`   | Venustiano Carranza municipal hourly context                        |
+| Table                        | Purpose                                                               |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `mexicoMetarObservations`    | Canonical official rows, including CAPMA-first/AWC-enriched reports   |
+| `mexicoRelaySightings`       | Source-specific CAPMA or NOAA first sightings                         |
+| `mexicoRelayRaceAttempts`    | Shared minute success/failure evidence, retained for 14 days          |
+| `mexicoCollectorStatus`      | Per-source health, cooldown, and HTTP metadata                        |
+| `mexicoCapmaTdzObservations` | Parsed TDZ 05/23 screenshot readings                                  |
+| `mexicoCapmaLatestImages`    | Only the latest validated JPEG per TDZ, not a raw image archive       |
+| `mexicoTafForecasts`         | AWC TAF captures and parsed TX/TN/condition periods                   |
+| `mexicoSmnDailyForecasts`    | SMN method-1 explicit daily tmax for Venustiano Carranza              |
+| `mexicoSmnHourlyForecasts`   | SMN method-3 Venustiano Carranza hourly profile and peak-time context |
 
 Replacing a `mexicoCapmaLatestImages` row removes the old blob from public
 metadata immediately but schedules its existing reference-checked cleanup
@@ -553,13 +554,14 @@ archive, and publication still fails closed whenever approval is absent.
 
 Production schedule relevant to the investigation:
 
-| Job                           | Cadence            | Behavior                                                  |
-| ----------------------------- | ------------------ | --------------------------------------------------------- |
-| AWC METAR/SPECI               | every minute       | Two-hour lookback, shared 60-second cooldown              |
-| Paired CAPMA/NOAA report race | every minute       | NOAA always runs; CAPMA requires its exact gate           |
-| CAPMA TDZ images              | every minute       | Queue and worker require image access and retention gates |
-| AWC TAF                       | every five minutes | Shared AWC rate discipline                                |
-| SMN municipal forecast        | hourly at `:20`    | Documented municipal forecast, not airport observation    |
+| Job                           | Cadence            | Behavior                                                       |
+| ----------------------------- | ------------------ | -------------------------------------------------------------- |
+| AWC METAR/SPECI               | every minute       | Two-hour lookback, shared 60-second cooldown                   |
+| Paired CAPMA/NOAA report race | every minute       | NOAA always runs; CAPMA requires its exact gate                |
+| CAPMA TDZ images              | every minute       | Queue and worker require image access and retention gates      |
+| AWC TAF                       | every five minutes | Shared AWC rate discipline                                     |
+| SMN municipal daily tmax      | hourly at `:20`    | Documented method=1 daily product, independently retained      |
+| SMN municipal hourly profile  | hourly at `:20`    | Documented method=3 timing context, not an airport observation |
 
 ## Explored path inventory
 
@@ -1171,10 +1173,13 @@ Forecast maxima are immutable, source-separated revisions in
 `mexicoEdgeForecastHighSnapshots`:
 
 - `taf_tx` is official airport TAF TX guidance;
-- `smn_municipal_hourly` is nearby Venustiano Carranza municipal guidance.
+- `smn_municipal_daily` is SMN method=1's explicit daily `tmax` for nearby
+  Venustiano Carranza and is the primary SMN maximum;
+- `smn_municipal_hourly` is the separately retained method=3 hourly profile.
 
-Each row keeps its source input identity, issue/capture time, maximum and peak
-time. The page now shows current-day and next-day cards for both roles. Tomorrow
+Each row keeps its source input identity, issue/capture time, and maximum. Only
+TAF and hourly-profile rows can have a forecast peak time: method=1 does not
+publish one. The page now shows current-day and next-day cards for both roles. Tomorrow
 is the next `America/Mexico_City` calendar date, with a countdown to local
 midnight; a focused `mexicoEdge:getForecastDate` query avoids rereading the
 full live dashboard for that date. Each card separates provider issue/update,
@@ -1191,14 +1196,21 @@ The revision rail compresses consecutive equal maxima and marks the first
 capture of each changed value, so a `20 °C → 19 °C` revision shows both values,
 the signed delta and the first-seen change time without relying on color. When
 tomorrow's TAF TX is not yet present, the page labels its recent
-`17:00–18:00` local arrival interval as an estimate, not a deadline; SMN's
-multi-day hourly guidance remains explicitly municipal. SMN is labeled complete
+`17:00–18:00` local arrival interval as an estimate, not a deadline. SMN's
+method=1 `tmax` is the headline municipal maximum. The separately labeled
+method=3 peak hour is timing guidance only: its highest hourly value can differ
+from method=1 and must not be presented as another provider vote or as the
+published time of the method=1 maximum. Hourly guidance is labeled complete
 only with 24 distinct retained target-date hours from one coherent latest
-capture; older per-hour rows cannot fill gaps or raise its maximum. A maximum
-derived from fewer hours is visibly provisional and `partial coverage`. The idempotent
+capture; older per-hour rows cannot fill gaps or raise its profile maximum. A
+profile with fewer hours does not publish an expected warmest-hour estimate.
+The timing callout separately reports the hourly product's latest data-bearing
+fetch and error state. The mutable method=1 horizon is also coherent: every
+accepted batch removes dates absent from that batch, and historical immutable
+snapshots cannot revive an omitted date as a current daily forecast. The idempotent
 `mexico_edge_forecast_high_snapshots_every_5_minutes` job derives revisions at
 minutes `2,7,...,57` without making another external request. The dashboard
-also merges a just-retained TAF or SMN input with persisted revisions, so a
+also merges a just-retained TAF or either SMN input with persisted revisions, so a
 new maximum does not wait for the next snapshot cron to appear.
 
 ### Exact Polymarket market data

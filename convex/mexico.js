@@ -1492,6 +1492,147 @@ export const storeSmnForecastBatch = internalMutationGeneric({
   },
 });
 
+const smnDailyRowValidator = v.object({
+  date: v.string(),
+  forecastDayNumber: v.optional(v.number()),
+  tmaxC: v.number(),
+  tmaxF: v.number(),
+  tminC: v.optional(v.number()),
+  tminF: v.optional(v.number()),
+  conditionText: v.string(),
+  conditionKey: v.string(),
+  precipitationProbabilityPct: v.optional(v.number()),
+  precipitationMm: v.optional(v.number()),
+  cloudCoverPct: v.optional(v.number()),
+  windSpeedKph: v.optional(v.number()),
+  windDirectionText: v.optional(v.string()),
+  windDirectionDeg: v.optional(v.number()),
+  windGustKph: v.optional(v.number()),
+  utcOffsetHours: v.optional(v.number()),
+  sourceRowJson: v.string(),
+});
+
+export function selectSmnDailyRowsOmittedByBatch(existingRows, batchDates) {
+  const retainedDates = new Set(batchDates ?? []);
+  return (existingRows ?? []).filter((row) => !retainedDates.has(row?.date));
+}
+
+export const storeSmnDailyForecastBatch = internalMutationGeneric({
+  args: {
+    attemptAt: v.number(),
+    stationIcao: v.string(),
+    sourceUrl: v.string(),
+    capturedAt: v.number(),
+    sourceLastModifiedAt: v.optional(v.number()),
+    rawHash: v.string(),
+    compressedBytes: v.number(),
+    decompressedBytes: v.number(),
+    totalObjectCount: v.number(),
+    rawMunicipalityRows: v.string(),
+    rows: v.array(smnDailyRowValidator),
+  },
+  handler: async (ctx, args) => {
+    assertStation(args.stationIcao);
+    const collectorStatus = await currentCollectorStatus(
+      ctx,
+      args.stationIcao,
+      "smn_municipal_daily",
+    );
+    if (!collectorFinishMatchesAttempt(collectorStatus, args.attemptAt)) {
+      return {
+        captureId: null,
+        insertedCount: 0,
+        updatedCount: 0,
+        stale: true,
+        activeAttemptAt: collectorStatus?.lastAttemptAt,
+      };
+    }
+    if (args.rows.length < 2 || args.rows.length > 10) {
+      throw new Error("SMN daily batch has an unexpected target row count.");
+    }
+    const dates = new Set(args.rows.map((row) => row.date));
+    if (
+      dates.size !== args.rows.length ||
+      args.rows.some((row) => !isDateKey(row.date))
+    ) {
+      throw new Error("SMN daily batch has invalid or duplicate dates.");
+    }
+    const captureId = await ctx.db.insert("mexicoSmnDailyForecastCaptures", {
+      stationIcao: args.stationIcao,
+      source: "smn_municipal_daily",
+      sourceUrl: args.sourceUrl,
+      municipalityStateId: "9",
+      municipalityId: "17",
+      municipalityName: "Venustiano Carranza",
+      stateName: "Ciudad de México",
+      sourceLatitude: 19.4193,
+      sourceLongitude: -99.1137,
+      distanceFromAirportKm: 4.8,
+      capturedAt: args.capturedAt,
+      capturedAtLocal: formatMexicoDateTime(args.capturedAt),
+      captureDate: formatMexicoDate(args.capturedAt),
+      ...(args.sourceLastModifiedAt !== undefined
+        ? { sourceLastModifiedAt: args.sourceLastModifiedAt }
+        : {}),
+      rawHash: args.rawHash,
+      compressedBytes: args.compressedBytes,
+      decompressedBytes: args.decompressedBytes,
+      totalObjectCount: args.totalObjectCount,
+      targetRowCount: args.rows.length,
+      rawMunicipalityRows: args.rawMunicipalityRows,
+      createdAt: Date.now(),
+    });
+
+    const existingRows = await ctx.db
+      .query("mexicoSmnDailyForecasts")
+      .withIndex("by_station_date", (query) =>
+        query.eq("stationIcao", args.stationIcao),
+      )
+      .collect();
+    const existingByDate = new Map(existingRows.map((row) => [row.date, row]));
+
+    let insertedCount = 0;
+    let updatedCount = 0;
+    for (const row of args.rows) {
+      const existing = existingByDate.get(row.date);
+      const value = {
+        stationIcao: args.stationIcao,
+        ...row,
+        source: "smn_municipal_daily",
+        sourceSiteLabel:
+          "SMN explicit daily tmax · Venustiano Carranza · 4.8 km from MMMX",
+        sourceInputKey: args.rawHash,
+        capturedAt: args.capturedAt,
+        ...(args.sourceLastModifiedAt !== undefined
+          ? { sourceLastModifiedAt: args.sourceLastModifiedAt }
+          : {}),
+        forecastCaptureId: captureId,
+        updatedAt: Date.now(),
+      };
+      if (existing) {
+        await ctx.db.patch(existing._id, value);
+        updatedCount += 1;
+      } else {
+        await ctx.db.insert("mexicoSmnDailyForecasts", {
+          ...value,
+          createdAt: Date.now(),
+        });
+        insertedCount += 1;
+      }
+    }
+    const omittedRows = selectSmnDailyRowsOmittedByBatch(existingRows, dates);
+    for (const row of omittedRows) {
+      await ctx.db.delete(row._id);
+    }
+    return {
+      captureId,
+      insertedCount,
+      updatedCount,
+      removedCount: omittedRows.length,
+    };
+  },
+});
+
 export const getDayDashboard = queryGeneric({
   args: {
     stationIcao: v.string(),

@@ -3,13 +3,16 @@ import test from "node:test";
 
 import {
   buildOfficialDailyMaximumEvidence,
+  buildSmnDailyCoverage,
   buildSmnDateCoverage,
   buildTdzDailyMaximumEvidence,
   buildSourceEvents,
   capmaEdgePublicationGates,
   compactTdz05ReactionRows,
+  deriveSmnDailyHighSnapshots,
   deriveSmnHighSnapshots,
   deriveTafHighSnapshots,
+  maskForecastRevisionWhenUnavailable,
   mergeForecastHighSnapshots,
   selectLatestSmnCaptureRows,
   sanitizeCapmaPublicPayload,
@@ -25,6 +28,7 @@ import {
 import {
   FORECAST_SOURCE_SMN,
   FORECAST_SOURCE_TAF,
+  formatForecastClock,
   nextAutomaticForecastCheck,
   nextDayTafAvailabilityWindow,
   smnVenustianoDailyForecastUrl,
@@ -474,6 +478,68 @@ test("SMN snapshots derive each retained raw capture without coercing missing te
   );
 });
 
+test("SMN explicit daily tmax snapshots stay separate and have no invented peak time", () => {
+  const snapshots = deriveSmnDailyHighSnapshots(
+    [
+      {
+        stationIcao: "MMMX",
+        rawHash: "daily-a",
+        capturedAt: 2_000,
+        sourceLastModifiedAt: 1_900,
+        rawMunicipalityRows: JSON.stringify([
+          {
+            ides: "9",
+            idmun: "17",
+            nmun: "Venustiano Carranza",
+            dloc: "20260824T00",
+            tmax: "20.7",
+          },
+          {
+            ides: "9",
+            idmun: "17",
+            nmun: "Venustiano Carranza",
+            dloc: "20260825T00",
+            tmax: "22.1",
+          },
+          {
+            ides: "9",
+            idmun: "17",
+            nmun: "Venustiano Carranza",
+            dloc: "20260824T99",
+            tmax: "99.9",
+          },
+          {
+            ides: "9",
+            idmun: "17",
+            nmun: "Venustiano Carranza",
+            dloc: "20260824T00",
+            ndia: "1.5",
+            tmax: "98.9",
+          },
+          {
+            ides: "9",
+            idmun: "17",
+            nmun: "Venustiano Carranza",
+            dloc: "20260824T00",
+            dh: "15",
+            tmax: "97.9",
+          },
+        ]),
+      },
+    ],
+    "2026-08-24",
+  );
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0].source, "smn_municipal_daily");
+  assert.equal(snapshots[0].forecastHighC, 20.7);
+  assert.equal(
+    snapshots[0].snapshotKey,
+    "smn_municipal_daily:daily-a:2026-08-24",
+  );
+  assert.equal("forecastPeakTimeUtc" in snapshots[0], false);
+  assert.equal("forecastPeakTimeLocal" in snapshots[0], false);
+});
+
 test("SMN date coverage distinguishes a partial daily maximum from 24 retained hours", () => {
   const rows = Array.from({ length: 24 }, (_, hour) => ({
     date: "2026-08-24",
@@ -489,6 +555,43 @@ test("SMN date coverage distinguishes a partial daily maximum from 24 retained h
     coverageEndAt: rows[2].forecastTimeUtc,
   });
   assert.equal(buildSmnDateCoverage(rows, "2026-08-24").status, "complete");
+});
+
+test("SMN daily coverage reports only the explicit daily product", () => {
+  assert.deepEqual(buildSmnDailyCoverage([], "2026-08-24"), {
+    status: "unavailable",
+    capturedAt: null,
+    forecastHighC: null,
+  });
+  assert.deepEqual(
+    buildSmnDailyCoverage(
+      [
+        { date: "2026-08-24", tmaxC: 20.1, capturedAt: 1_000 },
+        { date: "2026-08-24", tmaxC: 20.7, capturedAt: 2_000 },
+        { date: "2026-08-25", tmaxC: 22.1, capturedAt: 3_000 },
+      ],
+      "2026-08-24",
+    ),
+    { status: "available", capturedAt: 2_000, forecastHighC: 20.7 },
+  );
+});
+
+test("an omitted SMN daily date cannot be revived by historical snapshots", () => {
+  const historical = buildForecastRevision([
+    {
+      source: "smn_municipal_daily",
+      snapshotKey: "old-tomorrow",
+      forecastHighC: 20.7,
+      sourceCapturedAt: 1_000,
+    },
+  ]);
+  const masked = maskForecastRevisionWhenUnavailable(historical, false);
+  assert.equal(masked.status, "unavailable");
+  assert.equal(masked.current, null);
+  assert.equal(masked.previous, null);
+  assert.equal(masked.deltaC, null);
+  assert.equal(masked.changedAt, null);
+  assert.deepEqual(masked.history, historical.history);
 });
 
 test("SMN daily high and coverage use one coherent latest capture", () => {
@@ -595,6 +698,20 @@ test("next-day TAF estimate is a one-hour window before Mexico midnight", () => 
     startAt: Date.parse("2026-08-23T23:00:00Z"),
     endAt: Date.parse("2026-08-24T00:00:00Z"),
   });
+});
+
+test("forecast peak clocks use non-military Mexico City time", () => {
+  assert.match(
+    formatForecastClock(Date.parse("2026-08-24T06:00:00Z")),
+    /^12:00\sAM$/,
+  );
+  assert.match(
+    formatForecastClock(Date.parse("2026-08-24T18:00:00Z")),
+    /^12:00\sPM$/,
+  );
+  const afternoon = formatForecastClock(Date.parse("2026-08-24T20:00:00Z"));
+  assert.match(afternoon, /^2:00\sPM$/);
+  assert.doesNotMatch(afternoon, /14:/);
 });
 
 test("SMN source links target Venustiano Carranza instead of the portal default", () => {

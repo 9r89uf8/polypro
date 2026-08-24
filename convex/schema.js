@@ -2111,6 +2111,59 @@ export default defineSchema({
     .index("by_station_date_time", ["stationIcao", "date", "forecastTimeUtc"])
     .index("by_station_time", ["stationIcao", "forecastTimeUtc"]),
 
+  mexicoSmnDailyForecastCaptures: defineTable({
+    stationIcao: v.string(),
+    source: v.literal("smn_municipal_daily"),
+    sourceUrl: v.string(),
+    municipalityStateId: v.string(),
+    municipalityId: v.string(),
+    municipalityName: v.string(),
+    stateName: v.string(),
+    sourceLatitude: v.number(),
+    sourceLongitude: v.number(),
+    distanceFromAirportKm: v.number(),
+    capturedAt: v.number(),
+    capturedAtLocal: v.string(),
+    captureDate: v.string(),
+    sourceLastModifiedAt: v.optional(v.number()),
+    rawHash: v.string(),
+    compressedBytes: v.number(),
+    decompressedBytes: v.number(),
+    totalObjectCount: v.number(),
+    targetRowCount: v.number(),
+    rawMunicipalityRows: v.string(),
+    createdAt: v.number(),
+  }).index("by_station_captured_at", ["stationIcao", "capturedAt"]),
+
+  mexicoSmnDailyForecasts: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    forecastDayNumber: v.optional(v.number()),
+    tmaxC: v.number(),
+    tmaxF: v.number(),
+    tminC: v.optional(v.number()),
+    tminF: v.optional(v.number()),
+    conditionText: v.string(),
+    conditionKey: v.string(),
+    precipitationProbabilityPct: v.optional(v.number()),
+    precipitationMm: v.optional(v.number()),
+    cloudCoverPct: v.optional(v.number()),
+    windSpeedKph: v.optional(v.number()),
+    windDirectionText: v.optional(v.string()),
+    windDirectionDeg: v.optional(v.number()),
+    windGustKph: v.optional(v.number()),
+    utcOffsetHours: v.optional(v.number()),
+    sourceRowJson: v.string(),
+    source: v.literal("smn_municipal_daily"),
+    sourceSiteLabel: v.string(),
+    sourceInputKey: v.string(),
+    capturedAt: v.number(),
+    sourceLastModifiedAt: v.optional(v.number()),
+    forecastCaptureId: v.id("mexicoSmnDailyForecastCaptures"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_station_date", ["stationIcao", "date"]),
+
   mexicoPolymarketProbabilitySnapshots: defineTable({
     stationIcao: v.string(),
     date: v.string(),
@@ -2294,12 +2347,17 @@ export default defineSchema({
   }).index("by_station", ["stationIcao"]),
 
   // Immutable source-specific daily-high revisions for the edge cockpit.
-  // TAF TX airport guidance and SMN municipal guidance intentionally remain
-  // separate series; sourceInputKey makes repeated derivation idempotent.
+  // TAF TX, SMN daily tmax, and SMN hourly-profile guidance intentionally
+  // remain separate series; sourceInputKey makes repeated derivation
+  // idempotent.
   mexicoEdgeForecastHighSnapshots: defineTable({
     stationIcao: v.string(),
     date: v.string(),
-    source: v.union(v.literal("taf_tx"), v.literal("smn_municipal_hourly")),
+    source: v.union(
+      v.literal("taf_tx"),
+      v.literal("smn_municipal_daily"),
+      v.literal("smn_municipal_hourly"),
+    ),
     snapshotKey: v.string(),
     sourceInputKey: v.string(),
     sourceLabel: v.string(),
