@@ -318,6 +318,22 @@ not a third independent source. It supplies no reliable issue timestamp. The
 implementation therefore reuses method 3 and its existing immutable snapshot,
 status, attribution and cooldown paths rather than add a redundant collector.
 
+The human SMN municipal page cannot be deep-linked to Venustiano Carranza. A
+live browser/network check found that it initializes Miguel Hidalgo with
+`edo=9&mun=16`; municipality parameters on the outer page and iframe are
+ignored, and choosing `Venustiano Carranza, Ciudad de México` changes only
+in-page JavaScript state. That selection requests official controller rows with
+`edo=9&mun=17` without changing the URL. The Edge UI therefore links directly
+and explicitly to target-date `leeJsonHorario.php` hourly rows that corroborate
+the displayed method-3-derived maximum for the same location and date, plus the
+separately labeled `getDataJson2String.php` daily rows. In the checked
+August 24 forecast, those products differed: the hourly-row maximum was
+`19.2 °C`, while the daily
+product returned `20.7 °C`, rendered as `21 °C` by the visual portal. These are
+internal UI controller references, not documented API contracts. Their
+responses also advertised an anomalous one-year cache lifetime, so UI evidence
+links include a changing `kche` parameter.
+
 Weather.com/The Weather Company was not added. Its licensed ICAO daily/hourly
 API could be a separately labeled secondary comparator after forecast-specific
 approval and an MMMX-local fixed-vintage backtest, but consumer-site scraping
@@ -333,3 +349,4 @@ Primary references:
 - CAPMA ETDS schedule: <http://capma.mx/vigilancia/itinerarios.php>
 - SMN web-service documentation: <https://smn.conagua.gob.mx/es/web-service-api>
 - SMN municipal forecast page: <https://smn.conagua.gob.mx/es/pronosticos/pronostico-del-tiempo-por-municipios>
+- SMN Venustiano Carranza daily controller rows: <https://smn.conagua.gob.mx/tools/PHP/pronostico_municipios_grafico/controlador/getDataJson2String.php?edo=9&mun=17>

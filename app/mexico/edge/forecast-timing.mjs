@@ -4,6 +4,9 @@ const HOUR_MS = 60 * MINUTE_MS;
 export const FORECAST_SOURCE_TAF = "taf";
 export const FORECAST_SOURCE_SMN = "smn";
 
+const SMN_VENUSTIANO_CONTROLLER_URL =
+  "https://smn.conagua.gob.mx/tools/PHP/pronostico_municipios_grafico/controlador";
+
 const TAF_CHECK_MINUTES = [1, 6, 11, 16, 21, 26, 31, 36, 41, 46, 51, 56];
 const SMN_CHECK_MINUTES = [20];
 
@@ -42,4 +45,29 @@ export function nextDayTafAvailabilityWindow(tomorrowStartsAt) {
     startAt: tomorrowStartsAt - 7 * HOUR_MS,
     endAt: tomorrowStartsAt - 6 * HOUR_MS,
   };
+}
+
+function smnCacheSuffix(cacheAt) {
+  if (!Number.isFinite(cacheAt)) {
+    return "";
+  }
+  return `&kche=${Math.floor(cacheAt / MINUTE_MS)}`;
+}
+
+export function smnVenustianoHourlyForecastUrl(date, cacheAt) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) {
+    return null;
+  }
+  return (
+    `${SMN_VENUSTIANO_CONTROLLER_URL}/leeJsonHorario.php` +
+    `?edo=9&mun=17&fechayhora=${date.replaceAll("-", "")}` +
+    smnCacheSuffix(cacheAt)
+  );
+}
+
+export function smnVenustianoDailyForecastUrl(cacheAt) {
+  return (
+    `${SMN_VENUSTIANO_CONTROLLER_URL}/getDataJson2String.php?edo=9&mun=17` +
+    smnCacheSuffix(cacheAt)
+  );
 }

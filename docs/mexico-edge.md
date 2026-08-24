@@ -220,7 +220,18 @@ link. `Fetch latest TAF` reuses `mexico:pollAwcTaf` and its 60-second cooldown;
 `Fetch latest SMN` reuses `mexicoForecastNode:pollSmnHourlyForecast` and its
 30-minute cooldown. A manual click cannot bypass the same lease/cooldown used
 by crons, and `cooldown` responses expose their retry time. The source links are
-the live AWC MMMX TAF response and the official SMN municipal forecast page.
+the live AWC MMMX TAF response and exact official SMN controller responses for
+Venustiano Carranza (`edo=9`, `mun=17`). The SMN hourly link is scoped to the
+card's target date and exposes matching controller rows for the same product,
+location, and date as the displayed method-3-derived high. It is corroborating
+raw data, not the immutable response fetched and retained by the collector. The
+separately labeled daily link exposes SMN's explicit daily maximum product,
+which can differ. The public visual portal is not used as a direct
+source link because it defaults to Miguel Hidalgo (`9/16`), ignores municipality
+query parameters, and does not retain a search selection in its URL. The
+controller links are evidence links used by the public UI, not a claim that
+those internal routes are documented production APIs. A rotating `kche` query
+avoids the controller's anomalous one-year browser cache header.
 A reported `fetching` state disables the button only while that collector's
 server lease is still active; an expired lease is labeled and permits a retry.
 TAF and SMN writes and status finishes carry the claim's `attemptAt` generation,

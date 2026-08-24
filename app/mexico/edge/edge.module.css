@@ -1506,6 +1506,14 @@
   margin-top: 1rem;
 }
 
+.forecastSourceLinks {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem 0.75rem;
+}
+
 .forecastSourceLink {
   display: inline-flex;
   align-items: center;
@@ -2435,6 +2443,10 @@
 
   .forecastSourceLink {
     text-align: left;
+  }
+
+  .forecastSourceLinks {
+    justify-content: flex-start;
   }
 
   .cycleStages {

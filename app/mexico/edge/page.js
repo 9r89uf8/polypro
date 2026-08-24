@@ -33,6 +33,8 @@ import {
   FORECAST_SOURCE_TAF,
   nextAutomaticForecastCheck,
   nextDayTafAvailabilityWindow,
+  smnVenustianoDailyForecastUrl,
+  smnVenustianoHourlyForecastUrl,
 } from "./forecast-timing.mjs";
 
 const STATION_ICAO = "MMMX";
@@ -44,8 +46,6 @@ const FORECAST_COLLECTOR_LEASE_MS = {
 };
 const AWC_MMMX_TAF_URL =
   "https://aviationweather.gov/api/data/taf?ids=MMMX&format=raw";
-const SMN_MUNICIPAL_FORECAST_URL =
-  "https://smn.conagua.gob.mx/es/pronosticos/pronostico-del-tiempo-por-municipios";
 const POLYMARKET_MARKET_WEBSOCKET_URL =
   "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 const REACTION_WINDOWS = [
@@ -2247,7 +2247,7 @@ function ForecastCard({
   nextCheckAt,
   availability,
   sourceAttribution,
-  sourceLink,
+  sourceLinks = [],
   onRefresh,
   refreshLabel,
   refreshing = false,
@@ -2274,6 +2274,9 @@ function ForecastCard({
   const collectorLeaseExpired = collectorFetchingReported && !collectorFetching;
   const collectorError = collectorStatus?.status === "error";
   const busy = loading || refreshing || collectorFetching;
+  const validSourceLinks = sourceLinks.filter(
+    (link) => exactString(link?.href) && exactString(link?.label),
+  );
   const lastSuccessfulFetchAt = firstFinite(
     collectorStatus?.lastSuccessAt,
     forecast.forecastCapturedAt,
@@ -2442,7 +2445,7 @@ function ForecastCard({
           <dd>{formatDateTime(forecast.forecastPeakTimeUtc)}</dd>
         </div>
       </dl>
-      {onRefresh || sourceLink ? (
+      {onRefresh || validSourceLinks.length ? (
         <div className={styles.forecastActions}>
           {onRefresh ? (
             <button
@@ -2455,16 +2458,21 @@ function ForecastCard({
               {refreshing ? "Fetching…" : refreshLabel || "Fetch latest"}
             </button>
           ) : null}
-          {sourceLink ? (
-            <a
-              className={styles.forecastSourceLink}
-              href={sourceLink.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`${sourceLink.label} (opens in new tab)`}
-            >
-              {sourceLink.label} <span aria-hidden="true">↗</span>
-            </a>
+          {validSourceLinks.length ? (
+            <div className={styles.forecastSourceLinks}>
+              {validSourceLinks.map((sourceLink) => (
+                <a
+                  className={styles.forecastSourceLink}
+                  href={sourceLink.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`${sourceLink.label} (opens in new tab)`}
+                  key={sourceLink.label}
+                >
+                  {sourceLink.label} <span aria-hidden="true">↗</span>
+                </a>
+              ))}
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -4967,10 +4975,12 @@ export default function MexicoEdgePage() {
                 collectorStatus={forecastCollectorStatuses.awc_taf}
                 nextCheckAt={nextTafCheckAt}
                 sourceAttribution="SENEAM/CAPMA authored · fetched through NOAA/AWC"
-                sourceLink={{
-                  href: AWC_MMMX_TAF_URL,
-                  label: "View live MMMX TAF",
-                }}
+                sourceLinks={[
+                  {
+                    href: AWC_MMMX_TAF_URL,
+                    label: "View live MMMX TAF",
+                  },
+                ]}
               />
               <ForecastCard
                 label="SMN / CONAGUA · Venustiano Carranza"
@@ -4981,11 +4991,17 @@ export default function MexicoEdgePage() {
                 targetDate={date}
                 collectorStatus={forecastCollectorStatuses.smn_municipal_hourly}
                 nextCheckAt={nextSmnCheckAt}
-                sourceAttribution="Official municipal guidance · 4.8 km from MMMX"
-                sourceLink={{
-                  href: SMN_MUNICIPAL_FORECAST_URL,
-                  label: "Open SMN municipal forecast portal",
-                }}
+                sourceAttribution="Official hourly municipal guidance · Venustiano Carranza (SMN 9/17) · 4.8 km from MMMX"
+                sourceLinks={[
+                  {
+                    href: smnVenustianoHourlyForecastUrl(date, nowMs),
+                    label: "View matching Venustiano hourly data",
+                  },
+                  {
+                    href: smnVenustianoDailyForecastUrl(nowMs),
+                    label: "Compare separate SMN daily product",
+                  },
+                ]}
               />
             </div>
           </div>
@@ -5030,10 +5046,12 @@ export default function MexicoEdgePage() {
                       )
                 }
                 sourceAttribution="SENEAM/CAPMA authored · fetched through NOAA/AWC"
-                sourceLink={{
-                  href: AWC_MMMX_TAF_URL,
-                  label: "View live MMMX TAF",
-                }}
+                sourceLinks={[
+                  {
+                    href: AWC_MMMX_TAF_URL,
+                    label: "View live MMMX TAF",
+                  },
+                ]}
                 onRefresh={() => refreshForecastSource(FORECAST_SOURCE_TAF)}
                 refreshLabel="Fetch latest TAF"
                 refreshing={refreshState.kind === "forecast-taf"}
@@ -5068,11 +5086,17 @@ export default function MexicoEdgePage() {
                         nextDayForecastDashboard?.coverage?.smn,
                       )
                 }
-                sourceAttribution="Official municipal guidance · 4.8 km from MMMX"
-                sourceLink={{
-                  href: SMN_MUNICIPAL_FORECAST_URL,
-                  label: "Open SMN municipal forecast portal",
-                }}
+                sourceAttribution="Official hourly municipal guidance · Venustiano Carranza (SMN 9/17) · 4.8 km from MMMX"
+                sourceLinks={[
+                  {
+                    href: smnVenustianoHourlyForecastUrl(tomorrowDate, nowMs),
+                    label: "View matching Venustiano hourly data",
+                  },
+                  {
+                    href: smnVenustianoDailyForecastUrl(nowMs),
+                    label: "Compare separate SMN daily product",
+                  },
+                ]}
                 onRefresh={() => refreshForecastSource(FORECAST_SOURCE_SMN)}
                 refreshLabel="Fetch latest SMN"
                 refreshing={refreshState.kind === "forecast-smn"}

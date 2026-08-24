@@ -27,6 +27,8 @@ import {
   FORECAST_SOURCE_TAF,
   nextAutomaticForecastCheck,
   nextDayTafAvailabilityWindow,
+  smnVenustianoDailyForecastUrl,
+  smnVenustianoHourlyForecastUrl,
 } from "../app/mexico/edge/forecast-timing.mjs";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -593,6 +595,22 @@ test("next-day TAF estimate is a one-hour window before Mexico midnight", () => 
     startAt: Date.parse("2026-08-23T23:00:00Z"),
     endAt: Date.parse("2026-08-24T00:00:00Z"),
   });
+});
+
+test("SMN source links target Venustiano Carranza instead of the portal default", () => {
+  const cacheAt = Date.parse("2026-08-23T23:45:00Z");
+  assert.equal(
+    smnVenustianoHourlyForecastUrl("2026-08-24", cacheAt),
+    "https://smn.conagua.gob.mx/tools/PHP/pronostico_municipios_grafico/controlador/leeJsonHorario.php?edo=9&mun=17&fechayhora=20260824&kche=29792145",
+  );
+  assert.equal(smnVenustianoHourlyForecastUrl("20260824", cacheAt), null);
+
+  const dailyUrl = smnVenustianoDailyForecastUrl(cacheAt);
+  assert.equal(
+    dailyUrl,
+    "https://smn.conagua.gob.mx/tools/PHP/pronostico_municipios_grafico/controlador/getDataJson2String.php?edo=9&mun=17&kche=29792145",
+  );
+  assert.doesNotMatch(dailyUrl, /mun=16/);
 });
 
 test("fresh forecast rows bridge the snapshot cron without losing history", () => {
