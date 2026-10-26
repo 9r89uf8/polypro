@@ -106,6 +106,38 @@ test("TDZ canonical and legacy gates have identical fail-closed semantics", () =
   assert.equal(malformedCanonicalDenialWins.publicationApproved, false);
 });
 
+test("canonical gates work when env values are not own properties", () => {
+  // Mirrors Convex's process.env: reads resolve, hasOwnProperty does not.
+  const runtimeEnv = (values) =>
+    new Proxy({}, { get: (_target, name) => values[name] });
+
+  assert.equal(
+    capmaAftnAccessApproved(
+      runtimeEnv({ SENEAM_MMMX_AFTN_ACCESS_APPROVED: "true" }),
+    ),
+    true,
+  );
+  const canonical = capmaTdzApprovalState(
+    runtimeEnv({
+      SENEAM_MMMX_TDZ_ACCESS_APPROVED: "true",
+      SENEAM_MMMX_TDZ_RETENTION_APPROVED: "true",
+      SENEAM_MMMX_TDZ_REPUBLICATION_APPROVED: "true",
+    }),
+  );
+  assert.equal(canonical.publicationApproved, true);
+
+  assert.equal(
+    capmaAftnAccessApproved(
+      runtimeEnv({
+        SENEAM_MMMX_AFTN_ACCESS_APPROVED: "false",
+        SENEAM_CAPMA_MMMX_AFTN_REPORTS_ACCESS_APPROVED: "true",
+      }),
+    ),
+    false,
+  );
+  assert.equal(capmaAftnAccessApproved(runtimeEnv({})), false);
+});
+
 test("all CAPMA-protected Convex entry points use the centralized gates", async () => {
   const entryPoints = [
     "mexico.js",

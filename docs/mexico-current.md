@@ -888,7 +888,8 @@ legacy name. Deploy the alias-aware code, set each required canonical value,
 verify the protected collector/query state, and then remove the corresponding
 legacy value through the deployment environment controls. A canonical `false`
 or any other non-`true` canonical value takes precedence and fails closed. The
-legacy alias is consulted only when the canonical key is absent. Revocation
+legacy alias is consulted only when the canonical key is absent (reads as
+undefined; Convex's `process.env` does not expose own properties). Revocation
 must still remove both names: removing the canonical key first would expose a
 still-`true` legacy fallback. During an emergency migration-state revocation,
 set the canonical value to `false`, remove the legacy alias, and then remove

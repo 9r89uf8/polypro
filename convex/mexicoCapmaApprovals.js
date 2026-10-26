@@ -21,9 +21,12 @@ export function exactTrue(value) {
   return value === "true";
 }
 
+// Convex's process.env does not report deployment variables as own
+// properties, so "present" means defined rather than hasOwnProperty.
 function canonicalOrLegacyApproved(env, names) {
-  if (Object.prototype.hasOwnProperty.call(env ?? {}, names.canonical)) {
-    return exactTrue(env[names.canonical]);
+  const canonical = env?.[names.canonical];
+  if (canonical !== undefined) {
+    return exactTrue(canonical);
   }
   return exactTrue(env?.[names.legacy]);
 }

@@ -610,6 +610,11 @@ The legacy alias is consulted only when the canonical key is absent. During an
 emergency migration-state revocation, set the canonical value to `false`,
 remove the corresponding legacy alias, and then remove the canonical value so
 deleting it cannot reactivate the fallback.
+"Present" means the canonical value reads as defined. Convex's `process.env`
+does not report deployment variables as own properties, so a `hasOwnProperty`
+check silently skips set canonical values; before 2026-10-25 that made
+canonical-only environments (for example a freshly recreated deployment) fail
+closed while legacy aliases masked the bug elsewhere.
 
 Canonical base activation after the corresponding owner scopes are confirmed:
 
