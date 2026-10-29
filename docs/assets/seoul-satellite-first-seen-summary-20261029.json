@@ -1,0 +1,60 @@
+{
+  "startedAtUtc": "2026-10-29T02:56:21.200Z",
+  "completedAtUtc": "2026-10-29T03:08:21.398Z",
+  "successfulListingRequests": 100,
+  "errors": [],
+  "leftCensoredPairs": 98,
+  "arrivalCounts": {
+    "himawari9": 6,
+    "gk2a": 0
+  },
+  "bySource": {
+    "himawari9": {
+      "count": 6,
+      "medianLowerSec": 370.6305,
+      "medianUpperSec": 401.4975,
+      "rows": [
+        {
+          "slot": "2026-10-29T02:50:00.000Z",
+          "lower": 442.299,
+          "upper": 478.777
+        },
+        {
+          "slot": "2026-10-29T02:52:30.000Z",
+          "lower": 292.299,
+          "upper": 328.777
+        },
+        {
+          "slot": "2026-10-29T02:55:00.000Z",
+          "lower": 399.807,
+          "upper": 430.689
+        },
+        {
+          "slot": "2026-10-29T02:57:30.000Z",
+          "lower": 341.454,
+          "upper": 372.306
+        },
+        {
+          "slot": "2026-10-29T03:00:00.000Z",
+          "lower": 406.848,
+          "upper": 437.648
+        },
+        {
+          "slot": "2026-10-29T03:02:30.000Z",
+          "lower": 287.384,
+          "upper": 318.139
+        }
+      ]
+    },
+    "gk2a": {
+      "count": 0,
+      "medianLowerSec": null,
+      "medianUpperSec": null,
+      "rows": []
+    }
+  },
+  "httpDateMinusClientCompletionSec": {
+    "min": 0.477,
+    "max": 1.471
+  }
+}

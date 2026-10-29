@@ -1,0 +1,70 @@
+{
+  "method": "illustrative-flat-ground-shadow-height-sensitivity-v1",
+  "generatedAtUtc": "2026-10-29T04:01:56.740703+00:00",
+  "sourceCapture": {
+    "path": "tmp/seoul-cloud-fresh-state-20261029-0357.json",
+    "sha256": "b3b7954b19fbe165fd82bc29bb324ae60e11f66a4edb1f7aa626728339760aee",
+    "checkedAtUtc": "2026-10-29T03:57:30.614Z",
+    "nominalObservationTimeUtc": "2026-10-29T03:46:00+00:00",
+    "retainedSolarElevationDeg": 38.99944792518763
+  },
+  "solarElevationUsedDeg": 39,
+  "heightStatus": "Illustrative heights, not measured or inferred from brightness temperature",
+  "geometry": {
+    "formula": "horizontal offset = height / tan(solar elevation)",
+    "units": "Height and horizontal offset are both kilometres; convert degrees to radians before evaluating tangent",
+    "direction": "From the true cloud vertical projection toward the ground intersection: away from the Sun in horizontal azimuth. A layer that shades RKSI lies up-Sun of RKSI by this distance. No numeric azimuth calculated.",
+    "assumptions": [
+      "Flat local ground and horizontal layer heights measured above that ground, not above sea level",
+      "Parallel straight solar rays; no atmospheric refraction, terrain, cloud depth, diffuse radiation, or finite solar disk",
+      "This is a direct-beam ray intersection, not an observed shadow or an irradiance prediction",
+      "No satellite viewing parallax calculated or added; combining apparent satellite location with shadow requires vector geometry"
+    ]
+  },
+  "rows": [
+    {
+      "illustrativeHeightAboveFlatGroundKm": 1,
+      "horizontalRayOffsetFromTrueCloudVerticalProjectionKm": 1.2348971565350515,
+      "offsetInTwoKmTargetSpacings": 0.6174485782675257,
+      "outsideSquareOfTargetCentersForEveryAzimuth": false
+    },
+    {
+      "illustrativeHeightAboveFlatGroundKm": 3,
+      "horizontalRayOffsetFromTrueCloudVerticalProjectionKm": 3.7046914696051547,
+      "offsetInTwoKmTargetSpacings": 1.8523457348025774,
+      "outsideSquareOfTargetCentersForEveryAzimuth": false
+    },
+    {
+      "illustrativeHeightAboveFlatGroundKm": 5,
+      "horizontalRayOffsetFromTrueCloudVerticalProjectionKm": 6.174485782675258,
+      "offsetInTwoKmTargetSpacings": 3.087242891337629,
+      "outsideSquareOfTargetCentersForEveryAzimuth": true
+    },
+    {
+      "illustrativeHeightAboveFlatGroundKm": 10,
+      "horizontalRayOffsetFromTrueCloudVerticalProjectionKm": 12.348971565350515,
+      "offsetInTwoKmTargetSpacings": 6.174485782675258,
+      "outsideSquareOfTargetCentersForEveryAzimuth": true
+    }
+  ],
+  "footprintComparison": {
+    "targetGrid": "5 by 5 fixed target centers, 2 km spacing",
+    "axisSpanKm": 8,
+    "centerToSideKm": 4,
+    "centerToCornerKm": 5.656854249492381,
+    "heightGivingFourKmOffsetKm": 3.239136132780028,
+    "heightGivingCenterToCornerOffsetKm": 4.580830249350255,
+    "heightGivingEightKmOffsetKm": 6.478272265560056,
+    "interpretation": "At 5 and 10 km illustrative height, the up-Sun ray origin required to shade the central RKSI point lies outside the square of target centers for every azimuth. This concerns target centers, not the full satellite image or each pixel neighbourhood."
+  },
+  "oneToTenKmHeightRangeOffsetSpreadKm": 11.114074408815464,
+  "unitCheck": {
+    "tan39Deg": 0.809784033195007,
+    "horizontalKmPerHeightKm": 1.2348971565350515,
+    "equivalentChecks": [
+      "height_m * cos(elevation) / sin(elevation), converted back to km",
+      "height_km * tan(51 degree solar zenith)"
+    ],
+    "maxAllowedDifferenceKm": 1e-12
+  }
+}

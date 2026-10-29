@@ -379,6 +379,38 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
+// Seoul market data has independent access, retention, and public-display gates.
+// The queue performs no provider request until its server-side gates are enabled.
+crons.cron(
+  "seoul_polymarket_every_minute",
+  "* * * * *",
+  internal.seoulPolymarket.queueScheduledRefresh,
+  { stationIcao: "RKSI" },
+);
+
+crons.cron(
+  "seoul_polymarket_retention_hourly",
+  "17 * * * *",
+  internal.seoulPolymarket.pruneExpiredSnapshots,
+  {},
+);
+
+// Public NOAA L1B distribution: independent two-minute visible/IR cloud estimate.
+// The operational Convex switch and useful-sun/glint gates are checked server-side.
+crons.cron(
+  "seoul_gk2a_clouds_every_2_min",
+  "*/2 * * * *",
+  internal.seoulGk2aClouds.queueScheduledCloudRefresh,
+  { stationIcao: "RKSI" },
+);
+
+crons.cron(
+  "seoul_gk2a_clouds_retention",
+  "9 * * * *",
+  internal.seoulGk2aClouds.pruneExpiredCloudObservations,
+  { stationIcao: "RKSI" },
+);
+
 // GK2A SWRAD frames are produced on a ten-minute cadence and commonly appear
 // about twelve minutes later. Queue at a sixteen-minute offset for every frame;
 // the server-side Haurwitz gate skips work below 50 W/m² modeled clear-sky DSR.

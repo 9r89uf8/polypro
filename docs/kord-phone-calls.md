@@ -31,6 +31,13 @@ This document covers the KORD phone-call temperature workflow shown on `/kord/to
 
 Defined in `convex/crons.js` and `convex/kordPhone.js`.
 
+The shared cron file also contains independent Seoul satellite and market
+collection/retention jobs (`seoul_gk2a_clouds_*` and `seoul_polymarket_*`, added
+October 29, 2026 KST). Their configuration is documented in
+[Seoul sources](./seoul.md) and [Seoul market data](./seoul-polymarket.md);
+they do not enqueue
+phone calls or alter the KORD call slots below.
+
 - Cron trigger:
   - Cron expression: `49,52 * * * *` (UTC)
   - Calls `internal.kordPhone.enqueueScheduledCall` with `stationIcao: "KORD"`

@@ -1,0 +1,246 @@
+{
+  "startedAtUtc": "2026-10-29T03:31:23.814+00:00",
+  "mode": "--download-once",
+  "scope": "One archived, hash-verified public pair on local Windows. No arrival/publication latency, Convex latency, SLA, cloud forecast, or production feasibility assertion.",
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "machine": "AMD64",
+    "python": "3.12.0",
+    "logicalCpuCount": 4
+  },
+  "sourceEvidenceSha256": "83952f5955de8f92ae2d6df5e43b95f97a6cb1a811c87418a85b64de4b9ed858",
+  "readerSha256": {
+    "strict": "360deab40dcf3a715d40d7e3296e123c740a6b33f8fd5444d96c47ff89438832",
+    "inspect": "749eacfa5704b1d7a55dec368b28cee39c7903c1686f7e72ed2f58ff65977050"
+  },
+  "schedule": "Two concurrent streaming downloads to disk; fresh-process strict decodes sequentially B03 then B13. Independent footprint inspections occur afterward and are excluded from pair download-to-strict-result timing.",
+  "downloads": [
+    {
+      "band": "B03",
+      "url": "https://noaa-himawari9.s3.amazonaws.com/AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B03_JP03_R05_S0101.DAT.bz2",
+      "requestStartedAtUtc": "2026-10-29T03:31:23.928+00:00",
+      "headersReceivedAtUtc": "2026-10-29T03:31:24.316+00:00",
+      "completedAtUtc": "2026-10-29T03:31:26.566+00:00",
+      "headerWaitSeconds": 0.3870243,
+      "totalWallSeconds": 2.6437389,
+      "bytes": 15249786,
+      "sha256": "bf237c130596db8dc0bd1c472588279d2e5001550fb1bcf1705562239e7140d1",
+      "sha256MatchesVerifiedSample": true,
+      "httpStatus": 200,
+      "responseHeaders": {
+        "x-amz-id-2": "x3+uYJSSx4wI9YcZwN9NKgia2XJTUmHuSFNBce+BfgYm2dJ/XQ/Cuab/sc+yrg1CaW3GNGDC7n3mNvsem9kfl1b+mQGMMTY4",
+        "x-amz-request-id": "63R83EE12B4KKMY2",
+        "Server": "AmazonS3",
+        "Date": "Thu, 29 Oct 2026 03:31:25 GMT",
+        "Last-Modified": "Thu, 29 Oct 2026 02:40:49 GMT",
+        "ETag": "\"ed3ec3b8a27295cd7727d1d6582aadc5\"",
+        "x-amz-server-side-encryption": "AES256",
+        "Accept-Ranges": "bytes",
+        "Content-Type": "binary/octet-stream",
+        "Content-Length": "15249786",
+        "Connection": "close"
+      },
+      "file": "tmp\\seoul-himawari-benchmark-20261029\\himawari9-b03-jp03-202610290230.DAT.bz2",
+      "averageBodyAndRequestMbitPerSecond": 46.14611828724842
+    },
+    {
+      "band": "B13",
+      "url": "https://noaa-himawari9.s3.amazonaws.com/AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B13_JP03_R20_S0101.DAT.bz2",
+      "requestStartedAtUtc": "2026-10-29T03:31:23.929+00:00",
+      "headersReceivedAtUtc": "2026-10-29T03:31:24.312+00:00",
+      "completedAtUtc": "2026-10-29T03:31:25.010+00:00",
+      "headerWaitSeconds": 0.38258,
+      "totalWallSeconds": 1.0810084,
+      "bytes": 1058200,
+      "sha256": "e83c4c34a62c15cdcf09c8b3afc49bbd74c12effc6f7600687a5186dae172c86",
+      "sha256MatchesVerifiedSample": true,
+      "httpStatus": 200,
+      "responseHeaders": {
+        "x-amz-id-2": "bBoOdDr6bMJ38bsA60rgjr7EuaG7uy+SGoFD2STocIkYW9DO3EhMVpxZW8r2w7yQ1MooXBzTrO/3giqApD9EsZroYzKKQEMT",
+        "x-amz-request-id": "63R6ZW5VX48YEBFW",
+        "Server": "AmazonS3",
+        "Date": "Thu, 29 Oct 2026 03:31:25 GMT",
+        "Last-Modified": "Thu, 29 Oct 2026 02:41:53 GMT",
+        "ETag": "\"78205b1d5cb368e9235172d605e54a22\"",
+        "x-amz-server-side-encryption": "AES256",
+        "Accept-Ranges": "bytes",
+        "Content-Type": "binary/octet-stream",
+        "Content-Length": "1058200",
+        "Connection": "close"
+      },
+      "file": "tmp\\seoul-himawari-benchmark-20261029\\himawari9-b13-jp03-202610290230.DAT.bz2",
+      "averageBodyAndRequestMbitPerSecond": 7.831206492012458
+    }
+  ],
+  "strictDecodes": [
+    {
+      "band": "B03",
+      "reader": "strict",
+      "startedAtUtc": "2026-10-29T03:31:26.838+00:00",
+      "completedAtUtc": "2026-10-29T03:31:31.821+00:00",
+      "wallSeconds": 4.9827454,
+      "processCpuSeconds": 3.265625,
+      "memoryBefore": {
+        "available": true,
+        "workingSetBytes": 23515136,
+        "peakWorkingSetBytes": 23515136,
+        "privateBytes": 14344192,
+        "peakPagefileBytes": 14344192,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "memoryAfter": {
+        "available": true,
+        "workingSetBytes": 24846336,
+        "peakWorkingSetBytes": 156639232,
+        "privateBytes": 14991360,
+        "peakPagefileBytes": 150810624,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "result": {
+        "satellite": "Himawari-9",
+        "format": "1.3",
+        "band": 3,
+        "shape": [
+          4800,
+          6000
+        ],
+        "validCellCount": 25,
+        "sha256": "bf237c130596db8dc0bd1c472588279d2e5001550fb1bcf1705562239e7140d1",
+        "pixelArrayBytes": 57600000,
+        "centerCount": 830,
+        "centerCalibrationCount": 821,
+        "centerBrightnessTempK": null,
+        "centerSolarNormalizedReflectance": 0.770986529055086
+      },
+      "freshChildTotalWallSeconds": 5.2601778,
+      "parentStartedAtUtc": "2026-10-29T03:31:26.577+00:00",
+      "parentCompletedAtUtc": "2026-10-29T03:31:31.837+00:00"
+    },
+    {
+      "band": "B13",
+      "reader": "strict",
+      "startedAtUtc": "2026-10-29T03:31:32.065+00:00",
+      "completedAtUtc": "2026-10-29T03:31:32.187+00:00",
+      "wallSeconds": 0.1215036,
+      "processCpuSeconds": 0.109375,
+      "memoryBefore": {
+        "available": true,
+        "workingSetBytes": 23453696,
+        "peakWorkingSetBytes": 23453696,
+        "privateBytes": 14290944,
+        "peakPagefileBytes": 14290944,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "memoryAfter": {
+        "available": true,
+        "workingSetBytes": 23973888,
+        "peakWorkingSetBytes": 33386496,
+        "privateBytes": 14336000,
+        "peakPagefileBytes": 27197440,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "result": {
+        "satellite": "Himawari-9",
+        "format": "1.3",
+        "band": 13,
+        "shape": [
+          1200,
+          1500
+        ],
+        "validCellCount": 25,
+        "sha256": "e83c4c34a62c15cdcf09c8b3afc49bbd74c12effc6f7600687a5186dae172c86",
+        "pixelArrayBytes": 3600000,
+        "centerCount": 2735,
+        "centerCalibrationCount": 2735,
+        "centerBrightnessTempK": 261.27196148360065,
+        "centerSolarNormalizedReflectance": null
+      },
+      "freshChildTotalWallSeconds": 0.3623078,
+      "parentStartedAtUtc": "2026-10-29T03:31:31.837+00:00",
+      "parentCompletedAtUtc": "2026-10-29T03:31:32.200+00:00"
+    }
+  ],
+  "independentInspections": [
+    {
+      "band": "B03",
+      "reader": "inspect",
+      "startedAtUtc": "2026-10-29T03:31:32.426+00:00",
+      "completedAtUtc": "2026-10-29T03:31:34.808+00:00",
+      "wallSeconds": 2.3824742,
+      "processCpuSeconds": 2.359375,
+      "memoryBefore": {
+        "available": true,
+        "workingSetBytes": 23506944,
+        "peakWorkingSetBytes": 23506944,
+        "privateBytes": 14360576,
+        "peakPagefileBytes": 14360576,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "memoryAfter": {
+        "available": true,
+        "workingSetBytes": 82178048,
+        "peakWorkingSetBytes": 141045760,
+        "privateBytes": 74186752,
+        "peakPagefileBytes": 136384512,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "result": {
+        "band": 3,
+        "shape": [
+          4800,
+          6000
+        ],
+        "centerCount": 830,
+        "centerValid": true,
+        "pixelArrayBytes": 57600000
+      },
+      "freshChildTotalWallSeconds": 2.6363528,
+      "parentStartedAtUtc": "2026-10-29T03:31:32.200+00:00",
+      "parentCompletedAtUtc": "2026-10-29T03:31:34.836+00:00"
+    },
+    {
+      "band": "B13",
+      "reader": "inspect",
+      "startedAtUtc": "2026-10-29T03:31:35.084+00:00",
+      "completedAtUtc": "2026-10-29T03:31:35.207+00:00",
+      "wallSeconds": 0.1237196,
+      "processCpuSeconds": 0.125,
+      "memoryBefore": {
+        "available": true,
+        "workingSetBytes": 23269376,
+        "peakWorkingSetBytes": 23269376,
+        "privateBytes": 14106624,
+        "peakPagefileBytes": 14106624,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "memoryAfter": {
+        "available": true,
+        "workingSetBytes": 27922432,
+        "peakWorkingSetBytes": 32731136,
+        "privateBytes": 19177472,
+        "peakPagefileBytes": 27267072,
+        "method": "Windows GetProcessMemoryInfo; peak includes interpreter and all allocations in this fresh child process."
+      },
+      "result": {
+        "band": 13,
+        "shape": [
+          1200,
+          1500
+        ],
+        "centerCount": 2735,
+        "centerValid": true,
+        "pixelArrayBytes": 3600000
+      },
+      "freshChildTotalWallSeconds": 0.3859274,
+      "parentStartedAtUtc": "2026-10-29T03:31:34.836+00:00",
+      "parentCompletedAtUtc": "2026-10-29T03:31:35.221+00:00"
+    }
+  ],
+  "pairDownloadCompletedAtUtc": "2026-10-29T03:31:26.577+00:00",
+  "pairDownloadWallSeconds": 2.7641783,
+  "strictPairResultCompletedAtUtc": "2026-10-29T03:31:32.200+00:00",
+  "downloadToStrictPairResultWallSeconds": 8.3867625,
+  "successful": true,
+  "completedAtUtc": "2026-10-29T03:31:35.221+00:00",
+  "wholeBenchmarkWallSeconds": 11.409132
+}

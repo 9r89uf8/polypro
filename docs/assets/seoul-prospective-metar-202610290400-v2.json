@@ -1,0 +1,290 @@
+{
+  "recordType": "sanitized_derived_research_evidence",
+  "exportedAtUtc": "2026-10-29T04:05:52.166Z",
+  "plan": {
+    "createdAtUtc": "2026-10-29T03:57:01.154Z",
+    "targetNominalUtc": "2026-10-29T04:00:00.000Z",
+    "plannedInvocationNotBeforeUtc": "2026-10-29T03:58:30.000Z",
+    "output": "tmp/seoul-paper-20261029-0400-v2.json",
+    "method": "Fixed single prospective v2 target, selected before current source values are queried.",
+    "rule": "Latest fresh one-minute runway 2 / 15L AMOS at preparation; integer rounding with ties warmer; persistence comparison; no fitting or quote access.",
+    "latePolicy": "The target never moves. The recorder retains an abstention if preparation or sealing is late.",
+    "scope": "One bounded local source comparison. No recurring task, production mutation, market request or order."
+  },
+  "planSha256": "87c80452fa839d0ef7f0476aa9dd0550cdca99346b58a01495a5582c5834ba13",
+  "run": {
+    "methodVersion": "seoul-next-metar-probe-v2",
+    "startedAt": 1793246310008,
+    "targetAt": 1793246400000,
+    "targetDate": "2026-10-29",
+    "captureDates": [
+      "2026-10-28",
+      "2026-10-29"
+    ],
+    "sourceCodeHashes": {
+      "seoul-paper-probe-runner.mjs": "5801ead590e84ac3d4cfd00f6199139f9bc81d1a7e0f904f1c91bdff40814cbe",
+      "seoul-paper-forecast.mjs": "025813f74ee5167a10734f72d497735fc10e77391c28d9afbf51f0abe2182bf6"
+    },
+    "query": "seoul:getDayStationRows",
+    "backend": "https://striped-chipmunk-763.convex.cloud",
+    "rule": "Latest fresh one-minute RKSI runway 2 / 15L value at preparation, at most three minutes old; nearest integer with ties warmer. Preserve ambiguous/missing inputs; no automatic sensor or cadence substitution.",
+    "outcome": "First single valid routine RKSI target version observed by this bounded AWC capture; corrections/final settlement remain separate.",
+    "outcomeDeadlineAt": 1793247000000,
+    "firstOutcomePollNotBefore": 1793246460000,
+    "monotonicStartedAtMs": 88980.1095,
+    "monotonicOutcomeDeadlineMs": 778972.1095,
+    "minimumPollStartIntervalMs": 60000,
+    "minimumMonotonicPollStartIntervalMs": 60000,
+    "maximumResponseBytes": 500000,
+    "maximumSourceQueryResponseBytes": 4194304,
+    "clocks": "SDK query receipt, preparation, prediction file-sync completion, AWC request/headers/body completion, and provider receipt remain distinct."
+  },
+  "runArtifact": {
+    "file": "run.json",
+    "bytes": 1384,
+    "sha256": "739bb77efd2aabd527485ef00565d607216eb3dccbd87072e4bacc829f8a9049"
+  },
+  "sourceArtifacts": [
+    {
+      "date": "2026-10-28",
+      "queryStartedAtUtc": "2026-10-29T03:58:30.050Z",
+      "queryReceivedAtUtc": "2026-10-29T03:58:35.046Z",
+      "error": null,
+      "file": "snapshot-2026-10-28.json",
+      "sha256": "0a440dc932688e8df75de01a508fb315492656421becef8ba8a5ac49e6155713",
+      "bytes": 2581988
+    },
+    {
+      "date": "2026-10-29",
+      "queryStartedAtUtc": "2026-10-29T03:58:30.126Z",
+      "queryReceivedAtUtc": "2026-10-29T03:58:30.595Z",
+      "error": null,
+      "file": "snapshot-2026-10-29.json",
+      "sha256": "5be1c5a8563d032be123d53d2bdc4e72fef36705a0444356e4d0b0b2b5b9772a",
+      "bytes": 1404268
+    }
+  ],
+  "predictionArtifact": {
+    "file": "prediction.json",
+    "bytes": 4178,
+    "sha256": "0ddf4e11a81e325a6d9db11d22e411415e0b17e3517a5ca2307610c8ad98f376"
+  },
+  "sealArtifact": {
+    "file": "prediction-seal.json",
+    "bytes": 472,
+    "sha256": "91aac44a8854e86188a4749aa7b9f1298207dadc3a700def278482c00c0c25df"
+  },
+  "resultArtifact": {
+    "file": "result.json",
+    "bytes": 1120,
+    "sha256": "5fccbb025fec68b1d86b23af499f33976d27dead210d4a61fbc4e6833324b309"
+  },
+  "targetNominalUtc": "2026-10-29T04:00:00.000Z",
+  "preparedAtUtc": "2026-10-29T03:58:35.469Z",
+  "predictionSealCompletedAtUtc": "2026-10-29T03:58:35.608Z",
+  "sealedLeadSeconds": 84.392,
+  "amos": {
+    "observedAtUtc": "2026-10-29T03:58:00.000Z",
+    "temperatureC": 11.7,
+    "runway": "15L",
+    "cadence": "one_minute",
+    "receiptAtUtc": "2026-10-29T03:58:30.595Z",
+    "databaseFirstSeenAt": 1793246294409,
+    "recordSha256": "d7b9188e4d9edda95fd93e8eceb8274da3d3317a47b35d44d04fc669d6fe3ea6"
+  },
+  "prior": {
+    "observedAtUtc": "2026-10-29T03:30:00.000Z",
+    "temperatureC": 11,
+    "roundedC": 11,
+    "normalizedRaw": "RKSI 290330Z 14009KT CAVOK 11/03 Q1020 NOSIG",
+    "rawSha256": "1816439f3e20eb214d3b749e7cec187d778b45eeb7904d0e8d2851a4a1d00892"
+  },
+  "predictionC": 12,
+  "persistenceBaselineC": 11,
+  "knownLocalMaximumC": 11,
+  "knownLocalMaximumRoundedC": 11,
+  "maximumStatus": "known_maximum_expected_slots_present",
+  "maximumCoverage": {
+    "expectedEarlierSlots": 26,
+    "missingExpectedSlots": [],
+    "knownRoutineReports": 26,
+    "offScheduleRoutineTimes": []
+  },
+  "rejectedReports": [],
+  "rejectedAmos": [],
+  "reasons": [],
+  "warnings": [],
+  "polls": [
+    {
+      "index": 1,
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAt": 1793246460014,
+      "requestStartedMonotonicMs": 238986.1205,
+      "headersReceivedAt": 1793246460330,
+      "headersReceivedMonotonicMs": 239302.3064,
+      "httpStatus": 200,
+      "httpDate": "Thu, 29 Oct 2026 04:01:01 GMT",
+      "contentType": "application/json; charset=utf-8",
+      "responseCompletedAt": 1793246460331,
+      "responseCompletedMonotonicMs": 239303.1479,
+      "body": {
+        "file": "poll-001.body",
+        "sha256": "1760d434a679eccfaff7031308bcaad922674e05ae8153de8b55e43bef836474",
+        "bytes": 1184
+      },
+      "artifact": {
+        "file": "poll-001.json",
+        "bytes": 618,
+        "sha256": "424f035310a1d95703d76b578321f4f94393581af56340e361cc643dfee4226b"
+      },
+      "interpretation": {
+        "status": "routine_target_not_seen",
+        "matchingRecords": 0,
+        "responseReceivedAt": 1793246460331
+      }
+    },
+    {
+      "index": 2,
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAt": 1793246520031,
+      "requestStartedMonotonicMs": 299002.3793,
+      "headersReceivedAt": 1793246520539,
+      "headersReceivedMonotonicMs": 299510.5041,
+      "httpStatus": 200,
+      "httpDate": "Thu, 29 Oct 2026 04:02:01 GMT",
+      "contentType": "application/json; charset=utf-8",
+      "responseCompletedAt": 1793246520539,
+      "responseCompletedMonotonicMs": 299511.1063,
+      "body": {
+        "file": "poll-002.body",
+        "sha256": "1760d434a679eccfaff7031308bcaad922674e05ae8153de8b55e43bef836474",
+        "bytes": 1184
+      },
+      "artifact": {
+        "file": "poll-002.json",
+        "bytes": 618,
+        "sha256": "e337d8df703ca52337c74b491ba4985bd55ae7168467d9540d0dd9ceed5e762d"
+      },
+      "interpretation": {
+        "status": "routine_target_not_seen",
+        "matchingRecords": 0,
+        "responseReceivedAt": 1793246520539
+      }
+    },
+    {
+      "index": 3,
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAt": 1793246580035,
+      "requestStartedMonotonicMs": 359006.5472,
+      "headersReceivedAt": 1793246580419,
+      "headersReceivedMonotonicMs": 359390.8163,
+      "httpStatus": 200,
+      "httpDate": "Thu, 29 Oct 2026 04:03:01 GMT",
+      "contentType": "application/json; charset=utf-8",
+      "responseCompletedAt": 1793246580421,
+      "responseCompletedMonotonicMs": 359393.0889,
+      "body": {
+        "file": "poll-003.body",
+        "sha256": "1760d434a679eccfaff7031308bcaad922674e05ae8153de8b55e43bef836474",
+        "bytes": 1184
+      },
+      "artifact": {
+        "file": "poll-003.json",
+        "bytes": 618,
+        "sha256": "bb60ea6461561a598ea56f4a7578b810a4e63f625124985d84c43f749a92cd8d"
+      },
+      "interpretation": {
+        "status": "routine_target_not_seen",
+        "matchingRecords": 0,
+        "responseReceivedAt": 1793246580421
+      }
+    },
+    {
+      "index": 4,
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAt": 1793246640046,
+      "requestStartedMonotonicMs": 419017.9645,
+      "headersReceivedAt": 1793246640513,
+      "headersReceivedMonotonicMs": 419484.8313,
+      "httpStatus": 200,
+      "httpDate": "Thu, 29 Oct 2026 04:04:01 GMT",
+      "contentType": "application/json; charset=utf-8",
+      "responseCompletedAt": 1793246640516,
+      "responseCompletedMonotonicMs": 419487.5013,
+      "body": {
+        "file": "poll-004.body",
+        "sha256": "1760d434a679eccfaff7031308bcaad922674e05ae8153de8b55e43bef836474",
+        "bytes": 1184
+      },
+      "artifact": {
+        "file": "poll-004.json",
+        "bytes": 618,
+        "sha256": "127a019c01fcc2eaef43656df7f9d99ebf34c02df408a40fe6d6f54667b8fee8"
+      },
+      "interpretation": {
+        "status": "routine_target_not_seen",
+        "matchingRecords": 0,
+        "responseReceivedAt": 1793246640516
+      }
+    },
+    {
+      "index": 5,
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAt": 1793246700046,
+      "requestStartedMonotonicMs": 479018.1619,
+      "headersReceivedAt": 1793246700359,
+      "headersReceivedMonotonicMs": 479331.2818,
+      "httpStatus": 200,
+      "httpDate": "Thu, 29 Oct 2026 04:05:01 GMT",
+      "contentType": "application/json; charset=utf-8",
+      "responseCompletedAt": 1793246700361,
+      "responseCompletedMonotonicMs": 479332.9159,
+      "body": {
+        "file": "poll-005.body",
+        "sha256": "60a5d564648d9743b23c9e0546c92cd2631c68cd925660398fb0ff4914b561c0",
+        "bytes": 1578
+      },
+      "artifact": {
+        "file": "poll-005.json",
+        "bytes": 618,
+        "sha256": "2cfb3c0a256eb4c434adebf3ccaea85192cd26c59a842f2d624819e5702072da"
+      },
+      "interpretation": {
+        "status": "observed_single_routine_version",
+        "ok": true,
+        "stationIcao": "RKSI",
+        "obsTimeUtc": 1793246400000,
+        "normalizedRaw": "METAR RKSI 290400Z 15009KT CAVOK 12/02 Q1020 NOSIG",
+        "rawSha256": "77e274613f5762b2ab1bbcd4a515a58883ad39645b8ebb10db73ec911f5b3f0a",
+        "bodyTemperatureC": 12,
+        "temperatureC": 12,
+        "roundedC": 12,
+        "precision": "body_integer",
+        "correctionMarked": false,
+        "unlabeledRoutine": false,
+        "responseReceivedAt": 1793246700361,
+        "providerReceiptAt": 1793246682583,
+        "timingWarning": null,
+        "versionMeaning": "First matching version in this captured response; not proof of first issuance or final corrected content."
+      }
+    }
+  ],
+  "score": {
+    "status": "scored_observed_version",
+    "actualC": 12,
+    "matches": true,
+    "baselineMatches": false,
+    "isNewKnownHigh": true,
+    "predictsNewKnownHigh": true,
+    "maximumStatus": "known_maximum_expected_slots_present",
+    "correctionMarked": false,
+    "versionMeaning": "First matching version in this captured response; not proof of first issuance or final corrected content."
+  },
+  "limitations": [
+    "One fixed target selected before querying the current source values; not a complete daily opportunity schedule.",
+    "First single qualifying routine AWC version observed in this bounded capture, not final corrected settlement.",
+    "Full source snapshots and raw poll bytes remain in ignored local storage; public extract omits database IDs.",
+    "Local file hashes and clocks are not an externally trusted timestamp or proof of first public availability.",
+    "No market quotes, orders, execution, fees, or profitability evidence."
+  ]
+}

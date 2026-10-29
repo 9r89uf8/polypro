@@ -1,0 +1,48 @@
+{
+  "generatedAtUtc": "2026-10-29T03:05:41.256Z",
+  "scope": "Offline independent geometry/calibration checks against saved Himawari-9 files. No atmospheric product validation.",
+  "calibratedEvidence": "docs/assets/seoul-himawari-calibrated-review-20261029.json",
+  "inputSha256": "c23b069cba022c4b4f8d163c3c507f32035e535a6aab088c15419a8ac4734157",
+  "geometry": {
+    "method": "Independent Earth-centered Cartesian forward projection compared with proj4 GEOS sweep=y and per-file ellipsoid, radius, longitude, CFAC/LFAC/COFF/LOFF.",
+    "comparedPositions": 200,
+    "maxPixelDifference": 4.547473508864641e-12,
+    "allSamplesFirstLine": 1,
+    "allSamplesSegments": 1
+  },
+  "spatialSampling": {
+    "geographicTargets": 25,
+    "distinctB03Pixels": 25,
+    "distinctB13Pixels": 15,
+    "maxB03NearestCenterDistanceKm": 0.3950612708103439,
+    "maxB13NearestCenterDistanceKm": 1.493931029518728,
+    "warning": "Target-grid counts are not independent native IR samples; surface projection does not correct cloud parallax."
+  },
+  "calibration": {
+    "noticeUrl": "https://www.data.jma.go.jp/mscweb/en/oper/eventlog/Update_of_Calibration_Information_2026.pdf",
+    "effectiveAtUtc": "2026-10-26T07:00:00Z",
+    "embeddedCalibrationUpdateUtc": "2026-09-22T20:40:00+00:00",
+    "updatedGain": 0.31089897,
+    "updatedOffset": -6.21797943,
+    "updatedVsOriginalGainPct": 1.8994407494616672,
+    "maxB13RadianceRoundtripRelativeError": 2.1382485343490453e-8
+  },
+  "hypotheticalParallax": {
+    "assumedCloudHeightKm": 10,
+    "trueLatitude": 37.4602,
+    "trueLongitude": 126.4407,
+    "notObservedCloudHeight": true,
+    "Himawari9": {
+      "latitude": 37.54613336738489,
+      "longitude": 126.39556133045014,
+      "apparentSurfaceDisplacementKm": 10.363441470238781
+    },
+    "GK2A": {
+      "latitude": 37.54549864446075,
+      "longitude": 126.43528558573587,
+      "apparentSurfaceDisplacementKm": 9.507476860684811
+    },
+    "betweenApparentSurfaceLocationsKm": 3.5068491879000057,
+    "interpretation": "Illustration of viewing geometry only; no cloud-height measurement or correction inferred from these images."
+  }
+}

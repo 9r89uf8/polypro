@@ -1,10 +1,129 @@
 # Seoul RKSI live-temperature page
 
-This document describes the focused RKSI 15L temperature timeline, observed
-cloud-cover estimates, KMA forecast conditions/ceilings, and GK2A solar-heating
-panel, plus the collectors that feed them.
+This document describes the streamlined RKSI dashboard: Seoul time, KMA
+forecast maximum and peak times, the official routine-METAR maximum, observed
+cloud cover and its trend, the daily temperature chart, and today's Seoul
+Polymarket quotes. Collector and
+approval documentation remains below; the former diagnostic dashboard is
+retained only as a historical appendix.
 
-## Routes
+## Replacement database connection
+
+This recovery and activation record describes the dashboard before the
+simplification documented below. Its GK2A and remaining-ceiling panels are
+no longer part of the streamlined page. The connection and approval facts
+remain applicable to the unchanged backend.
+
+On October 28, 2026, the hosted page still contained the deleted
+`rapid-greyhound-887` Convex URL and remained on loading/awaiting states.
+Meanwhile `striped-chipmunk-763`, selected by local configuration, returned
+fresh AMOS and NOAA rows and advanced without manual refresh.
+
+The hosted connection was restored the same day by updating the existing
+Vercel `NEXT_PUBLIC_CONVEX_URL` value (preserving its production/preview
+targets) and redeploying the previously published source commit
+`c97064a98acc5bdb23c23d4d1e4f710de122fcbf`. Deployment
+`dpl_DbAkFxEWMZFEAA6Ff1pQ5fwDrYkb` reached `READY` and took over
+`polypro-alpha.vercel.app`. Browser verification showed the 07:40 KST
+representative AMOS observation at 9.9 °C, the 07:30 METAR at 10 °C, populated
+history, and no console errors. No Convex code deployment was needed.
+
+The required frontend configuration is:
+
+```text
+NEXT_PUBLIC_CONVEX_URL=https://striped-chipmunk-763.convex.cloud
+```
+
+This public URL is embedded at build time by `app/convex-provider.js`; updating
+Convex environment variables alone cannot change an already published browser
+bundle. Update the frontend hosting environment and rebuild, then verify
+`/seoul/today` against the current `Asia/Seoul` date. All pages using the shared
+Convex provider follow this same URL.
+
+Core live temperatures need no additional Convex enable flag. KMA forecast and
+GK2A solar approval states are independent; missing approval must remain
+visible without blocking AMOS/METAR. Both approval flags were subsequently
+enabled on the replacement Convex deployment after approval confirmation.
+The hosted page displayed the first successful KMA capture at 07:44 KST on
+October 29, including its 13 °C daily high and hourly condition/ceiling guidance.
+The browser console had no errors.
+
+The initial GK2A refresh completed with `no_data`: all four requested grid
+cells failed the existing DSR quality checks. The panel therefore displayed
+no stored observation, while the approval and daylight collection window were
+active. Its existing scheduled collection remains enabled; activation does
+not guarantee a usable satellite frame. The remaining-ceiling decision also
+correctly retained its insufficient-data state while matched KMA/AMOS bias
+coverage and usable solar data were unavailable.
+
+See [the collector recovery notes](./seoul.md#recovery-after-replacing-the-convex-database)
+for the exact deployment-specific activation/removal commands. Current-source
+collection does not restore historical rows deleted with the old database.
+
+## Routes and current dashboard contract
+
+The streamlined implementation contains six information areas. This section
+is the source contract for the current UI; historical panel descriptions at
+the end of this document do not describe the streamlined page.
+
+The simplification was deployed on October 28, 2026 (October 29 KST) as
+Vercel production deployment `dpl_Hy7ExEZwyWcEUD2KF9kB3D6txVGi` and verified
+at `polypro-alpha.vercel.app/seoul/today`. The release used the previously
+published source `c97064a98acc5bdb23c23d4d1e4f710de122fcbf` plus the four
+Seoul page/helper/chart/style files. It did not deploy unrelated working-tree
+changes or alter Convex functions, approvals, or schedules.
+
+Validation included 15 passing data tests and a successful Vercel production
+build. Browser checks confirmed the live page, future-date navigation,
+keyboard chart inspection, no console errors, and no horizontal overflow at
+a 390-pixel mobile viewport. The live page showed the KMA 13 °C forecast with
+12:00–17:00 KST tied peak hours, a routine-METAR high of 10 °C, and fresh
+one-minute AMOS readings. The current CAVOK report correctly retained unknown
+total cloud coverage and trend rather than displaying a false zero.
+
+The compact satellite sunlight row was subsequently released in production
+deployment `dpl_5DBKLg5sTv9XSBXTfUZZSCp5EZLn`. All 19 data tests and the Vercel
+build passed. Live browser verification showed `Sunlight decreasing`, based
+on 30 minutes of normalized observations ending at 09:30 KST, separately from
+the METAR `NSC` condition. Desktop and 390-pixel mobile views rendered without
+overflow or browser errors. No collector or approval setting changed.
+
+The compact two-minute cloud row was released in production deployment
+`dpl_J3R3FjDFa2o3o8hPkbyZk9sjVKaK` with its separate Convex collector on
+`striped-chipmunk-763`. Disabled queue/read behavior was verified before
+enabling the public NOAA source's operational switch. All 69 focused tests,
+the Convex schema deployment, and the Vercel build passed. At 11:30–11:31 KST
+on October 29, the live page correctly displayed `Cloud data delayed` because
+fresh paired NOAA frames were unavailable, alongside `Sunlight increasing`
+from the existing 11:00 observation. Desktop and 390-pixel mobile checks had
+no console errors or horizontal overflow. A paired real-file decoder check
+passed separately; this initial release check did not establish a live cloud
+direction or a guaranteed delivery interval.
+
+The separate Seoul market section was released in
+`dpl_2mHFCWpuBBiXiSTu1GsTBCdUuqx8`. All four Seoul market flags remain absent
+on the effective Convex backend; the deployed queue refused collection and
+the query returned no protected data. At 11:48 KST, the page displayed
+`Market access approval required` below the temperature chart. Desktop and
+390-pixel mobile checks found no console errors or horizontal overflow.
+The release passed 49 market/backend and dashboard-helper tests, two schema
+checks, and the remote production build. Activation requirements and the
+current AWC-based contract are in [Seoul market data](./seoul-polymarket.md).
+
+The populated market table was subsequently checked in a local fixture using
+the actual component, formatter and CSS, with eleven clearly labeled synthetic
+outcomes. Desktop and 390-pixel mobile views handled missing, zero, 100-cent,
+fractional and long-decimal values without page overflow; the table contained
+its own scrolling. Stale, error, unverified-rule and approval-required states
+withheld all quote rows. No market endpoint or production flag was used by
+that rendering check.
+
+At the same check, the live GK2A collector had successfully decoded six
+paired frames spanning twelve minutes with 25 common cells. It correctly
+returned an uncertain direction because the bands/cells did not agree.
+The 11:36 sample's visible state expired from `Cloud trend uncertain` to
+`Cloud data delayed` between the 11:48:06 and 11:48:23 browser observations,
+confirming local freshness expiry while the sunlight row remained available.
 
 ### `/seoul/today`
 
@@ -12,6 +131,671 @@ This stable entrypoint redirects server-side to `/seoul/day/[date]`, using the
 current `Asia/Seoul` date.
 
 ### `/seoul/day/[date]`
+
+The route accepts real calendar dates, including correct month lengths and
+leap years. Date navigation supports today, archived dates, and future dates.
+The selected date governs the observations and forecast shown; the Seoul
+clock remains an actual current clock, not a simulated historical clock.
+
+1. **Seoul time.** Display the current time in `Asia/Seoul` (KST), independently
+   of the browser's or execution host's timezone.
+2. **KMA forecast maximum and times.** Display KMA/AMO's published daily high
+   for RKSI and the selected date, exactly as captured. Do not raise it to the
+   observed AMOS maximum or substitute a model estimate. Derive peak times
+   from the hottest available hourly temperatures in that same KMA capture.
+   Show every tied peak hour, grouping only adjacent tied hours into windows;
+   separate windows remain separate rather than becoming one continuous
+   first-to-last span. If the hourly peak differs from the published daily
+   high, identify the hourly value and its times separately. Those times are
+   not an asserted time of the daily maximum. Missing daily or hourly guidance
+   remains missing, and stale stored guidance stays visibly stale.
+3. **Official high so far.** Compute the maximum from the selected day's
+   routine METAR observations, explicitly excluding reports identified as
+   `SPECI`. Label this boundary `Routine reports`. This is distinct from the
+   representative AMOS sensor maximum and from a model's predicted maximum.
+   An empty routine-report set is unavailable, not zero. For archived dates
+   this is the maximum of retained routine reports; it is not a claim of
+   complete official daily coverage when reports are missing.
+4. **Observed cloud cover.** Use reported METAR/SPECI cloud-amount categories for the
+   current observed visual. Express cloud amount in eighths: FEW 1–2/8, SCT
+   3–4/8, BKN 5–7/8, and OVC 8/8. Keep the category/range visible rather than
+   converting it to a fabricated exact percentage. `CAVOK`, `NSC`, `NCD`,
+   automated `CLR`, and `VV` do not establish total cloud amount and retain an
+   unknown/limited state. A clearing or increasing indication requires
+   comparable adjacent reports no more than 45 minutes old and conservative
+   evidence of a change: the newer range must lie wholly below or above the
+   previous range. Equal categories may be labeled steady without claiming
+   finer changes are resolved. Overlapping ranges do not establish a trend;
+   missing, stale, obscured, or ambiguous coverage must not imply a trend.
+   This is an observed-sky summary, not KMA forecast cloud cover or a solar
+   radiation measurement. Archived/future dates must not present an old or
+   nonexistent observation as current live sky. Known METAR direction badges
+   explicitly say `METAR`; unknown trends do not add a redundant badge.
+   Today's same card includes a compact **GK2A clouds** row above sunlight:
+   `Clouds clearing`, `Clouds increasing`, or `Clouds steady`, with
+   `Satellite estimate` and the latest nominal observation time in KST. The
+   caption tooltip identifies visible and infrared satellite readings and
+   explains that they do not measure total cloud amount. This
+   uses the separately collected two-minute visible/infrared trend around
+   RKSI; it does not turn image brightness into a cloud percentage, change
+   the METAR coverage visual, or replace the sunlight measurement. Direction
+   requires the enabled, operational backend to report `ok`, an open daylight
+   window, matching RKSI/current-date data, and a usable latest sample no older
+   than 12 minutes. Both reflectance and infrared brightness temperature must
+   be finite, with at least 20 valid cells. History must contain at least four
+   samples spanning six minutes and 20 common cells. The client checks source
+   age with its own clock every 15 seconds, including when no new database
+   write arrives. Missing setup, nighttime/low sun, stale/error data,
+   insufficient history, or uncertain evidence produce a short neutral state
+   without retaining a directional arrow. The first in-flight collection shows
+   `Cloud trend building` even before a sample has arrived. Archived and future dates omit this
+   row and its subscription. The collector's source, corroboration rules,
+   public-use terms, enable flag, and schedule are documented in
+   [seoul.md](./seoul.md#two-minute-gk2a-cloud-trend).
+   Today's same card also retains the compact **GK2A sunlight** row: increasing,
+   decreasing, or steady, with the satellite observation time. This uses the
+   existing clear-sky-normalized `trend.state` over the recent 30–60 minutes,
+   not cloud percentage or the forward-looking upwind `expectedNextHour`.
+   The annotation says `Relative to clear sky`. It requires current approval,
+   an open daylight window, a usable airport sample no older than 35 minutes,
+   and at least three samples spanning 30 minutes. The page recomputes source
+   age with its own clock, even between database writes. Low sunlight,
+   delayed/failed updates, revoked approval, and insufficient history show a
+   short unavailable/building state instead of retaining a directional arrow.
+   An unknown METAR cloud trend no longer adds a redundant unknown-trend badge;
+   actual reported cloud direction remains visible when established.
+5. **Daily temperature chart.** Plot the representative AMOS 15L minute
+   temperature at its native 0.1°C resolution, discrete routine-METAR
+   temperature points, and a dashed KMA hourly forecast curve. Keep these
+   series distinguishable and retain source/time information in tooltips.
+   The minute series does not establish that the thermometer is physically at
+   the 15L runway threshold. AMOS gaps over five minutes and forecast gaps
+   over 90 minutes break their respective lines;
+   no Weather.com, threshold-model, or inferred sensor series fills them.
+6. **Today's Seoul market.** A separate compact section below the temperature
+   chart lists the current event's temperature outcomes with YES bid, YES ask,
+   and last-trade price in cents. Decimal strings are formatted exactly; a
+   missing value stays unavailable rather than becoming zero or a Gamma
+   fallback. Quote tooltips show available shares and our book receipt time.
+   Last-trade tooltips identify our retrieval time and explicitly state that
+   the endpoint provides no execution timestamp. Prices are not weather
+   probabilities, executed quantities, or a declaration of settlement.
+   The event/rules link is limited to the matching date's Polymarket event.
+   The brief resolution note appears only after the backend verifies the
+   current contract: AWC routine RKSI reports, with SPECI excluded. T-group
+   precision, rounding, corrections, and fallback provisions belong to the
+   event's full rules; the AMOS reading and page's official-high card are not
+   substituted for a contract settlement calculation.
+   Disabled or missing approval, unknown rules, closed events, source failures,
+   and missing data show a short status rather than prices. The latest poll
+   must be no older than three minutes; each book's provider snapshot timestamp
+   and our receipt timestamp must both pass that limit and reject future clocks.
+   A fresh download cannot freshen an old cached book. Last-trade retrieval
+   time is checked independently, without inferring when the trade executed.
+   The existing 15-second client clock ages prices out between server writes.
+   Crossed books and duplicate outcome identities are rejected. Archived and
+   future pages omit the section and its query entirely.
+
+The visible page omits the old target selectors, remaining-ceiling decisions,
+forecast assessments, revision/evaluation diagnostics, secondary Weather.com
+comparisons, GK2A panel, and associated collection controls. Their backend
+retention, scheduled jobs, and approval gates are unchanged by this UI work.
+
+## Current data and refresh behavior
+
+`seoul:getDayStationRows` supplies reactive AMOS and METAR observations.
+On today's route, `seoulGk2a:getSolarHeatingDashboard` supplies the compact
+sunlight trend and `seoulGk2aClouds:getCloudTrendDashboard` supplies the rapid
+satellite cloud trend. Both pass `{ stationIcao: "RKSI", date }` and are read
+subscriptions; neither requests a download. They are skipped for archived and
+future dates, and revocation/disabled source state suppresses the corresponding
+direction independently.
+`seoulPolymarket:getDashboard({ stationIcao: "RKSI", date })` is another
+today-only read subscription for the separate market section. It neither
+collects quotes nor places orders; server collection and any required
+access/retention/public-display approval checks remain independent of browser
+refresh. See [seoul.md](./seoul.md) for the collector's source and gate details.
+`seoulWeather:getHighPredictionDashboard` continues to supply stored,
+approval-checked KMA captures; only the KMA forecast fields required by the
+streamlined UI are presented. Reusing that existing read endpoint does not
+make its legacy prediction or Weather.com fields current UI features.
+
+For today's route, initial entry and the manual refresh request only:
+
+- `seoul:pollLatestNoaaStationMetar`;
+- `seoul:pollLatestAmosTemperatureSites`; and
+- `seoulKmaForecast:requestAirportForecastRefresh`, the bounded public KMA
+  queue mutation.
+
+The KMA request uses the existing global cooldown, lock, and approval checks.
+A refresh may queue work or return an already-running/cooldown state rather
+than immediately producing a new capture. Reactive subscriptions update the
+page after successful writes. A KMA failure must not hide valid AMOS or METAR
+observations, and stale or unavailable sources remain explicit.
+
+The page no longer registers threshold targets, calls high-prediction
+recomputation, subscribes to auxiliary target decision summaries, or requests
+GK2A downloads. There is no new client polling loop for those removed panels.
+Backend schedules continue independently of whether the page is open.
+
+Historical routes read retained observations and captures; latest-value
+endpoints cannot backfill a past day. Future routes can show captured KMA
+guidance for the requested date, with observed temperature and observed cloud
+fields unavailable until actual reports exist. Date navigation must not mix
+today's observations into another date's chart or summary.
+
+## KMA/AMO forecast approval and disabled state
+
+The official forecast is parsed server-side from:
+
+```text
+https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI
+```
+
+The page is reachable without a credential, but KMA's policy requires prior
+consultation for material without an applicable public-use mark. Automated
+production retrieval, parsing, storage, and display therefore remain disabled
+unless the server-side Convex value is exactly:
+
+```text
+KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED=true
+```
+
+Approval must come from KMA, AMO, or the relevant KMA data/content owner and
+cover that exact RKSI airport-forecast use. It is not implied by a successful
+request, public HTML, or an unrelated KMA/NMSC approval.
+
+KMA's [copyright-policy page](https://www.kma.go.kr/kmadev/guide/copyright.jsp)
+lists the **Information and Communications Technology Division,
+02-2181-0432** as its copyright contact. Recheck the official page for the
+current office and number immediately before requesting approval because
+contact details can change.
+
+The gate is checked before either the public manual or internal scheduled queue
+can write queue state, again when the internal worker begins, immediately
+before the request, after the response, immediately before storage, and inside
+the storage mutation. The dashboard/query boundary checks it too and hides
+stored protected KMA rows after revocation. With the flag absent, the manual
+queue returns `approval_required` without scheduling work or contacting AMO.
+A worker already queued when approval is revoked records only a metadata-only
+`approval_required` attempt and stores no forecast rows. The streamlined page
+keeps actual AMOS and METAR observations
+available and honestly marks the KMA maximum, peak timing, and curve
+unavailable, including an approval-required state when appropriate. The
+production source of truth remains
+`KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED`; no client control or Weather.com
+fallback bypasses it.
+
+The browser can call only
+`seoulKmaForecast:requestAirportForecastRefresh`, a public queue mutation that
+checks approval and atomically enforces the shared cooldown and in-flight lock.
+It cannot call the internal fetch worker. Manual and scheduled requests share
+a ten-minute minimum interval and a 15-minute stale-lock timeout, so repeated
+clicks, concurrent tabs, direct Convex calls, and a neighboring cron cannot
+create unbounded AMO traffic. Immediately before protected work, the worker
+atomically claims the still-current run ID; a delayed worker superseded after
+the stale timeout exits without an AMO request or capture. The Node fetch uses
+only the fixed HTTPS AMO host/path, does not follow redirects, and requires a
+successful HTML content type before parsing.
+
+As verified on 2026-07-29, AMO's TLS server sends its `*.kma.go.kr` leaf but
+omits the `RapidSSL TLS RSA CA G1` intermediate. The Node-only worker appends
+the exact DigiCert-published intermediate (SHA-256
+`44:22:E9:63:EE:53:CD:58:CC:9F:85:CD:40:BF:5F:FE:C0:09:5F:DF:1A:15:45:35:66:1C:1C:06:BC:AD:C6:9B`)
+to Node's normal root store after validating its identity and signature
+against the trusted `DigiCert Global Root G2`. TLS and hostname verification
+remain enabled, the worker never trusts a partial chain or fetches an AIA
+certificate at runtime, and native HTTPS never follows a redirect. The
+intermediate expires on 2027-11-02 and must be replaced or removed based on
+KMA's live chain before then.
+
+The public queue is unauthenticated, so a caller can intentionally occupy its
+single global slot every ten minutes: at most 144 KMA requests per day.
+Scheduled attempts that land inside that cooldown are skipped. KMA/AMO
+approval must explicitly cover public manual initiation and this maximum
+cadence in addition to the normal twice-hourly schedule.
+On 2026-07-29, the project owner confirmed that KMA/AMO granted that production
+scope: public on-demand RKSI collection at the documented global ten-minute
+limit plus scheduled collection. The repository records only the authority,
+scope, and confirmation date, not private approval correspondence.
+
+The streamlined forecast summary distinguishes approval/setup-required,
+unavailable, and stale stored guidance. Its refresh uses the shared refresh
+path described above; the old standalone `Collect KMA now` panel controls
+are historical UI behavior.
+
+KMA guidance becomes stale after `360` minutes. The page may retain and
+visibly label stale stored KMA values, while the backend KMA-primary prediction
+requires a capture no more than six hours old. Weather.com does not replace it.
+
+The protected entry points are:
+
+- collection: `seoulKmaForecast:requestAirportForecastRefresh`,
+  `seoulKmaForecast:queueScheduledAirportForecastRefresh`,
+  `seoulKmaForecast:claimQueuedAirportForecast`,
+  `seoulKmaForecastNode:collectQueuedAirportForecast`,
+  `seoulKmaForecast:writeCollectorStatus`, and
+  `seoulKmaForecast:storeForecastCapture`
+- prediction/finalization:
+  `seoulWeather:recomputeTodayHighPrediction`,
+  `seoulWeather:registerActiveHighPredictionTargetsInternal`,
+  `seoulWeather:recomputeHighPredictionInternal`,
+  `seoulWeather:finalizeCompletedDay`, and
+  `seoulWeather:finalizeHighPredictionInternal`
+- reads: `seoulWeather:getHighPredictionDashboard`,
+  `seoulWeather:getHighPredictionDecisionSummaries`,
+  `seoulWeather:getDayPageWeather`, and
+  `seoulWeather:getHighPredictionAccuracy`
+
+Activation and removal are separate production operations:
+
+```text
+npx convex env set KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED true --prod
+npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
+```
+
+## Backend collectors and retained legacy evaluations
+
+
+- After NMSC access is approved, the GK2A solar collector runs at
+  minutes `:06`, `:16`, `:26`, `:36`, `:46`, and `:56` every hour. The
+  server-side Haurwitz gate queues external work only while RKSI modeled
+  clear-sky DSR is at least 50 W/m²; the sixteen-minute offset accommodates the
+  measured publication delay for each ten-minute product frame. Each run
+  discovers the newest NMSC viewer frame, downloads one SWRAD NetCDF, samples
+  RKSI and the available wind-projected upstream points from that grid, and
+  idempotently skips a frame already resolved. During the first 30 minutes of
+  a UTC day, discovery merges the prior UTC date so a publishable 23:50 frame
+  is not missed. The legacy manual GK2A entry point uses the same gate; the streamlined
+  page does not expose or invoke it. A separate database-only
+  cleanup runs every 30 minutes; it does not contact NMSC.
+- `seoul_kma_amo_airport_forecast_every_30_min` runs at minutes `:05` and
+  `:35` and invokes the internal
+  `seoulKmaForecast:queueScheduledAirportForecastRefresh`. The public
+  `seoulKmaForecast:requestAirportForecastRefresh` mutation used by the streamlined refresh
+  enters the same queue. Both paths share the ten-minute interval and
+  run-owned lock, then schedule only
+  `seoulKmaForecastNode:collectQueuedAirportForecast`. The worker parses the
+  server-rendered RKSI page and stores immutable attempts through
+  `seoulKmaForecast:storeForecastCapture`. The parser requires the page itself
+  to display `RKSI` before an attempt can succeed. Successful KMA guidance is
+  usable for at most six hours and must include both a daily maximum and
+  hourly temperature for the selected date. Its daily high, hourly temperatures, conditions, ceilings, peak, and
+  source time all come from one capture;
+  hours are not merged across KMA revisions.
+  The six-hour threshold marks stored guidance stale; the v2 threshold
+  decision independently blocks confirmation once the capture is older than
+  90 minutes.
+- `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
+  `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
+  and errors together. Both requests use the explicit `icaoCode=RKSI`
+  selector. Daily and hourly status/error fields remain independent. The
+  hourly response has its own completion timestamp, and each successful hourly
+  value is also appended to query-friendly immutable history. The legacy secondary diagnostic accepted a usable latest capture for at
+  most twelve hours. The streamlined page does not render that diagnostic,
+  and Weather.com is not a KMA fallback.
+- `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
+  date for the always-scheduled `27.0°C` compatibility target plus up to eight
+  rows in `seoulPeakActiveTargets`, using model version
+  `rksi15l-remaining-ceiling-v2`. KMA has weight `1` for the expected maximum
+  and primary curve; Weather.com has weight `0` and can only veto
+  `unlikely_to_reach`. The decision requires AMOS no older than 3 minutes, KMA
+  no older than 90 minutes, and, while useful solar remains, a quality-usable
+  GK2A sample no older than 30 minutes. Each target updates its own
+  `seoulPeakDecisionState`; material changes to that target's expected maximum,
+  decision state, ceiling/margin, blockers, or solar-required policy flag
+  create revisions in that target's immutable lineage. There is no
+  heartbeat-only revision. Candidate entry starts a 15-minute clock at zero;
+  three following consecutive five-minute slots are required for confirmation.
+- `seoul_15l_high_finalize_after_midnight` runs at `00:10 KST` and freezes the
+  previous day's canonical truth and independently finalizes every target with
+  a stored mutable decision state for that date, falling back to `27.0°C` only
+  when no state exists. Closing tracker results, fixed-cutoff scores, and
+  threshold declaration/revocation/false-declaration outcomes remain
+  target-scoped.
+
+These scheduled jobs retain immutable KMA official captures, secondary
+Weather.com history, and legacy backend evaluations. The legacy backend model
+still applies its observed-AMOS floor and threshold policies. Those model
+outputs are not displayed by the streamlined page: its KMA daily high remains
+the published forecast value, and its official observed high comes only from
+routine METAR reports. Removing the old panels does not stop their backend
+jobs or delete their historical evidence.
+
+## Truthful cadence separation
+
+`seoulAmosObservations.collectionCadence` records which collector produced a
+row:
+
+- `one_minute`
+- `five_minute`
+
+Cadence is part of the new
+`by_station_date_ts_rwy_cadence` identity index. This intentionally permits a
+one-minute and a five-minute capture for the same sensor timestamp to coexist.
+The five-minute capture is a separate poll of the same upstream minute value,
+not an average or independent temperature product, so it is not presented as a
+separate chart series.
+
+Rows stored before cadence tagging remain valid because the schema field is
+optional. The displayed AMOS line starts with legacy/five-minute audit rows and
+then replaces every matching timestamp with its one-minute capture:
+
+- normal live coverage therefore shows only the one-minute observations
+- a five-minute or legacy row appears only where no one-minute row exists
+- the simplified tooltip shows the stored temperature and observation time;
+  the storage cadence remains auditable in the underlying row
+
+New AMOS rows also retain immutable optional `firstSeenAt`. The former source
+card calculated receive latency only as `firstSeenAt - obsTimeUtc` and never
+treated mutable `updatedAt` as first receipt. The streamlined page does not
+render that latency card; the retained timing semantics remain available for
+auditing. Legacy rows without `firstSeenAt` have no defensible receive latency.
+
+## Fast one-minute AMOS collector
+
+Source:
+
+```text
+https://global.amo.go.kr/mobileApi/global_api/v1/amos_info.do?air_code=RKSI
+```
+
+The source publishes one new observation minute around second `:14–:16`; it
+does not provide a push stream.
+
+`seoul_amos_temperature_sites_every_minute` invokes the internal
+`seoul:scheduleLatestAmosTemperatureSites` mutation. The mutation schedules
+`seoul:captureLatestAmosTemperatureMinute` for second `:12` of the next minute.
+
+The internal action:
+
+1. receives the expected observation-minute timestamp;
+2. sends sequential requests no more often than once per second;
+3. uses a three-second timeout for each request;
+4. accepts freshness when the representative 15L `obsTimeUtc` reaches the
+   expected minute, even if temperature did not change;
+5. stops immediately and performs one idempotent batch upsert for 15L and 16L;
+6. stops after eight attempts if the source remains stale or unavailable.
+
+A measured rollover became fresh on the third request at `:14.753`, about five
+seconds earlier than the former fixed `:20` fetch.
+
+The production cron subsequently stored the 11:50 KST one-minute row at
+`:16.410`. This includes scheduler and Convex mutation latency, while still
+beating the former fixed request time. The following 11:51 row arrived at
+`:15.412`, confirming consecutive automatic captures.
+
+## Five-minute AMOS collector
+
+`seoul_amos_runways_every_5_min` invokes
+`seoul:pollLatestAmosRunways`.
+
+It stores all display rows with `collectionCadence="five_minute"`. The chart
+does not plot these snapshots as a separate series. Its exact representative
+`rwyNo=2`, `rwyDir=15L` row can fill a missing timestamp in the single AMOS
+line, while the remaining runway-shaped records are retained for auditing.
+
+Production verification stored separate `one_minute` and `five_minute` rows for
+the same 11:50 KST sensor timestamp with the same temperature.
+
+## Actual METAR collector
+
+Source:
+
+```text
+https://tgftp.nws.noaa.gov/data/observations/metar/stations/RKSI.TXT
+```
+
+`seoul_noaa_metar_every_minute` invokes
+`seoul:pollLatestNoaaStationMetar`. The action:
+
+- parses the current NOAA RKSI METAR temperature;
+- upserts it into `seoulMetarObservations`;
+- recomputes the local-day summary;
+- continues recording NOAA first-seen timing in `seoulPublishRaceReports`.
+
+This replaces the chart's dependency on the retired AMO latest-METAR endpoint.
+METAR is still the official coded comparison, not the fastest current
+temperature.
+
+## Data model
+
+### `seoulMetarObservations`
+
+One row per `(stationIcao, date, obsTimeUtc)` with report type, parsed
+temperature, raw METAR, source, and ingest metadata.
+
+### `seoulDailySummaries`
+
+One row per station/date with latest, minimum, and maximum METAR fields.
+
+### `seoulAmosObservations`
+
+One row per station/date/observation time/runway/direction/cadence. It preserves
+temperature, dew point, QNH, wind, visibility, precipitation, runway metadata,
+raw JSON, the collection cadence, and optional immutable first-seen time.
+
+### `seoulAmosDailySummaries`
+
+One representative-15L row per station/date with observation counts, latest
+temperature, and the day's minimum and maximum temperature and occurrence
+times.
+
+### `seoulGk2aSolarObservations`
+
+Airport rows are unique by station/date/airport sample key/observation time and
+participate in a rolling 48-hour history. Wind-projected rows use a
+per-collection sample key for the 20-, 40-, and 60-minute corridor positions
+and have the same 48-hour limit. Rows preserve extracted DSR, optional ASR,
+modeled clear-sky DSR, solar elevation, optional transmission, source grid
+coordinates and quality metadata, wind and corridor metadata, the NMSC source
+frame identity, and ingest timing. The raw NetCDF is not retained.
+
+### `seoulGk2aCollectorStatus`
+
+One row per station records `ok`, `partial`, `no_data`, `error`, or the
+approval-required configuration state, together
+with last attempt/success times, latest source observation, requested/stored
+counts, upstream availability, the last resolved frame, run-owned collection
+lock, and the wind used for the most recent collection. The approval gate is
+separate from API-key configuration because the viewer requests themselves are
+anonymous.
+
+### `seoulKmaForecastCaptures`
+
+Immutable attempts to retrieve the server-rendered KMA/AMO RKSI airport page.
+Each capture records its trigger, canonical source URL, status (`ok`, `error`,
+or `approval_required`), capture/creation times, and, when available,
+HTTP/response metadata, the page/current-conditions reported time, parsed daily
+minimum/maximum rows, parsed hourly KST rows, or a bounded error. Hourly rows
+preserve temperature, KMA condition phrase/icon, ceiling, wind, visibility,
+and crosswind when present. The 15-second request timeout is enforced with an
+abort signal. The raw HTML is parsed in memory and is not stored.
+
+The source identity is capture-level: daily and hourly array entries do not
+have independent row-level source tags. Consumers must keep rows attached to
+the parent capture's KMA provenance. The query boundary returns no protected
+capture content while
+`KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED` is not exactly `true`, including
+after approval is revoked.
+
+The table indexes `(stationIcao, capturedAt)` and
+`(stationIcao, status, capturedAt)`. Daily rows identify `short_term` or
+`midterm`; hourly timestamps store both UTC and Seoul-local representations.
+
+### `seoulKmaForecastCollectorStatus`
+
+One row per station serializes manual and scheduled KMA forecast requests. It
+records the latest queue time, in-flight start, manual/scheduled mode, run ID,
+completion/success times, final status/error, and successful daily/hourly row
+counts. The `(stationIcao)` index lets the public queue mutation apply its
+ten-minute cooldown and 15-minute stale-lock check atomically. Run-ID matching
+prevents an older or superseded worker from performing protected work or
+clearing a newer worker's lock.
+This operational metadata is kept separate from immutable provider captures
+and is hidden by the KMA dashboard boundary while approval is absent.
+
+### `seoulForecastCaptures`
+
+Immutable **secondary Weather.com** RKSI airport forecast captures. Daily rows
+hold the calendar-day high; hourly rows hold temperature, time, phrase, and
+cloud cover. Daily and hourly status/error fields are independent, so a partial
+provider response remains diagnosable. The hourly product's optional
+response-completion timestamp and Seoul-local capture-date fields keep new
+history rows from being backdated to the start of the collector run. They are
+optional so captures created before this history layer continue to validate.
+Optional legacy fields remain for compatibility. Legacy backend selectors
+retain these captures for their secondary comparisons and conservative veto;
+the streamlined page does not render a Weather.com comparison.
+
+### `seoulHourlyForecastPredictions`
+
+Immutable, query-friendly child rows for each secondary Weather.com hourly
+value. Each row links to its parent `seoulForecastCaptures` document and stores
+the station/provider, Seoul target date, forecast-valid timestamp, provider
+completion timestamp, temperature, and available phrase/cloud metadata.
+Captures are appended rather than updated in place, preserving every detected
+value for a forecast-valid hour.
+
+`by_station_provider_target_capturedAt` rebuilds a date's latest and
+morning-baseline curves,
+`by_station_provider_valid_capturedAt` orders the revision lineage and supports
+strictly pre-hour selection, and `by_forecast_capture_id` traces children to one
+raw parent capture. Revision deltas and AMOS departures are derived at query
+time rather than stored as mutable truth.
+
+The Weather.com hourly/10day response is filtered to the five dates retained by
+the existing Seoul capture flow, so one successful request can add up to about
+120 child rows. There is no backfill for provider captures made before this
+table was introduced and no automatic retention or archive policy. The new
+table and the new parent-capture timestamp fields are additive; older forecast
+captures and prediction revisions remain valid without them.
+
+### `seoulHighPredictions`
+
+Immutable, model-versioned material revisions. V2 keeps `predictedHighC` as the
+KMA-published/observed expected maximum and separately stores the normalized
+raw-tenths target, current smoothed temperature, last near-high time, robust 15/30/60
+slopes and coverage, live KMA bias, remaining best/upper curve values, nowcast
+upper, rule ceiling, margin, complete tied KMA window, hourly-curve
+completeness and daily/hourly consistency, upward-revision detection, decision state, blocker
+codes/descriptions, and confirmation snapshot. It also copies the GK2A
+source/QC/upwind values, 16L corroboration, AMOS wind/dew-point/precipitation
+diagnostics, and fresh Weather.com veto used by that decision. The former
+confidence-band fields are optional legacy fields and are not statistical v2
+confidence intervals. `by_station_date_model_target_revision` prevents model
+versions and target lineages from mixing; revision numbers and
+`previousPredictionId` advance only within that exact target.
+
+### `seoulPeakDecisionState`
+
+One mutable row per station/date/model/target. It records candidate start,
+consecutive passes (capped at three), the last distinct five-minute evaluation
+slot, last ceiling/current smoothed temperature, the last evaluated KMA capture
+and curve used for immediate upward-revision comparison, whether solar evidence
+was required, current state, blockers, and
+latest immutable prediction ID. It updates even when the immutable material
+snapshot is unchanged, so retries in one slot cannot manufacture confirmation
+and a missing slot resets the candidate. A row from another target is never a
+valid predecessor, even if it was evaluated in the immediately prior slot.
+
+### `seoulPeakActiveTargets`
+
+One bounded registry row per station/date/model/target. The former page
+registered current-day selected, current-KMA, or next-high targets when it
+initialized them. The streamlined page does not register targets. The
+unchanged five-minute cron processes the
+legacy-compatible `27.0°C` target plus no more than eight registry targets for
+a date/model; registering `27.0°C` does not consume a custom slot. A ninth
+custom value replaces the least-recently-selected registry entry but does not
+delete that target's stored history. The registry preserves
+target-specific recurring evaluation without requiring an open browser and
+without allowing unbounded unauthenticated cron work.
+
+### `seoulHighEvaluations`
+
+Finalized actual high, peak time, revision count, lifecycle opening/closing
+tracker diagnostics, and honest 09:00/12:00/15:00 KST checkpoint temperature
+and peak-window scores. V2 also stores the first `unlikely_to_reach`
+declaration, its ceiling/future high/margin, whether and when that row's target
+was later reached, the first correct declaration, and declaration, revocation, and false
+declaration counts. A no-target outcome is counted only with continuous future
+AMOS coverage through midnight with no gap greater than three minutes;
+otherwise it is stored as censored and omitted
+from the false-rate denominator. Current rows store one exact
+`thresholdTargetC`; target-aware date and finalized-time indexes keep
+finalization and accuracy from combining two thresholds. Older rows retain
+optional model/target fields for migration compatibility.
+
+### `seoulPublishRaceReports`
+
+Historical AMO/NOAA first-seen timing. It remains available in Convex even
+though the redesigned page no longer renders the diagnostic table.
+
+## Operational notes
+
+- The mobile AMOS URL is publicly reachable without authentication but is an
+  undocumented application endpoint. It has no published rate-limit or
+  stability contract.
+- Access is server-side because the response does not advertise a cross-origin
+  browser contract.
+- The 15L label is the feed's representative row designation; it should not be
+  described as proof that the physical thermometer is at the 15L threshold.
+- The old `http://amoapi.kma.go.kr/amoApi/metar` service was retired on
+  2026-07-20 and is not used by the live chart collector.
+- KMA/AMO forecast collection is server-side HTML parsing of the exact RKSI
+  page, not a JSON API and not a Seoul-city forecast. Keyless reachability does
+  not establish authorization.
+  `KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED=true` must not be set until KMA,
+  AMO, or the relevant data/content owner approves automated production
+  retrieval, parsing, storage, and display. Revocation hides stored protected
+  rows and stops every protected entry point before another request or write.
+- KMA condition phrases and ceilings remain categorical/separate. Missing KMA
+  data stays missing; no percentage is fabricated. Weather.com is retained
+  only for legacy backend diagnostics and is not shown on the streamlined page.
+- GK2A numerical collection remains server-side. The viewer is anonymously
+  reachable and requires no API key, but its NetCDF embeds a restricted-access
+  license. `NMSC_GK2A_ACCESS_APPROVED=true` must not be set until NMSC confirms
+  the intended automated use, including the ten-minute solar-threshold cadence
+  and retained derived threshold-decision/evaluation/display scope. This change
+  does not activate that environment value. Once enabled, Convex performs the
+  bounded NetCDF download, HDF5 validation, quality filtering, coordinate
+  conversion, and temporary-file cleanup; legacy dashboard queries expose only extracted values. The streamlined
+  page does not display the GK2A panel or request a download. The worker
+  rechecks approval before download, after the
+  Node action, and in the database upsert; the decision query and mutation have
+  their own read/write checks. Removing the flag stops new work, redacts raw
+  and copied solar values plus derived blocker text, and hides NMSC-backed
+  evaluation/accuracy output at the read boundary.
+- The NMSC viewer NetCDF is the sole numerical solar source. Failures remain
+  explicit and do not fall back to API Hub, the optional imagery loop, or
+  cloud-cover categories.
+- KMA/NMSC documents the SWRAD DSR product as a daylight retrieval with
+  limitations at high solar/viewing zenith angles. The backend and legacy diagnostic preserve missing values and source
+  health instead of substituting cloud-cover categories or zero radiation.
+- Research and source comparisons are in [seoul.md](./seoul.md).
+
+## Historical appendix: former diagnostic dashboard
+
+The following material records the dashboard before its five-item
+simplification. It is retained to interpret existing prediction, solar,
+forecast-revision, and evaluation history. Its present-tense descriptions,
+buttons, client calls, chart overlays, and model-derived displayed maximum
+are historical and do not override the current dashboard contract above.
+The underlying server functions, data retention, and approval boundaries
+remain documented separately; removing their UI does not authorize or imply
+any backend change.
+
+<details>
+<summary>Archived dashboard, diagnostic panels, and client behavior</summary>
+
+
+#### `/seoul/today`
+
+This stable entrypoint redirects server-side to `/seoul/day/[date]`, using the
+current `Asia/Seoul` date.
+
+#### `/seoul/day/[date]`
 
 Example: `/seoul/day/2026-07-27`.
 
@@ -77,13 +861,13 @@ representative observed high is greater than or equal to the selected target,
 even at 10:00 KST and even when KMA forecasts a much higher daily maximum. It
 does not mean that the forecast daily high has already occurred.
 
-### Plain-language maximum summary
+#### Plain-language maximum summary
 
 The maximum outlook also condenses the existing detailed values into three
 plain-language questions. This is a presentation layer, not another forecast
 model, and it does not replace the selected-target decision or its blockers.
 
-#### Is today's high locked?
+##### Is today's high locked?
 
 For the live day, the lock check uses its own raw AMOS target exactly `0.1°C`
 above the observed high. That is the smallest possible new high in the
@@ -102,7 +886,7 @@ or `not confirmed`. For a completed archived day, the card reports the highest
 available stored observation rather than presenting a live lock inference or
 claiming complete observation coverage that has not been finalized.
 
-#### Is KMA's forecast high too low, on track, or too high?
+##### Is KMA's forecast high too low, on track, or too high?
 
 This answer compares the observed high with the current published
 `kma.dailyHighC` and keeps raw-tenths semantics explicit. Unlike the stable KMA
@@ -130,7 +914,7 @@ does not relabel it as current guidance. Archived comparisons likewise say
 `stored KMA value`; they are not forecast-skill scores because the available
 capture may contain a later revision.
 
-#### Is warming slowing?
+##### Is warming slowing?
 
 This answer requires fresh, valid robust 15-, 30-, and 60-minute AMOS slopes.
 The 15-minute slope describes the most recent rate, while the longer windows
@@ -351,7 +1135,7 @@ The rest of the interface is deliberately compact:
 The previous correlation, publish-race, raw-METAR, and raw-observation panels
 are no longer part of the primary Seoul page.
 
-## GK2A solar-heating panel
+### GK2A solar-heating panel
 
 The compact `SOLAR HEATING` panel adds a direct daytime-heating observation
 alongside the categorical sky-cover strip. It subscribes to
@@ -423,7 +1207,7 @@ downgraded only if their local `solarDecisionRequired` snapshot was true, so a
 low-solar decision remains usable without NMSC data. Historical routes never
 trigger a satellite backfill.
 
-## Secondary Weather.com hourly revision diagnostics
+### Secondary Weather.com hourly revision diagnostics
 
 This entire section is secondary. Weather.com's daily maximum and hourly
 forecast remain separate products with separate status and error fields, but
@@ -501,7 +1285,7 @@ still has a future hourly temperature at or above the selected target, v2 record
 state. The source remains a zero-weight disagreement veto, not a blended
 forecast.
 
-## Forecast-capture data dependency
+### Forecast-capture data dependency
 
 The page subscribes to
 `seoulWeather:getHighPredictionDashboard({ stationIcao: "RKSI", date, targetC })`.
@@ -564,79 +1348,8 @@ cannot make the confirmation count stale. Weather.com fields remain separately
 labeled secondary diagnostics, apart from the conservative veto described
 above.
 
-## KMA/AMO forecast approval and disabled state
 
-The official forecast is parsed server-side from:
-
-```text
-https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI
-```
-
-The page is reachable without a credential, but KMA's policy requires prior
-consultation for material without an applicable public-use mark. Automated
-production retrieval, parsing, storage, and display therefore remain disabled
-unless the server-side Convex value is exactly:
-
-```text
-KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED=true
-```
-
-Approval must come from KMA, AMO, or the relevant KMA data/content owner and
-cover that exact RKSI airport-forecast use. It is not implied by a successful
-request, public HTML, or an unrelated KMA/NMSC approval.
-
-KMA's [copyright-policy page](https://www.kma.go.kr/kmadev/guide/copyright.jsp)
-lists the **Information and Communications Technology Division,
-02-2181-0432** as its copyright contact. Recheck the official page for the
-current office and number immediately before requesting approval because
-contact details can change.
-
-The gate is checked before either the public manual or internal scheduled queue
-can write queue state, again when the internal worker begins, immediately
-before the request, after the response, immediately before storage, and inside
-the storage mutation. The dashboard/query boundary checks it too and hides
-stored protected KMA rows after revocation. With the flag absent, the manual
-queue returns `approval_required` without scheduling work or contacting AMO.
-A worker already queued when approval is revoked records only a metadata-only
-`approval_required` attempt and stores no forecast rows. The page shows a
-visible `Official KMA forecast unavailable` banner, names
-`KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED`, keeps actual AMOS and METAR
-observations available, and marks the KMA maximum, curve, peak, condition, and
-ceiling unavailable. It does not promote Weather.com to primary or use it as a
-fallback.
-
-The browser can call only
-`seoulKmaForecast:requestAirportForecastRefresh`, a public queue mutation that
-checks approval and atomically enforces the shared cooldown and in-flight lock.
-It cannot call the internal fetch worker. Manual and scheduled requests share
-a ten-minute minimum interval and a 15-minute stale-lock timeout, so repeated
-clicks, concurrent tabs, direct Convex calls, and a neighboring cron cannot
-create unbounded AMO traffic. Immediately before protected work, the worker
-atomically claims the still-current run ID; a delayed worker superseded after
-the stale timeout exits without an AMO request or capture. The Node fetch uses
-only the fixed HTTPS AMO host/path, does not follow redirects, and requires a
-successful HTML content type before parsing.
-
-As verified on 2026-07-29, AMO's TLS server sends its `*.kma.go.kr` leaf but
-omits the `RapidSSL TLS RSA CA G1` intermediate. The Node-only worker appends
-the exact DigiCert-published intermediate (SHA-256
-`44:22:E9:63:EE:53:CD:58:CC:9F:85:CD:40:BF:5F:FE:C0:09:5F:DF:1A:15:45:35:66:1C:1C:06:BC:AD:C6:9B`)
-to Node's normal root store after validating its identity and signature
-against the trusted `DigiCert Global Root G2`. TLS and hostname verification
-remain enabled, the worker never trusts a partial chain or fetches an AIA
-certificate at runtime, and native HTTPS never follows a redirect. The
-intermediate expires on 2027-11-02 and must be replaced or removed based on
-KMA's live chain before then.
-
-The public queue is unauthenticated, so a caller can intentionally occupy its
-single global slot every ten minutes: at most 144 KMA requests per day.
-Scheduled attempts that land inside that cooldown are skipped. KMA/AMO
-approval must explicitly cover public manual initiation and this maximum
-cadence in addition to the normal twice-hourly schedule.
-On 2026-07-29, the project owner confirmed that KMA/AMO granted that production
-scope: public on-demand RKSI collection at the documented global ten-minute
-limit plus scheduled collection. The repository records only the authority,
-scope, and confirmation date, not private approval correspondence.
+### Archived KMA panel labels and controls
 
 The forecast status badge is one of `Current KMA forecast`,
 `Stored KMA forecast`, `Stored KMA forecast · stale`,
@@ -657,37 +1370,9 @@ reports queued, successful row counts, error, revocation, or timeout without
 discarding an older successful capture. Historical routes omit the button
 because collecting the current KMA page cannot backfill an archived date.
 
-KMA guidance becomes stale after `360` minutes. The page may retain and
-visibly label stale stored KMA values, while the backend KMA-primary prediction
-requires a capture no more than six hours old. Weather.com does not replace it.
 
-The protected entry points are:
+### Archived client behavior
 
-- collection: `seoulKmaForecast:requestAirportForecastRefresh`,
-  `seoulKmaForecast:queueScheduledAirportForecastRefresh`,
-  `seoulKmaForecast:claimQueuedAirportForecast`,
-  `seoulKmaForecastNode:collectQueuedAirportForecast`,
-  `seoulKmaForecast:writeCollectorStatus`, and
-  `seoulKmaForecast:storeForecastCapture`
-- prediction/finalization:
-  `seoulWeather:recomputeTodayHighPrediction`,
-  `seoulWeather:registerActiveHighPredictionTargetsInternal`,
-  `seoulWeather:recomputeHighPredictionInternal`,
-  `seoulWeather:finalizeCompletedDay`, and
-  `seoulWeather:finalizeHighPredictionInternal`
-- reads: `seoulWeather:getHighPredictionDashboard`,
-  `seoulWeather:getHighPredictionDecisionSummaries`,
-  `seoulWeather:getDayPageWeather`, and
-  `seoulWeather:getHighPredictionAccuracy`
-
-Activation and removal are separate production operations:
-
-```text
-npx convex env set KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED true --prod
-npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
-```
-
-## Client behavior
 
 The page subscribes to `seoul:getDayStationRows`, so chart data updates
 reactively after the collectors write to Convex.
@@ -746,377 +1431,5 @@ Historical routes only display already-captured rows. There is no historical
 backfill from these latest-value endpoints, and the historical page does not
 trigger recomputation.
 
-## Backend forecast and prediction collectors
 
-- After NMSC access is approved, the GK2A solar collector runs at
-  minutes `:06`, `:16`, `:26`, `:36`, `:46`, and `:56` every hour. The
-  server-side Haurwitz gate queues external work only while RKSI modeled
-  clear-sky DSR is at least 50 W/m²; the sixteen-minute offset accommodates the
-  measured publication delay for each ten-minute product frame. Each run
-  discovers the newest NMSC viewer frame, downloads one SWRAD NetCDF, samples
-  RKSI and the available wind-projected upstream points from that grid, and
-  idempotently skips a frame already resolved. During the first 30 minutes of
-  a UTC day, discovery merges the prior UTC date so a publishable 23:50 frame
-  is not missed. `Refresh GK2A` uses the same gate. A separate database-only
-  cleanup runs every 30 minutes; it does not contact NMSC.
-- `seoul_kma_amo_airport_forecast_every_30_min` runs at minutes `:05` and
-  `:35` and invokes the internal
-  `seoulKmaForecast:queueScheduledAirportForecastRefresh`. The public
-  `seoulKmaForecast:requestAirportForecastRefresh` mutation used by the button
-  enters the same queue. Both paths share the ten-minute interval and
-  run-owned lock, then schedule only
-  `seoulKmaForecastNode:collectQueuedAirportForecast`. The worker parses the
-  server-rendered RKSI page and stores immutable attempts through
-  `seoulKmaForecast:storeForecastCapture`. The parser requires the page itself
-  to display `RKSI` before an attempt can succeed. Successful KMA guidance is
-  usable for at most six hours and must include both a daily maximum and
-  hourly temperature for the selected date. Its daily high, primary hourly
-  curve, conditions, ceilings, peak, and source time all come from one capture;
-  hours are not merged across KMA revisions.
-  The six-hour limit is the general stored-display limit; the v2 threshold
-  decision independently blocks confirmation once the capture is older than
-  90 minutes.
-- `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
-  `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
-  and errors together. Both requests use the explicit `icaoCode=RKSI`
-  selector. Daily and hourly status/error fields remain independent. The
-  hourly response has its own completion timestamp, and each successful hourly
-  value is also appended to query-friendly immutable history. A usable latest
-  capture can remain visible in the secondary diagnostic for at most twelve
-  hours; it is not a KMA fallback.
-- `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
-  date for the always-scheduled `27.0°C` compatibility target plus up to eight
-  rows in `seoulPeakActiveTargets`, using model version
-  `rksi15l-remaining-ceiling-v2`. KMA has weight `1` for the expected maximum
-  and primary curve; Weather.com has weight `0` and can only veto
-  `unlikely_to_reach`. The decision requires AMOS no older than 3 minutes, KMA
-  no older than 90 minutes, and, while useful solar remains, a quality-usable
-  GK2A sample no older than 30 minutes. Each target updates its own
-  `seoulPeakDecisionState`; material changes to that target's expected maximum,
-  decision state, ceiling/margin, blockers, or solar-required policy flag
-  create revisions in that target's immutable lineage. There is no
-  heartbeat-only revision. Candidate entry starts a 15-minute clock at zero;
-  three following consecutive five-minute slots are required for confirmation.
-- `seoul_15l_high_finalize_after_midnight` runs at `00:10 KST` and freezes the
-  previous day's canonical truth and independently finalizes every target with
-  a stored mutable decision state for that date, falling back to `27.0°C` only
-  when no state exists. Closing tracker results, fixed-cutoff scores, and
-  threshold declaration/revocation/false-declaration outcomes remain
-  target-scoped.
-
-These scheduled jobs retain immutable KMA official captures, secondary
-Weather.com history, and backend evaluations. The displayed outlook reads KMA
-directly; Weather.com's stored curve remains diagnostic rather than a tracker
-or model input. The observed maximum remains valid even when the newest AMOS
-observation is stale, and both the backend evaluation value and the displayed
-expected maximum are never allowed below that known maximum.
-
-## Truthful cadence separation
-
-`seoulAmosObservations.collectionCadence` records which collector produced a
-row:
-
-- `one_minute`
-- `five_minute`
-
-Cadence is part of the new
-`by_station_date_ts_rwy_cadence` identity index. This intentionally permits a
-one-minute and a five-minute capture for the same sensor timestamp to coexist.
-The five-minute capture is a separate poll of the same upstream minute value,
-not an average or independent temperature product, so it is not presented as a
-separate chart series.
-
-Rows stored before cadence tagging remain valid because the schema field is
-optional. The displayed AMOS line starts with legacy/five-minute audit rows and
-then replaces every matching timestamp with its one-minute capture:
-
-- normal live coverage therefore shows only the one-minute observations
-- a five-minute or legacy row appears only where no one-minute row exists
-- fallback points are identified as audit fallbacks in the tooltip
-
-New AMOS rows also retain immutable optional `firstSeenAt`. The source card
-calculates receive latency only as `firstSeenAt - obsTimeUtc`; it never treats
-mutable `updatedAt` as first receipt. Legacy rows without `firstSeenAt` say
-`receive latency unavailable`, while their separate capture-second/audit label
-can still use the existing stored metadata.
-
-## Fast one-minute AMOS collector
-
-Source:
-
-```text
-https://global.amo.go.kr/mobileApi/global_api/v1/amos_info.do?air_code=RKSI
-```
-
-The source publishes one new observation minute around second `:14–:16`; it
-does not provide a push stream.
-
-`seoul_amos_temperature_sites_every_minute` invokes the internal
-`seoul:scheduleLatestAmosTemperatureSites` mutation. The mutation schedules
-`seoul:captureLatestAmosTemperatureMinute` for second `:12` of the next minute.
-
-The internal action:
-
-1. receives the expected observation-minute timestamp;
-2. sends sequential requests no more often than once per second;
-3. uses a three-second timeout for each request;
-4. accepts freshness when the representative 15L `obsTimeUtc` reaches the
-   expected minute, even if temperature did not change;
-5. stops immediately and performs one idempotent batch upsert for 15L and 16L;
-6. stops after eight attempts if the source remains stale or unavailable.
-
-A measured rollover became fresh on the third request at `:14.753`, about five
-seconds earlier than the former fixed `:20` fetch.
-
-The production cron subsequently stored the 11:50 KST one-minute row at
-`:16.410`. This includes scheduler and Convex mutation latency, while still
-beating the former fixed request time. The following 11:51 row arrived at
-`:15.412`, confirming consecutive automatic captures.
-
-## Five-minute AMOS collector
-
-`seoul_amos_runways_every_5_min` invokes
-`seoul:pollLatestAmosRunways`.
-
-It stores all display rows with `collectionCadence="five_minute"`. The chart
-does not plot these snapshots as a separate series. Its exact representative
-`rwyNo=2`, `rwyDir=15L` row can fill a missing timestamp in the single AMOS
-line, while the remaining runway-shaped records are retained for auditing.
-
-Production verification stored separate `one_minute` and `five_minute` rows for
-the same 11:50 KST sensor timestamp with the same temperature.
-
-## Actual METAR collector
-
-Source:
-
-```text
-https://tgftp.nws.noaa.gov/data/observations/metar/stations/RKSI.TXT
-```
-
-`seoul_noaa_metar_every_minute` invokes
-`seoul:pollLatestNoaaStationMetar`. The action:
-
-- parses the current NOAA RKSI METAR temperature;
-- upserts it into `seoulMetarObservations`;
-- recomputes the local-day summary;
-- continues recording NOAA first-seen timing in `seoulPublishRaceReports`.
-
-This replaces the chart's dependency on the retired AMO latest-METAR endpoint.
-METAR is still the official coded comparison, not the fastest current
-temperature.
-
-## Data model
-
-### `seoulMetarObservations`
-
-One row per `(stationIcao, date, obsTimeUtc)` with report type, parsed
-temperature, raw METAR, source, and ingest metadata.
-
-### `seoulDailySummaries`
-
-One row per station/date with latest, minimum, and maximum METAR fields.
-
-### `seoulAmosObservations`
-
-One row per station/date/observation time/runway/direction/cadence. It preserves
-temperature, dew point, QNH, wind, visibility, precipitation, runway metadata,
-raw JSON, the collection cadence, and optional immutable first-seen time.
-
-### `seoulAmosDailySummaries`
-
-One representative-15L row per station/date with observation counts, latest
-temperature, and the day's minimum and maximum temperature and occurrence
-times.
-
-### `seoulGk2aSolarObservations`
-
-Airport rows are unique by station/date/airport sample key/observation time and
-participate in a rolling 48-hour history. Wind-projected rows use a
-per-collection sample key for the 20-, 40-, and 60-minute corridor positions
-and have the same 48-hour limit. Rows preserve extracted DSR, optional ASR,
-modeled clear-sky DSR, solar elevation, optional transmission, source grid
-coordinates and quality metadata, wind and corridor metadata, the NMSC source
-frame identity, and ingest timing. The raw NetCDF is not retained.
-
-### `seoulGk2aCollectorStatus`
-
-One row per station records `ok`, `partial`, `no_data`, `error`, or the
-approval-required configuration state, together
-with last attempt/success times, latest source observation, requested/stored
-counts, upstream availability, the last resolved frame, run-owned collection
-lock, and the wind used for the most recent collection. The approval gate is
-separate from API-key configuration because the viewer requests themselves are
-anonymous.
-
-### `seoulKmaForecastCaptures`
-
-Immutable attempts to retrieve the server-rendered KMA/AMO RKSI airport page.
-Each capture records its trigger, canonical source URL, status (`ok`, `error`,
-or `approval_required`), capture/creation times, and, when available,
-HTTP/response metadata, the page/current-conditions reported time, parsed daily
-minimum/maximum rows, parsed hourly KST rows, or a bounded error. Hourly rows
-preserve temperature, KMA condition phrase/icon, ceiling, wind, visibility,
-and crosswind when present. The 15-second request timeout is enforced with an
-abort signal. The raw HTML is parsed in memory and is not stored.
-
-The source identity is capture-level: daily and hourly array entries do not
-have independent row-level source tags. Consumers must keep rows attached to
-the parent capture's KMA provenance. The query boundary returns no protected
-capture content while
-`KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED` is not exactly `true`, including
-after approval is revoked.
-
-The table indexes `(stationIcao, capturedAt)` and
-`(stationIcao, status, capturedAt)`. Daily rows identify `short_term` or
-`midterm`; hourly timestamps store both UTC and Seoul-local representations.
-
-### `seoulKmaForecastCollectorStatus`
-
-One row per station serializes manual and scheduled KMA forecast requests. It
-records the latest queue time, in-flight start, manual/scheduled mode, run ID,
-completion/success times, final status/error, and successful daily/hourly row
-counts. The `(stationIcao)` index lets the public queue mutation apply its
-ten-minute cooldown and 15-minute stale-lock check atomically. Run-ID matching
-prevents an older or superseded worker from performing protected work or
-clearing a newer worker's lock.
-This operational metadata is kept separate from immutable provider captures
-and is hidden by the KMA dashboard boundary while approval is absent.
-
-### `seoulForecastCaptures`
-
-Immutable **secondary Weather.com** RKSI airport forecast captures. Daily rows
-hold the calendar-day high; hourly rows hold temperature, time, phrase, and
-cloud cover. Daily and hourly status/error fields are independent, so a partial
-provider response remains diagnosable. The hourly product's optional
-response-completion timestamp and Seoul-local capture-date fields keep new
-history rows from being backdated to the start of the collector run. They are
-optional so captures created before this history layer continue to validate.
-Optional legacy fields remain for compatibility; current Seoul selectors use
-these captures only for the labeled Weather.com comparison.
-
-### `seoulHourlyForecastPredictions`
-
-Immutable, query-friendly child rows for each secondary Weather.com hourly
-value. Each row links to its parent `seoulForecastCaptures` document and stores
-the station/provider, Seoul target date, forecast-valid timestamp, provider
-completion timestamp, temperature, and available phrase/cloud metadata.
-Captures are appended rather than updated in place, preserving every detected
-value for a forecast-valid hour.
-
-`by_station_provider_target_capturedAt` rebuilds a date's latest and
-morning-baseline curves,
-`by_station_provider_valid_capturedAt` orders the revision lineage and supports
-strictly pre-hour selection, and `by_forecast_capture_id` traces children to one
-raw parent capture. Revision deltas and AMOS departures are derived at query
-time rather than stored as mutable truth.
-
-The Weather.com hourly/10day response is filtered to the five dates retained by
-the existing Seoul capture flow, so one successful request can add up to about
-120 child rows. There is no backfill for provider captures made before this
-table was introduced and no automatic retention or archive policy. The new
-table and the new parent-capture timestamp fields are additive; older forecast
-captures and prediction revisions remain valid without them.
-
-### `seoulHighPredictions`
-
-Immutable, model-versioned material revisions. V2 keeps `predictedHighC` as the
-KMA-published/observed expected maximum and separately stores the normalized
-raw-tenths target, current smoothed temperature, last near-high time, robust 15/30/60
-slopes and coverage, live KMA bias, remaining best/upper curve values, nowcast
-upper, rule ceiling, margin, complete tied KMA window, hourly-curve
-completeness and daily/hourly consistency, upward-revision detection, decision state, blocker
-codes/descriptions, and confirmation snapshot. It also copies the GK2A
-source/QC/upwind values, 16L corroboration, AMOS wind/dew-point/precipitation
-diagnostics, and fresh Weather.com veto used by that decision. The former
-confidence-band fields are optional legacy fields and are not statistical v2
-confidence intervals. `by_station_date_model_target_revision` prevents model
-versions and target lineages from mixing; revision numbers and
-`previousPredictionId` advance only within that exact target.
-
-### `seoulPeakDecisionState`
-
-One mutable row per station/date/model/target. It records candidate start,
-consecutive passes (capped at three), the last distinct five-minute evaluation
-slot, last ceiling/current smoothed temperature, the last evaluated KMA capture
-and curve used for immediate upward-revision comparison, whether solar evidence
-was required, current state, blockers, and
-latest immutable prediction ID. It updates even when the immutable material
-snapshot is unchanged, so retries in one slot cannot manufacture confirmation
-and a missing slot resets the candidate. A row from another target is never a
-valid predecessor, even if it was evaluated in the immediately prior slot.
-
-### `seoulPeakActiveTargets`
-
-One bounded registry row per station/date/model/target. A current-day selected,
-current-KMA, or next-high target is registered when the page initializes it.
-The five-minute cron processes the
-legacy-compatible `27.0°C` target plus no more than eight registry targets for
-a date/model; registering `27.0°C` does not consume a custom slot. A ninth
-custom value replaces the least-recently-selected registry entry but does not
-delete that target's stored history. The registry preserves
-target-specific recurring evaluation without requiring an open browser and
-without allowing unbounded unauthenticated cron work.
-
-### `seoulHighEvaluations`
-
-Finalized actual high, peak time, revision count, lifecycle opening/closing
-tracker diagnostics, and honest 09:00/12:00/15:00 KST checkpoint temperature
-and peak-window scores. V2 also stores the first `unlikely_to_reach`
-declaration, its ceiling/future high/margin, whether and when that row's target
-was later reached, the first correct declaration, and declaration, revocation, and false
-declaration counts. A no-target outcome is counted only with continuous future
-AMOS coverage through midnight with no gap greater than three minutes;
-otherwise it is stored as censored and omitted
-from the false-rate denominator. Current rows store one exact
-`thresholdTargetC`; target-aware date and finalized-time indexes keep
-finalization and accuracy from combining two thresholds. Older rows retain
-optional model/target fields for migration compatibility.
-
-### `seoulPublishRaceReports`
-
-Historical AMO/NOAA first-seen timing. It remains available in Convex even
-though the redesigned page no longer renders the diagnostic table.
-
-## Operational notes
-
-- The mobile AMOS URL is publicly reachable without authentication but is an
-  undocumented application endpoint. It has no published rate-limit or
-  stability contract.
-- Access is server-side because the response does not advertise a cross-origin
-  browser contract.
-- The 15L label is the feed's representative row designation; it should not be
-  described as proof that the physical thermometer is at the 15L threshold.
-- The old `http://amoapi.kma.go.kr/amoApi/metar` service was retired on
-  2026-07-20 and is not used by the live chart collector.
-- KMA/AMO forecast collection is server-side HTML parsing of the exact RKSI
-  page, not a JSON API and not a Seoul-city forecast. Keyless reachability does
-  not establish authorization.
-  `KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED=true` must not be set until KMA,
-  AMO, or the relevant data/content owner approves automated production
-  retrieval, parsing, storage, and display. Revocation hides stored protected
-  rows and stops every protected entry point before another request or write.
-- KMA condition phrases and ceilings remain categorical/separate. Missing KMA
-  data stays missing; no percentage is fabricated and Weather.com remains only
-  a labeled secondary diagnostic.
-- GK2A numerical collection remains server-side. The viewer is anonymously
-  reachable and requires no API key, but its NetCDF embeds a restricted-access
-  license. `NMSC_GK2A_ACCESS_APPROVED=true` must not be set until NMSC confirms
-  the intended automated use, including the ten-minute solar-threshold cadence
-  and retained derived threshold-decision/evaluation/display scope. This change
-  does not activate that environment value. Once enabled, Convex performs the
-  bounded NetCDF download, HDF5 validation, quality filtering, coordinate
-  conversion, and temporary-file cleanup; the browser receives only extracted
-  dashboard values. The worker rechecks approval before download, after the
-  Node action, and in the database upsert; the decision query and mutation have
-  their own read/write checks. Removing the flag stops new work, redacts raw
-  and copied solar values plus derived blocker text, and hides NMSC-backed
-  evaluation/accuracy output at the read boundary.
-- The NMSC viewer NetCDF is the sole numerical solar source. Failures remain
-  explicit and do not fall back to API Hub, the optional imagery loop, or
-  cloud-cover categories.
-- KMA/NMSC documents the SWRAD DSR product as a daylight retrieval with
-  limitations at high solar/viewing zenith angles. The UI preserves missing
-  values and source health instead of substituting cloud-cover categories or
-  zero radiation.
-- Research and source comparisons are in [seoul.md](./seoul.md).
+</details>

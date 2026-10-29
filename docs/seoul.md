@@ -1,6 +1,39 @@
 # RKSI: fastest current-temperature source
 
-Last researched: **2026-08-03 KST**.
+Last researched: **2026-10-29 KST**.
+
+The latest [source and satellite investigation](./seoul-edge-research-2026-10-29.md)
+updates the manual versions, ten-second collection and minute averaging, and
+measured NOAA delivery delays. Its completed GK2A hour includes six late
+pairs, with a 17m13s median and a 58m22s maximum modification-time delay;
+the earlier 24-pair sample omitted that tail. Public Himawari-9 paired inputs
+were faster in the sampled hour, but their cloud/temperature interpretation
+still needs validation. The [AMOS/METAR audit](./seoul-amos-metar-study-2026-10-29.md)
+compares 687 minute observations with the day's first 23 routine reports,
+preserving the observed mismatch and decision-time limits. Its shortest-lead
+new-high test has three correct alerts and one false alert. The
+[Seoul Polymarket integration](./seoul-polymarket.md) documents the current
+AWC-based contract, schema, minute schedule, and separate approval gates.
+These follow-ups supersede earlier single-sample implications about typical
+satellite speed; they do not establish a tradable advantage.
+
+The [broader eleven-hour comparison](./seoul-satellite-metadata-comparison-2026-10-29.md)
+retains 594 expected paired slots across two dates, including five missing
+GK2A pairs. In all ten fully covered hours, Himawari's median modification-time
+delay was 10m17s–11m20s lower. A separate
+[local download/decode benchmark](./seoul-himawari-review-2026-10-29.md#local-download-and-decode-benchmark)
+processed one already available pair in 8.387 seconds. Neither the archive
+timestamps nor that local Windows run measures a complete production signal
+or validates a temperature forecast.
+
+The [forward recorder design](./seoul-paper-ledger-design-2026-10-29.md)
+documents immutable source captures, prediction-file completion clocks,
+bounded AWC observation, and explicit abstentions. Version 2 passed 27
+offline tests and then captured the 13:00 KST forward check: AMOS predicted
+the observed 12°C while persistence predicted 11°C. The prediction was sealed
+84.392 seconds before the target. Two earlier v1 checks matched 11°C under
+both methods. This is one incremental success, not a validated accuracy rate
+or a market advantage.
 
 ## Bottom line
 
@@ -41,6 +74,52 @@ The important distinction is:
   METARs are only issued every 30 minutes and temperature is rounded to 1 °C.
 
 ## Connection and collector status
+
+### Recovery after replacing the Convex database
+
+The October 28, 2026 recovery check found the replacement deployment
+`striped-chipmunk-763` already collecting AMOS and NOAA data. Consecutive
+07:34 and 07:36 KST observations on October 29 confirmed automatic minute
+collection. The local CLI identifies this deployment as development; use its
+explicit name for maintenance rather than assuming `--prod` selects it.
+
+The basic temperature collectors need no Convex environment variable or API
+key. `AMO_API_BASE_URL` is only for the retired AMO METAR path. The hosted
+frontend's `NEXT_PUBLIC_CONVEX_URL` must name the same replacement deployment,
+and changing this build-time variable requires a new frontend build. See
+[the page recovery notes](./seoul-pages.md#replacement-database-connection).
+
+At the initial recovery check, `KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED`
+and `NMSC_GK2A_ACCESS_APPROVED` were missing, leaving the optional forecast
+and satellite features disabled without stopping AMOS or NOAA collection.
+Both integrations were subsequently activated on October 28 after the
+required provider approvals were confirmed. Both Convex values are exactly
+`true` on `striped-chipmunk-763`; no additional credential was needed.
+
+The first KMA capture at 07:44 KST on October 29 succeeded with 9 daily and
+72 hourly rows, including a 13 °C published maximum for October 29. The first
+GK2A attempt at 07:44:39 KST completed but rejected all four requested cells
+under the existing DSR quality checks. Its status was `no_data`, with approval
+and daylight eligibility both active; no solar measurement was stored. This
+does not establish why the source cells were unusable. The existing daylight
+schedule continues, and quality checks remain unchanged.
+
+Use the explicit replacement deployment for activation and removal:
+
+```text
+npx convex env set KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED true --deployment-name striped-chipmunk-763
+npx convex env set NMSC_GK2A_ACCESS_APPROVED true --deployment-name striped-chipmunk-763
+npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --deployment-name striped-chipmunk-763
+npx convex env remove NMSC_GK2A_ACCESS_APPROVED --deployment-name striped-chipmunk-763
+```
+
+The `--prod` examples elsewhere in this document apply to a Convex production
+target; they do not select this replacement deployment, which currently backs
+the hosted application. No code or schedule deployment was needed for this
+activation. An empty replacement database cannot recover deleted observations
+by fetching the latest report repeatedly.
+
+### Established collector behavior
 
 The source is verified through direct unauthenticated HTTP requests and Convex
 actions. The low-latency collector now uses the observed publication boundary
@@ -357,7 +436,170 @@ conservative `remainingRuleCeilingC`, independently produce
 decision requires a walk-forward improvement over the current KMA/live
 baselines without increasing false early-peak declarations.
 
+## Two-minute GK2A cloud trend
+
+The cloud-trend collector was deployed to `striped-chipmunk-763` on
+October 29, 2026 KST alongside the existing sunlight collector. With its
+enable flag absent, the deployed dashboard returned `configured: false` and
+`status: disabled`, and the scheduled queue returned `queued: false`.
+The separate public-source operational switch was then enabled. The first
+production collection returned `no_data` because no fresh paired frame was
+listed within its bounded discovery window; it did not invent a direction.
+Today's compact cloud card
+adds a separate `GK2A clouds` row and retains `GK2A sunlight` and the reported
+METAR cloud amount. The new estimate describes recent clearing or increasing
+cloud evidence around RKSI. It is not total cloud coverage, surface radiation,
+an air-temperature measurement, or a forecast.
+
+Frontend production deployment `dpl_J3R3FjDFa2o3o8hPkbyZk9sjVKaK` reached
+`READY`. At 11:30–11:31 KST, the live page showed `Cloud data delayed` and
+retained `Sunlight increasing` from the existing 11:00 sunlight observation.
+The Convex schema deployment and Vercel production build passed. All 69
+focused dashboard, math, decoder, transport, and backend tests passed;
+desktop and 390-pixel mobile browser checks found no horizontal overflow or
+console errors. Paired real-file decoding is documented below, but a live
+multi-frame directional result was not available at this initial check.
+
+A later live check at approximately 11:48 KST returned six paired frames over
+twelve minutes with 25 common cells. The newest nominal frame was 11:36 and
+the trend was `uncertain` because corroboration was insufficient. This
+verified the active source-to-database-to-browser path without asserting a
+direction. The browser independently aged that sample into `Cloud data delayed`
+after its twelve-minute limit. Broader NOAA delivery measurements and the
+faster Himawari research candidate are documented in the linked source report.
+
+### Public distribution and operational switch
+
+The source is KMA GK2A AMI L1B data distributed by NOAA through the public
+`noaa-gk2a-pds` S3 bucket, under `AMI/L1B/LA/`. The
+[dataset registry](https://registry.opendata.aws/noaa-gk2a-pds/) says NOAA
+provides this distribution in coordination with KMA and explicitly permits
+public reuse under the NOAA Open Data Dissemination terms. It requests source
+attribution, prohibits implying NOAA endorsement, and requires modified data
+to remain distinguishable from original NOAA data. The application's
+`rksi-vis-ir-v1` trend is a derived estimate, not an official NOAA or KMA cloud
+mask. Delivery questions go to the registry's NODD contact, `nodd@noaa.gov`.
+
+Permission for this particular distribution comes from its published public
+terms, not from the endpoint being keyless. It does not expand the separately
+approved NMSC viewer scope. `NMSC_GK2A_ACCESS_APPROVED` continues to control the
+existing SWRAD sunlight collector and its protected derived data.
+
+The new server-side Convex switch is `NOAA_GK2A_CLOUD_ENABLED`. It is an
+operator enable switch, not a new provider-approval flag or credential. Only
+the exact string `true` enables collection and dashboard reads. Missing,
+empty, `false`, or any other value disables them. Disabled reads report
+`disabled` without exposing a stored cloud direction; the card displays a
+neutral unavailable state. Enabling this source does not enable NMSC access,
+and removing either flag affects only its own source.
+
+The hosted application's effective backend is `striped-chipmunk-763`, which
+the Convex CLI identifies as development. After deploying and verifying the
+new functions and schedules on that target, enable or disable the cloud feed
+explicitly:
+
+```text
+npx convex env set NOAA_GK2A_CLOUD_ENABLED true --deployment-name striped-chipmunk-763
+npx convex env remove NOAA_GK2A_CLOUD_ENABLED --deployment-name striped-chipmunk-763
+```
+
+A Vercel-only or client environment value does not control this collector.
+The server checks the switch in the scheduled queue, collection worker,
+collection-state read, Node request and extraction boundaries, observation
+upsert, collector-status mutation, and public dashboard query. Removing it
+stops new work and hides the stored cloud result. Deletion-only retention
+maintenance remains available while disabled.
+
+### Collection, quality, and retained evidence
+
+`seoul_gk2a_clouds_every_2_min` runs at every even UTC minute and invokes
+`seoulGk2aClouds:queueScheduledCloudRefresh`. The queue permits one attempt
+per two-minute slot and uses a five-minute run lock. The internal worker is
+`seoulGk2aClouds:collectCloudTrend`; extraction runs in
+`seoulGk2aCloudsNode:fetchLatestCloudSample`. No browser refresh or public
+manual action starts a cloud-file download.
+
+The worker lists at most the two hourly prefixes covering the preceding
+30 minutes, requires an untruncated listing, and pairs `VI006/la005ge` with
+`IR105/la020ge` at the same nominal observation time. An attempt handles at
+most four new paired frames. Only the fixed NOAA S3 origin and validated
+object keys are used; redirects are rejected. Listings are limited to 2 MiB
+and 15 seconds; each file is limited to 12 MiB and 25 seconds. The downloaded
+size must match discovery, and extraction validates HDF5, filename, channel,
+scene clocks, calibration version, quality bits, dimensions, and per-file
+geolocation. Raw files are deleted after extraction.
+
+The decoder samples 25 fixed geographic points at two-kilometre spacing,
+extending four kilometres north, south, east, and west of RKSI. A visible
+sample uses the median of at least seven good pixels in its 3×3 neighborhood;
+infrared uses the nearest good pixel. Geographic samples can share an
+infrared pixel at the oblique satellite viewing angle. Each frame needs at
+least 20 valid paired samples. Visible reflectance is corrected for solar
+zenith at the actual acquisition time. Collection requires solar elevation
+of at least 20° and excludes glint angles below 25° across this coastal
+footprint. IR105 is converted to brightness temperature using the NMSC
+v3.0 wavenumber calibration, not interpreted as surface air temperature.
+
+`seoulGk2aCloudObservations` stores the source keys, nominal observation and
+actual acquisition times, both S3 modification times, immutable `firstSeenAt`,
+per-point values, summary medians, and method version. The hourly
+`seoul_gk2a_clouds_retention` job runs at minute `:09`; bounded cleanup and
+dashboard reads enforce a rolling 48-hour history. S3 modification time and
+database first-seen time are distinct clocks, neither a guaranteed provider
+publication timestamp.
+
+Completed format or quality rejections advance `lastProcessedTimeUtc` and a
+monotonic `latestRejectedTimeUtc` in `seoulGk2aCloudCollectorStatus`. A rejected
+newest frame suppresses the older direction, and subsequent trends use only
+observations strictly after the rejection barrier. Transport failures and
+changed object sizes remain retryable. If a later download fails after earlier
+frames completed quality checks, their checkpoint and rejection barrier are
+preserved while the failed frame remains eligible for retry. An unavailable
+batch does not store its successful older observations as a fresh result.
+
+The trend needs four usable frames spanning at least six nominal minutes,
+within a twelve-minute segment, with no gap over four minutes and at least
+20 common sample IDs. Per-point robust slopes must corroborate across both
+bands: increasing clouds require at least +0.04 normalized visible
+reflectance and −2 K infrared change; clearing requires the reverse. At least
+65% of common samples must agree on the paired direction. `Steady` requires
+changes no larger than 0.02 and 1 K with the same agreement rule. Otherwise
+the result is uncertain or unavailable. These are conservative application
+heuristics, not thresholds validated by NMSC for this simplified trend.
+The latest nominal observation expires after twelve minutes.
+
+A bounded check of the October 29, 2026 01:26 UTC pair passed the production
+decoder with all 25 samples. Both channels recorded acquisition at 01:26:55.
+The visible object's S3 modification time was 01:32:07 and the infrared
+object's was 01:36:08, so this pair was complete 10m08s after nominal time.
+Two-minute sampling does not imply two-minute delivery or a latency guarantee.
+This single-pair check verifies decoding, not a multi-frame cloud direction.
+
+Calibration and interpretation references:
+[NMSC software and calibration tables](https://nmsc.kma.go.kr/homepage/html/base/cmm/selectPage.do?page=static.utilization.software),
+[GK2A cloud-mask algorithm](https://nmsc.kma.go.kr/resources/common/pdf/GK2A_ATBD_CLD_KOR_v1.0.pdf).
+
 ## GK2A surface shortwave radiation
+
+The [October 29, 2026 satellite latency investigation](./seoul-satellite-latency-2026-10-29.md)
+measured eight current frames reaching Convex about 16m51s after observation
+and found substantially fresher two-minute cloud imagery in a simultaneous
+KMA rendered-image listing check. That was a small snapshot of a different
+product and distribution route: the
+[later paired-channel investigation](./seoul-edge-research-2026-10-29.md)
+found a completed-hour median of 17m13s and a very late batch approaching
+one hour for NOAA's raw VI006/IR105 pairs. This does not invalidate the
+rendered-image snapshot, but its freshness cannot be transferred to the raw
+pair used by the cloud collector. These reports do not change the active
+source or collection cadence.
+
+The streamlined Seoul page displays the existing GK2A sunlight trend inside
+its cloud card on today's route. `Increasing`, `decreasing`, and `steady`
+refer to sunlight relative to the clear-sky model, not total cloud coverage
+or a future upstream prediction. This presentation reuses the approved
+dashboard read query and existing collection schedule. It requires fresh,
+usable airport data and at least 30 minutes of history; unavailable, stale,
+low-sun, and revoked-approval states do not display an active trend arrow.
 
 The numerical source for direct solar-heating input is the anonymously
 reachable NMSC GK2A satellite viewer. Its requests do not require a KMA API Hub
@@ -408,8 +650,9 @@ approval scope. Approval must cover automated retrieval at that cadence,
 storage of the extracted/derived values and provenance, and their use and
 display in the `rksi15l-remaining-ceiling-v2` decision. The flag remains
 fail-closed at every protected entry point and immediately before NMSC work.
-This implementation did **not** run either Convex environment command and did
-not activate `NMSC_GK2A_ACCESS_APPROVED` in any environment.
+The original implementation release did **not** run either Convex environment
+command or activate `NMSC_GK2A_ACCESS_APPROVED`. The separately approved October
+28 activation on the replacement deployment is recorded above.
 
 The collector uses the viewer's own discovery, file-resolution, and download
 requests:
@@ -631,10 +874,12 @@ horizon supplies the displayed arrival estimate. Surface wind is only an
 orientation/advection proxy and can differ substantially from motion at cloud
 level.
 
-After NMSC approves access, the viewer NetCDF is the only numerical GK2A
-source. A discovery, download, validation, or extraction failure is recorded as
-source failure; the collector does not fall back to the retired API Hub point
-query, cloud-cover categories, or image-pixel estimates.
+After NMSC approves access, the viewer NetCDF is the sole numerical GK2A
+surface-radiation source. A discovery, download, validation, or extraction
+failure is recorded as source failure; the collector does not fall back to the application's former
+API Hub point-query integration, cloud-cover categories, or image-pixel
+estimates. The point-query service itself remains documented by KMA; “former”
+describes this application's integration, not a provider service retirement.
 
 The optional image loop is independent of the numerical NetCDF collector.
 KMA's public weather image service supplies recent two-minute Korea-area
@@ -1157,8 +1402,9 @@ Relevant policy and source pages:
 |     3 | AviationWeather.gov API / NOAA tgftp |  30 minutes | None           | About 4m20s-4m45s after the nominal METAR time over a 12-hour sample       | Good supported METAR access, not current sensor temperature                      |
 |     4 | KMA WIS2 METAR                       |  30 minutes | None           | About 5m10s after nominal time in the sampled cycles                       | KMA-origin audit/backup feed; it did not beat AWC                                |
 
-The observed timings are small live samples, not provider SLAs. They should be
-retested over at least 24-48 hours before making a hard latency guarantee.
+The observed timings are small live samples, not provider SLAs. A longer
+measurement window can characterize typical delay, late tails, and missing
+observations; it cannot establish a provider guarantee.
 
 ## 1. Fastest measured: AMO mobile AMOS JSON
 

@@ -1,0 +1,99 @@
+{
+  "method": "Single prospective paper observation; no profitability inference.",
+  "rule": "Use latest RKSI runway 2 / 15L one-minute AMOS value observed no later than receipt of this query and no more than 3 minutes old. Round nearest integer, half ties toward positive infinity. Compare with the next routine AWC RKSI METAR. Prior report and confirmed maximum are recorded from the query; no model fitting or market quotes.",
+  "captureVersion": "v1",
+  "frozenAtMeaning": "The v1 field records query receipt and preparation, not filesystem sync completion. The original prediction file and hash are preserved.",
+  "status": "scored_first_seen_version",
+  "sourceArtifactSha256": "34eead5d493b248eac8b0ddb19b282dd05e23b1f3c55520519c4dfcb9bcccb97",
+  "predictionArtifactSha256": "30d5a6904e16407e42e5ed1c29adc0e3b8103537058a5ea0b88c2499e17603c8",
+  "startedAtUtc": "2026-10-29T03:29:10.717Z",
+  "targetNominalUtc": "2026-10-29T03:30:00.000Z",
+  "queryStartedAtUtc": "2026-10-29T03:29:10.718Z",
+  "queryReceivedAtUtc": "2026-10-29T03:29:11.141Z",
+  "frozenAtUtc": "2026-10-29T03:29:11.141Z",
+  "actualLeadBeforeNominalSec": 48.859,
+  "amos": {
+    "obsTimeLocal": "2026-10-29 12:28:00",
+    "obsTimeUtc": 1793244480000,
+    "firstSeenAt": 1793244495408,
+    "temperatureC": 11.2,
+    "runway": "15L"
+  },
+  "prior": {
+    "obsTimeLocal": "2026-10-29 12:00:00",
+    "temperatureC": 11,
+    "rawMetar": "RKSI 290300Z 15009KT CAVOK 11/02 Q1020 NOSIG"
+  },
+  "confirmedLocalMaximumC": 11,
+  "predictionC": 11,
+  "persistenceBaselineC": 11,
+  "predictsNewLocalHigh": false,
+  "polls": [
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:31:00.020Z",
+      "receivedAtUtc": "2026-10-29T03:31:00.360Z",
+      "httpDate": "Thu, 29 Oct 2026 03:31:01 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:32:00.378Z",
+      "receivedAtUtc": "2026-10-29T03:32:01.609Z",
+      "httpDate": "Thu, 29 Oct 2026 03:32:02 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:33:01.620Z",
+      "receivedAtUtc": "2026-10-29T03:33:01.985Z",
+      "httpDate": "Thu, 29 Oct 2026 03:33:02 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:34:01.996Z",
+      "receivedAtUtc": "2026-10-29T03:34:02.558Z",
+      "httpDate": "Thu, 29 Oct 2026 03:34:03 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:35:02.568Z",
+      "receivedAtUtc": "2026-10-29T03:35:02.980Z",
+      "httpDate": "Thu, 29 Oct 2026 03:35:03 GMT",
+      "matchingRecords": 1
+    }
+  ],
+  "outcomeRecords": [
+    {
+      "icaoId": "RKSI",
+      "receiptTime": "2026-10-29T03:34:29.443Z",
+      "obsTime": 1793244600,
+      "reportTime": "2026-10-29T03:30:00.000Z",
+      "temp": 11,
+      "dewp": 3,
+      "wdir": 140,
+      "wspd": 9,
+      "visib": "6+",
+      "altim": 1020,
+      "qcField": 16,
+      "metarType": "METAR",
+      "rawOb": "METAR RKSI 290330Z 14009KT CAVOK 11/03 Q1020 NOSIG",
+      "lat": 37.469,
+      "lon": 126.451,
+      "elev": 7,
+      "name": "Seoul/Incheon Intl, 28, KR",
+      "cover": "CAVOK",
+      "clouds": [],
+      "fltCat": "VFR"
+    }
+  ],
+  "outcomeFirstSeenAtUtc": "2026-10-29T03:35:02.980Z",
+  "actualC": 11,
+  "matches": true,
+  "baselineMatches": true,
+  "isNewLocalHigh": false,
+  "knownSourceLimitation": "Prior/maximum use local NOAA TGFTP routine METAR records. This is a source-comparison experiment, not a contract settlement adjudication; original AWC versions and corrections may differ.",
+  "interpretation": "Second forward check; both AMOS rounding and prior-report persistence matched. No incremental accuracy or new-high event."
+}

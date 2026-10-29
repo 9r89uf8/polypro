@@ -1,0 +1,50 @@
+{
+  "method": "S3 LastModified minus nominal filename timestamp; retrospective metadata, not a repeated first-availability probe",
+  "samples": [
+    {
+      "area": "LA",
+      "hourUtc": "01",
+      "capturedAtUtc": "2026-10-29T02:35:23.639769+00:00",
+      "listingUrl": "https://noaa-gk2a-pds.s3.amazonaws.com/?list-type=2&prefix=AMI%2FL1B%2FLA%2F202610%2F29%2F01%2F&max-keys=1000",
+      "isTruncated": "false",
+      "matchedPairs": 24,
+      "visibleFrames": 24,
+      "infraredFrames": 24,
+      "pairDelaySec": {
+        "min": 588.0,
+        "median": 964.5,
+        "max": 1726.0
+      }
+    },
+    {
+      "area": "LA",
+      "hourUtc": "02",
+      "capturedAtUtc": "2026-10-29T02:36:00.763620+00:00",
+      "listingUrl": "https://noaa-gk2a-pds.s3.amazonaws.com/?list-type=2&prefix=AMI%2FL1B%2FLA%2F202610%2F29%2F02%2F&max-keys=1000",
+      "isTruncated": "false",
+      "matchedPairs": 10,
+      "visibleFrames": 14,
+      "infraredFrames": 10,
+      "pairDelaySec": {
+        "min": 598.0,
+        "median": 1178.5,
+        "max": 1732.0
+      }
+    },
+    {
+      "area": "FD",
+      "hourUtc": "01",
+      "capturedAtUtc": "2026-10-29T02:36:40.292316+00:00",
+      "listingUrl": "https://noaa-gk2a-pds.s3.amazonaws.com/?list-type=2&prefix=AMI%2FL1B%2FFD%2F202610%2F29%2F01%2F&max-keys=1000",
+      "isTruncated": "false",
+      "matchedPairs": 6,
+      "visibleFrames": 6,
+      "infraredFrames": 6,
+      "pairDelaySec": {
+        "min": 1406.0,
+        "median": 1542.0,
+        "max": 2499.0
+      }
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "method": "Single prospective paper observation; no profitability inference.",
+  "rule": "Use latest RKSI runway 2 / 15L one-minute AMOS value observed no later than receipt of this query and no more than 3 minutes old. Round nearest integer, half ties toward positive infinity. Compare with the next routine AWC RKSI METAR. Prior report and confirmed maximum are recorded from the query; no model fitting or market quotes.",
+  "status": "scored_first_seen_version",
+  "sourceArtifactSha256": "f1631df9c3d0b938f2de881cee45ad2f86ee8127f9761bbec90fdc44714093ab",
+  "predictionArtifactSha256": "cd64fed9965e40382958810a9500258e94c77f78a161b6895c5690904151803f",
+  "startedAtUtc": "2026-10-29T02:58:29.813Z",
+  "targetNominalUtc": "2026-10-29T03:00:00.000Z",
+  "queryStartedAtUtc": "2026-10-29T02:58:29.814Z",
+  "queryReceivedAtUtc": "2026-10-29T02:58:30.249Z",
+  "frozenAtUtc": "2026-10-29T02:58:30.249Z",
+  "actualLeadBeforeNominalSec": 89.751,
+  "amos": {
+    "obsTimeLocal": "2026-10-29 11:58:00",
+    "obsTimeUtc": 1793242680000,
+    "firstSeenAt": 1793242695409,
+    "temperatureC": 11,
+    "runway": "15L"
+  },
+  "prior": {
+    "obsTimeLocal": "2026-10-29 11:30:00",
+    "temperatureC": 11,
+    "rawMetar": "RKSI 290230Z 14010KT CAVOK 11/03 Q1021 NOSIG"
+  },
+  "confirmedLocalMaximumC": 11,
+  "predictionC": 11,
+  "persistenceBaselineC": 11,
+  "predictsNewLocalHigh": false,
+  "polls": [
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:01:00.000Z",
+      "receivedAtUtc": "2026-10-29T03:01:00.349Z",
+      "httpDate": "Thu, 29 Oct 2026 03:01:01 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:02:00.364Z",
+      "receivedAtUtc": "2026-10-29T03:02:01.514Z",
+      "httpDate": "Thu, 29 Oct 2026 03:02:02 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:03:01.523Z",
+      "receivedAtUtc": "2026-10-29T03:03:02.608Z",
+      "httpDate": "Thu, 29 Oct 2026 03:03:03 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:04:02.614Z",
+      "receivedAtUtc": "2026-10-29T03:04:03.410Z",
+      "httpDate": "Thu, 29 Oct 2026 03:04:04 GMT",
+      "matchingRecords": 0
+    },
+    {
+      "url": "https://aviationweather.gov/api/data/metar?ids=RKSI&format=json&hours=2",
+      "requestStartedAtUtc": "2026-10-29T03:05:03.421Z",
+      "receivedAtUtc": "2026-10-29T03:05:04.492Z",
+      "httpDate": "Thu, 29 Oct 2026 03:05:05 GMT",
+      "matchingRecords": 1
+    }
+  ],
+  "outcomeRecords": [
+    {
+      "icaoId": "RKSI",
+      "receiptTime": "2026-10-29T03:04:29.187Z",
+      "obsTime": 1793242800,
+      "reportTime": "2026-10-29T03:00:00.000Z",
+      "temp": 11,
+      "dewp": 2,
+      "wdir": 150,
+      "wspd": 9,
+      "visib": "6+",
+      "altim": 1020,
+      "qcField": 16,
+      "metarType": "METAR",
+      "rawOb": "METAR RKSI 290300Z 15009KT CAVOK 11/02 Q1020 NOSIG",
+      "lat": 37.469,
+      "lon": 126.451,
+      "elev": 7,
+      "name": "Seoul/Incheon Intl, 28, KR",
+      "cover": "CAVOK",
+      "clouds": [],
+      "fltCat": "VFR"
+    }
+  ],
+  "outcomeFirstSeenAtUtc": "2026-10-29T03:05:04.492Z",
+  "actualC": 11,
+  "matches": true,
+  "baselineMatches": true,
+  "isNewLocalHigh": false,
+  "knownSourceLimitation": "Prior/maximum use local NOAA TGFTP routine METAR records. This is a source-comparison experiment, not a contract settlement adjudication; original AWC versions and corrections may differ.",
+  "interpretation": "One forward check; both AMOS rounding and prior-report persistence matched. No incremental accuracy, final daily-high, or market-edge claim."
+}

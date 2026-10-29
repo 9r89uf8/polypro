@@ -1,0 +1,76 @@
+{
+  "capturedAt": "2026-10-29T02:56:57.968Z",
+  "inputSha256": "017d0b4284cf7b0e5f144af980ec1e7a0df97238067d66785941954238778cbc",
+  "scope": "Retrospective approximate time overlap, not a contemporaneous first-seen/decision archive.",
+  "metar": {
+    "stationIcao": "RKSI",
+    "obsTimeLocal": "2026-10-29 11:30:00",
+    "obsTimeUtc": 1793241000000,
+    "rawMetar": "RKSI 290230Z 14010KT CAVOK 11/03 Q1021 NOSIG",
+    "tempC": 11,
+    "source": "noaa_tgftp:metar_integer",
+    "persistedAt": 1793241279022.4575,
+    "updatedAt": 1793241279022,
+    "persistedAtUtc": "2026-10-29T02:34:39.022Z"
+  },
+  "solar": [
+    {
+      "obsTimeLocal": "2026-10-29 11:00:00",
+      "obsTimeUtc": 1793239200000,
+      "source": "kma_nmsc_gk2a_swrad",
+      "sourceEndpoint": "selectImgDown.do",
+      "sourceLatitude": 37.453637,
+      "sourceLongitude": 126.451915,
+      "dsrWm2": 194,
+      "clearSkyDsrWm2": 587.8,
+      "transmissionPct": 33,
+      "collectionRunAt": 1793239200000,
+      "firstSeenAt": null
+    },
+    {
+      "obsTimeLocal": "2026-10-29 11:20:00",
+      "obsTimeUtc": 1793240400000,
+      "source": "kma_nmsc_gk2a_swrad",
+      "sourceEndpoint": "selectImgDown.do",
+      "sourceLatitude": 37.453637,
+      "sourceLongitude": 126.451915,
+      "dsrWm2": 196.7,
+      "clearSkyDsrWm2": 609.3,
+      "transmissionPct": 32.3,
+      "collectionRunAt": 1793240400000,
+      "firstSeenAt": null
+    },
+    {
+      "obsTimeLocal": "2026-10-29 11:30:00",
+      "obsTimeUtc": 1793241000000,
+      "source": "kma_nmsc_gk2a_swrad",
+      "sourceEndpoint": "selectImgDown.do",
+      "sourceLatitude": 37.453637,
+      "sourceLongitude": 126.451915,
+      "dsrWm2": 210.2,
+      "clearSkyDsrWm2": 617.7,
+      "transmissionPct": 34,
+      "collectionRunAt": 1793241000000,
+      "firstSeenAt": null
+    },
+    {
+      "obsTimeLocal": "2026-10-29 11:40:00",
+      "obsTimeUtc": 1793241600000,
+      "source": "kma_nmsc_gk2a_swrad",
+      "sourceEndpoint": "selectImgDown.do",
+      "sourceLatitude": 37.453637,
+      "sourceLongitude": 126.451915,
+      "dsrWm2": 206.1,
+      "clearSkyDsrWm2": 624.5,
+      "transmissionPct": 33,
+      "collectionRunAt": 1793241600000,
+      "firstSeenAt": null
+    }
+  ],
+  "limitations": [
+    "Solar public history response omitted a per-record first receipt/persistence clock; collectionRunAt equals the observation slot and is not treated as receipt time.",
+    "SWRAD is a satellite-derived product, not a ground pyranometer measurement.",
+    "The retained METAR insertion clock is not a provider first-publication time.",
+    "Different footprints and cadences preclude exact simultaneity or shared-pixel identity."
+  ]
+}

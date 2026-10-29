@@ -1,0 +1,2011 @@
+{
+  "method": "himawari-rksi-exploratory-four-pair-v1",
+  "source": "NOAA-distributed JMA Himawari-9 Japan-area HSD",
+  "generatedAtUtc": "2026-10-29T03:03:52.541716+00:00",
+  "calibratedInputSha256": "c23b069cba022c4b4f8d163c3c507f32035e535a6aab088c15419a8ac4734157",
+  "timingMethod": "Per-cell, per-band acquisition estimates interpolated between embedded line-time records; retain the bracketing timestamps and do not claim exact pixel times.",
+  "slopeMethod": "Median of all pairwise time-normalized slopes (Theil-Sen), separately per band and fixed geographic point; multiply each point slope by its own span, then summarize across points.",
+  "summary": {
+    "sampleCount": 4,
+    "commonCellCount": 25,
+    "medianVisibleSpanMinutes": 7.598476966222127,
+    "medianInfraredSpanMinutes": 7.598447136084238,
+    "medianVisibleSlopePerMinute": 0.0003489295346415548,
+    "medianInfraredSlopeKPerMinute": 0.038286041631934574,
+    "medianVisibleRobustChange": 0.0026513643422346606,
+    "medianInfraredRobustChangeK": 0.2909144633901752,
+    "visibleUpInfraredDownFraction": 0.16,
+    "visibleDownInfraredUpFraction": 0.4,
+    "interpretation": "Unvalidated exploratory paired-band changes; no cloud-state class, surface irradiance, market edge, or 2 m temperature forecast assigned.",
+    "spatialIndependence": "Agreement fractions are weighted by the 25 fixed target points. They are not counts of 25 independent infrared measurements; native infrared pixels are reused, and nearby measurements are spatially correlated."
+  },
+  "frames": [
+    {
+      "timeline": "202610290220",
+      "observationNumber": "JP04",
+      "scanStartUtc": "2026-10-29T02:27:42.107308+00:00",
+      "scanEndUtc": "2026-10-29T02:29:15.662101+00:00",
+      "medianReflectance": 0.7173460635669215,
+      "medianBrightnessTempK": 261.1223906061585,
+      "medianSolarElevationDeg": 38.14658831800079,
+      "minHimawariGlintAngleDeg": 97.41473174536873,
+      "distinctNativeVisiblePixelCount": 25,
+      "distinctNativeInfraredPixelCount": 15,
+      "validCellCount": 25,
+      "cells": [
+        {
+          "id": 0,
+          "latitude": 37.49613244699964,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7926487624032783,
+          "brightnessTempK": 261.04749745446605,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.346053+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 1,
+          "latitude": 37.49613244699964,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7877078991776157,
+          "brightnessTempK": 260.9350225512166,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.346053+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 2,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4407,
+          "reflectance": 0.7526617675047994,
+          "brightnessTempK": 260.8974947744232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.346053+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 3,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7574372353442781,
+          "brightnessTempK": 260.74720231520666,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.346053+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 4,
+          "latitude": 37.49613244699964,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.7146342808276979,
+          "brightnessTempK": 260.7848026810061,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.346053+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 5,
+          "latitude": 37.47816622349982,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7496178139252063,
+          "brightnessTempK": 261.04749745446605,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.430430+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 6,
+          "latitude": 37.47816622349982,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.755363373334059,
+          "brightnessTempK": 260.9350225512166,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.430430+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 7,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4407,
+          "reflectance": 0.726159023792503,
+          "brightnessTempK": 260.8974947744232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.430430+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 8,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7173460635669215,
+          "brightnessTempK": 260.74720231520666,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.402305+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 9,
+          "latitude": 37.47816622349982,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.7289172168574478,
+          "brightnessTempK": 260.7848026810061,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.402305+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.044857+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 10,
+          "latitude": 37.4602,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7415629702182824,
+          "brightnessTempK": 261.19721188608736,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.514808+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.157359+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 11,
+          "latitude": 37.4602,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7094569170785314,
+          "brightnessTempK": 261.1223906061585,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.486682+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.157359+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 12,
+          "latitude": 37.4602,
+          "longitude": 126.4407,
+          "reflectance": 0.7142336171486413,
+          "brightnessTempK": 260.972532240868,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.486682+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.157359+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 13,
+          "latitude": 37.4602,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7122171768565287,
+          "brightnessTempK": 260.8974947744232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.486682+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.157359+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 14,
+          "latitude": 37.4602,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6704222654030955,
+          "brightnessTempK": 261.19721188608736,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.486682+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.157359+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 15,
+          "latitude": 37.44223377650018,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7383661150361679,
+          "brightnessTempK": 261.346639587256,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.571059+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 16,
+          "latitude": 37.44223377650018,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7159739248424908,
+          "brightnessTempK": 261.19721188608736,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.571059+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 17,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4407,
+          "reflectance": 0.7352988395032439,
+          "brightnessTempK": 261.1598102182405,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.571059+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 18,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.71485190898325,
+          "brightnessTempK": 261.346639587256,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.571059+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 19,
+          "latitude": 37.44223377650018,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6391282501448357,
+          "brightnessTempK": 261.4585231022946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.571059+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 20,
+          "latitude": 37.42426755300036,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.673098874641115,
+          "brightnessTempK": 261.346639587256,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.655436+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 21,
+          "latitude": 37.42426755300036,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7011508136449716,
+          "brightnessTempK": 261.19721188608736,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.655436+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 22,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4407,
+          "reflectance": 0.7311362715584672,
+          "brightnessTempK": 261.1598102182405,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.655436+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 23,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.6913061814551528,
+          "brightnessTempK": 261.346639587256,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.655436+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        },
+        {
+          "id": 24,
+          "latitude": 37.42426755300036,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6311257694573034,
+          "brightnessTempK": 261.4585231022946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:28:20.655436+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:28:21.269862+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:28:09.770760+00:00",
+            "2026-10-29T02:28:36.659005+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:28:10.469565+00:00",
+            "2026-10-29T02:28:37.357806+00:00"
+          ]
+        }
+      ]
+    },
+    {
+      "timeline": "202610290230",
+      "observationNumber": "JP01",
+      "scanStartUtc": "2026-10-29T02:30:13.746699+00:00",
+      "scanEndUtc": "2026-10-29T02:31:50.760275+00:00",
+      "medianReflectance": 0.7203056255704635,
+      "medianBrightnessTempK": 261.0100238673203,
+      "medianSolarElevationDeg": 38.27818934945333,
+      "minHimawariGlintAngleDeg": 97.22524864624415,
+      "distinctNativeVisiblePixelCount": 25,
+      "distinctNativeInfraredPixelCount": 15,
+      "validCellCount": 25,
+      "cells": [
+        {
+          "id": 0,
+          "latitude": 37.49613244699964,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7951722165015164,
+          "brightnessTempK": 260.7095837417925,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.360134+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 1,
+          "latitude": 37.49613244699964,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.8270506582579631,
+          "brightnessTempK": 260.7848026810061,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.360134+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 2,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4407,
+          "reflectance": 0.7766134312628152,
+          "brightnessTempK": 260.8599488864946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.360134+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 3,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7310277376060708,
+          "brightnessTempK": 261.0100238673203,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.360134+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 4,
+          "latitude": 37.49613244699964,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.687387634637755,
+          "brightnessTempK": 260.8974947744232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.360134+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 5,
+          "latitude": 37.47816622349982,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7600111667942633,
+          "brightnessTempK": 260.7095837417925,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.433843+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 6,
+          "latitude": 37.47816622349982,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7270201734966203,
+          "brightnessTempK": 260.7848026810061,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.433843+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 7,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4407,
+          "reflectance": 0.7385626794110428,
+          "brightnessTempK": 260.8599488864946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.433843+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 8,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7181634601146889,
+          "brightnessTempK": 261.0100238673203,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.409273+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 9,
+          "latitude": 37.47816622349982,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.69583257998453,
+          "brightnessTempK": 260.8974947744232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.409273+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.058940+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 10,
+          "latitude": 37.4602,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.763589070350569,
+          "brightnessTempK": 261.0100238673203,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.507551+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.157218+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 11,
+          "latitude": 37.4602,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7567385631622743,
+          "brightnessTempK": 260.972532240868,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.482982+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.157218+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 12,
+          "latitude": 37.4602,
+          "longitude": 126.4407,
+          "reflectance": 0.7440836390998501,
+          "brightnessTempK": 261.08495302614796,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.482982+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.157218+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 13,
+          "latitude": 37.4602,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7014388432773855,
+          "brightnessTempK": 261.04749745446605,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.482982+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.157218+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 14,
+          "latitude": 37.4602,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.7042707664952454,
+          "brightnessTempK": 260.8974947744232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.482982+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.157218+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 15,
+          "latitude": 37.44223377650018,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7371745946005661,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.556690+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 16,
+          "latitude": 37.44223377650018,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7274270585627568,
+          "brightnessTempK": 261.1223906061585,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.556690+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 17,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4407,
+          "reflectance": 0.714779946441406,
+          "brightnessTempK": 261.2345956333427,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.556690+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 18,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7050368988032882,
+          "brightnessTempK": 261.346639587256,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.556690+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 19,
+          "latitude": 37.44223377650018,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6981970355235495,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.556690+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 20,
+          "latitude": 37.42426755300036,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.6856369607601542,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.630398+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 21,
+          "latitude": 37.42426755300036,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7116755254095101,
+          "brightnessTempK": 261.1223906061585,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.630398+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 22,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4407,
+          "reflectance": 0.7203056255704635,
+          "brightnessTempK": 261.2345956333427,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.630398+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 23,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.6921973955766204,
+          "brightnessTempK": 261.346639587256,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.630398+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        },
+        {
+          "id": 24,
+          "latitude": 37.42426755300036,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6640949344296725,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:30:54.630398+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:30:55.255496+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.122014+00:00",
+            "2026-10-29T02:31:09.691483+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:30:45.820822+00:00",
+            "2026-10-29T02:31:10.390284+00:00"
+          ]
+        }
+      ]
+    },
+    {
+      "timeline": "202610290230",
+      "observationNumber": "JP02",
+      "scanStartUtc": "2026-10-29T02:32:48.017226+00:00",
+      "scanEndUtc": "2026-10-29T02:34:15.532250+00:00",
+      "medianReflectance": 0.7293579008170887,
+      "medianBrightnessTempK": 261.2345956333427,
+      "medianSolarElevationDeg": 38.40253222259271,
+      "minHimawariGlintAngleDeg": 97.03729086976549,
+      "distinctNativeVisiblePixelCount": 25,
+      "distinctNativeInfraredPixelCount": 15,
+      "validCellCount": 25,
+      "cells": [
+        {
+          "id": 0,
+          "latitude": 37.49613244699964,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7765640114884066,
+          "brightnessTempK": 260.972532240868,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.632383+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 1,
+          "latitude": 37.49613244699964,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7813190044103152,
+          "brightnessTempK": 260.7095837417925,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.632383+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 2,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4407,
+          "reflectance": 0.7706221708682296,
+          "brightnessTempK": 260.67194693651635,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.632383+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 3,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7367531047267041,
+          "brightnessTempK": 260.8599488864946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.632383+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 4,
+          "latitude": 37.49613244699964,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6990285570696788,
+          "brightnessTempK": 261.1223906061585,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.632383+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 5,
+          "latitude": 37.47816622349982,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7733678415327666,
+          "brightnessTempK": 260.972532240868,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.718980+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 6,
+          "latitude": 37.47816622349982,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7742596443555283,
+          "brightnessTempK": 260.7095837417925,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.718980+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 7,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4407,
+          "reflectance": 0.764532912510743,
+          "brightnessTempK": 260.67194693651635,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.718980+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 8,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7152341886745136,
+          "brightnessTempK": 260.8599488864946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.690114+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 9,
+          "latitude": 37.47816622349982,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.7151665411054211,
+          "brightnessTempK": 261.1223906061585,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.690114+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.331184+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 10,
+          "latitude": 37.4602,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7576275147664774,
+          "brightnessTempK": 261.4212463848262,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.805578+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.446648+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 11,
+          "latitude": 37.4602,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7701013084032622,
+          "brightnessTempK": 261.04749745446605,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.776712+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.446648+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 12,
+          "latitude": 37.4602,
+          "longitude": 126.4407,
+          "reflectance": 0.7738879673686444,
+          "brightnessTempK": 261.04749745446605,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.776712+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.446648+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 13,
+          "latitude": 37.4602,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7670606377933131,
+          "brightnessTempK": 261.2345956333427,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.776712+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.446648+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 14,
+          "latitude": 37.4602,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.7216441506495563,
+          "brightnessTempK": 261.49578206330284,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.776712+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.446648+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 15,
+          "latitude": 37.44223377650018,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7293579008170887,
+          "brightnessTempK": 261.7932172990232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.863310+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 16,
+          "latitude": 37.44223377650018,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.757263857971799,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.863310+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 17,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4407,
+          "reflectance": 0.7292192618515776,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.863310+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 18,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.6751390467887274,
+          "brightnessTempK": 261.4212463848262,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.863310+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 19,
+          "latitude": 37.44223377650018,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6403570602352716,
+          "brightnessTempK": 261.7560995566364,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.863310+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 20,
+          "latitude": 37.42426755300036,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.6364957886228436,
+          "brightnessTempK": 261.7932172990232,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.949907+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 21,
+          "latitude": 37.42426755300036,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.6962215799175953,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.949907+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 22,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4407,
+          "reflectance": 0.6922986707068193,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.949907+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 23,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.689340750317741,
+          "brightnessTempK": 261.4212463848262,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.949907+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        },
+        {
+          "id": 24,
+          "latitude": 37.42426755300036,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6564988452755091,
+          "brightnessTempK": 261.7560995566364,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:33:27.949907+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:33:28.562111+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:33:16.663365+00:00",
+            "2026-10-29T02:33:45.644665+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:33:17.362166+00:00",
+            "2026-10-29T02:33:46.343466+00:00"
+          ]
+        }
+      ]
+    },
+    {
+      "timeline": "202610290230",
+      "observationNumber": "JP03",
+      "scanStartUtc": "2026-10-29T02:35:15.573104+00:00",
+      "scanEndUtc": "2026-10-29T02:36:43.744776+00:00",
+      "medianReflectance": 0.7304299129944051,
+      "medianBrightnessTempK": 261.60745263985183,
+      "medianSolarElevationDeg": 38.51669454400089,
+      "minHimawariGlintAngleDeg": 96.85579228916868,
+      "distinctNativeVisiblePixelCount": 25,
+      "distinctNativeInfraredPixelCount": 15,
+      "validCellCount": 25,
+      "cells": [
+        {
+          "id": 0,
+          "latitude": 37.49613244699964,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7774996984338517,
+          "brightnessTempK": 261.57024680890106,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.245697+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 1,
+          "latitude": 37.49613244699964,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7880268575837075,
+          "brightnessTempK": 261.19721188608736,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.245697+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 2,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4407,
+          "reflectance": 0.77061739877911,
+          "brightnessTempK": 260.8599488864946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.245697+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 3,
+          "latitude": 37.49613244699964,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7455057157983866,
+          "brightnessTempK": 260.8223848633871,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.245697+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 4,
+          "latitude": 37.49613244699964,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.7146200583325714,
+          "brightnessTempK": 260.9350225512166,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.245697+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 5,
+          "latitude": 37.47816622349982,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7194155947807571,
+          "brightnessTempK": 261.57024680890106,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.335459+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 6,
+          "latitude": 37.47816622349982,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7530555736601378,
+          "brightnessTempK": 261.19721188608736,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.335459+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 7,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4407,
+          "reflectance": 0.7760977608871855,
+          "brightnessTempK": 260.8599488864946,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.335459+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 8,
+          "latitude": 37.47816622349982,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.759660954631077,
+          "brightnessTempK": 260.8223848633871,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.305539+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 9,
+          "latitude": 37.47816622349982,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.745152304335881,
+          "brightnessTempK": 260.9350225512166,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.305539+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:56.944504+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 10,
+          "latitude": 37.4602,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.70854872145289,
+          "brightnessTempK": 262.0525514010179,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.425220+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.064187+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 11,
+          "latitude": 37.4602,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7431396836353817,
+          "brightnessTempK": 261.6446408070641,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.395300+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.064187+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 12,
+          "latitude": 37.4602,
+          "longitude": 126.4407,
+          "reflectance": 0.770986529055086,
+          "brightnessTempK": 261.27196148360065,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.395300+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.064187+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 13,
+          "latitude": 37.4602,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.7584058924022842,
+          "brightnessTempK": 261.3839518875966,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.395300+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.064187+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 14,
+          "latitude": 37.4602,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.7304299129944051,
+          "brightnessTempK": 261.60745263985183,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.395300+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.064187+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 15,
+          "latitude": 37.44223377650018,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.7121256077067907,
+          "brightnessTempK": 262.31103337747726,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.485061+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 16,
+          "latitude": 37.44223377650018,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.7187974486646979,
+          "brightnessTempK": 262.01555602336674,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.485061+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 17,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4407,
+          "reflectance": 0.7504843768740715,
+          "brightnessTempK": 261.71896424246745,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.485061+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 18,
+          "latitude": 37.44223377650018,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.6994274586121284,
+          "brightnessTempK": 261.6818113335984,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.485061+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 19,
+          "latitude": 37.44223377650018,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6426078553241298,
+          "brightnessTempK": 261.60745263985183,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.485061+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 20,
+          "latitude": 37.42426755300036,
+          "longitude": 126.39543225933282,
+          "reflectance": 0.6474001855468149,
+          "brightnessTempK": 262.31103337747726,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.574823+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 21,
+          "latitude": 37.42426755300036,
+          "longitude": 126.41806612966641,
+          "reflectance": 0.6300283671383398,
+          "brightnessTempK": 262.01555602336674,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.574823+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 22,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4407,
+          "reflectance": 0.6453606171381406,
+          "brightnessTempK": 261.71896424246745,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.574823+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 23,
+          "latitude": 37.42426755300036,
+          "longitude": 126.4633338703336,
+          "reflectance": 0.6539583252257334,
+          "brightnessTempK": 261.6818113335984,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.574823+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        },
+        {
+          "id": 24,
+          "latitude": 37.42426755300036,
+          "longitude": 126.48596774066719,
+          "reflectance": 0.6183202081479123,
+          "brightnessTempK": 261.60745263985183,
+          "visibleInterpolatedLineTimeUtc": "2026-10-29T02:35:56.574823+00:00",
+          "infraredInterpolatedLineTimeUtc": "2026-10-29T02:35:57.183869+00:00",
+          "visibleLineTimeBracketUtc": [
+            "2026-10-29T02:35:44.875887+00:00",
+            "2026-10-29T02:36:14.078347+00:00"
+          ],
+          "infraredLineTimeBracketUtc": [
+            "2026-10-29T02:35:45.574693+00:00",
+            "2026-10-29T02:36:14.777156+00:00"
+          ]
+        }
+      ]
+    }
+  ],
+  "perCellChanges": [
+    {
+      "id": 0,
+      "visibleSlopePerMinute": -0.0025672034912436552,
+      "visibleSpanMinutes": 7.598327402273814,
+      "visibleRobustChange": -0.01950645263472967,
+      "infraredSlopePerMinute": 0.08586592552087766,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": 0.6524374189012935
+    },
+    {
+      "id": 1,
+      "visibleSlopePerMinute": -0.0006027514945237344,
+      "visibleSpanMinutes": 7.598327402273814,
+      "visibleRobustChange": -0.004579903197601185,
+      "infraredSlopePerMinute": 0.002530480679900282,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": 0.019227420811673505
+    },
+    {
+      "id": 2,
+      "visibleSlopePerMinute": 0.0011805882421382047,
+      "visibleSpanMinutes": 7.598327402273814,
+      "visibleRobustChange": 0.008970495991040993,
+      "infraredSlopePerMinute": -0.009784133145847376,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": -0.07434304745613143
+    },
+    {
+      "id": 3,
+      "visibleSlopePerMinute": 0.0003354857689741325,
+      "visibleSpanMinutes": 7.598327402273814,
+      "visibleRobustChange": 0.0025491307114690527,
+      "infraredSlopePerMinute": -0.0026355959931074315,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": -0.020026121381426273
+    },
+    {
+      "id": 4,
+      "visibleSlopePerMinute": 0.0022775435721583523,
+      "visibleSpanMinutes": 7.598327402273814,
+      "visibleRobustChange": 0.017305521734203397,
+      "infraredSlopePerMinute": 0.03183605947519009,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": 0.24190080460881735
+    },
+    {
+      "id": 5,
+      "visibleSlopePerMinute": 3.723224315894946e-05,
+      "visibleSpanMinutes": 7.5984171509742735,
+      "visibleRobustChange": 0.00028290611498820616,
+      "infraredSlopePerMinute": 0.08586592552087766,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": 0.6524374189012935
+    },
+    {
+      "id": 6,
+      "visibleSlopePerMinute": 0.0016929466489806785,
+      "visibleSpanMinutes": 7.5984171509742735,
+      "visibleRobustChange": 0.01286371485329921,
+      "infraredSlopePerMinute": 0.002530480679900282,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": 0.019227420811673505
+    },
+    {
+      "id": 7,
+      "visibleSlopePerMinute": 0.007015993203339106,
+      "visibleSpanMinutes": 7.5984171509742735,
+      "visibleRobustChange": 0.0533104430873708,
+      "infraredSlopePerMinute": -0.009784133145847376,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": -0.07434304745613143
+    },
+    {
+      "id": 8,
+      "visibleSlopePerMinute": 0.0029436911819620964,
+      "visibleSpanMinutes": 7.598387233416239,
+      "visibleRobustChange": 0.022367305496140754,
+      "infraredSlopePerMinute": -0.0026355959931074315,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": -0.020026121381426273
+    },
+    {
+      "id": 9,
+      "visibleSlopePerMinute": 0.0048523515150511246,
+      "visibleSpanMinutes": 7.598387233416239,
+      "visibleRobustChange": 0.03687004580401241,
+      "infraredSlopePerMinute": 0.03183605947519009,
+      "infraredSpanMinutes": 7.598327449957529,
+      "infraredRobustChange": 0.24190080460881735
+    },
+    {
+      "id": 10,
+      "visibleSlopePerMinute": -0.0033390767969272072,
+      "visibleSpanMinutes": 7.59850686788559,
+      "visibleRobustChange": -0.0253719979738488,
+      "infraredSlopePerMinute": 0.13676345963690467,
+      "infraredSpanMinutes": 7.598447136084238,
+      "infraredRobustChange": 1.0391899181990105
+    },
+    {
+      "id": 11,
+      "visibleSlopePerMinute": 0.004831541248842051,
+      "visibleSpanMinutes": 7.598476966222127,
+      "visibleRobustChange": 0.036712354890678416,
+      "infraredSlopePerMinute": 0.04903689536596247,
+      "infraredSpanMinutes": 7.598447136084238,
+      "infraredRobustChange": 0.37260425715596
+    },
+    {
+      "id": 12,
+      "visibleSlopePerMinute": 0.009549571648389597,
+      "visibleSpanMinutes": 7.598476966222127,
+      "visibleRobustChange": 0.07256220020757623,
+      "infraredSlopePerMinute": 0.038286041631934574,
+      "infraredSpanMinutes": 7.598447136084238,
+      "infraredRobustChange": 0.2909144633901752
+    },
+    {
+      "id": 13,
+      "visibleSlopePerMinute": 0.008393577952121669,
+      "visibleSpanMinutes": 7.598476966222127,
+      "visibleRobustChange": 0.06377840873338639,
+      "infraredSlopePerMinute": 0.06492073811736916,
+      "infraredSpanMinutes": 7.598447136084238,
+      "infraredRobustChange": 0.49329679662039855
+    },
+    {
+      "id": 14,
+      "visibleSlopePerMinute": 0.0073486814040856115,
+      "visibleSpanMinutes": 7.598476966222127,
+      "visibleRobustChange": 0.055838786381049395,
+      "infraredSlopePerMinute": 0.05614381066690631,
+      "infraredSpanMinutes": 7.598447136084238,
+      "infraredRobustChange": 0.42660577737080996
+    },
+    {
+      "id": 15,
+      "visibleSlopePerMinute": -0.0032562944205457274,
+      "visibleSpanMinutes": 7.598566699028015,
+      "visibleRobustChange": -0.024743170346189492,
+      "infraredSlopePerMinute": 0.14354654983315,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 1.0907480453009966
+    },
+    {
+      "id": 16,
+      "visibleSlopePerMinute": 0.0024171313264541618,
+      "visibleSpanMinutes": 7.598566699028015,
+      "visibleRobustChange": 0.018366733604372007,
+      "infraredSlopePerMinute": 0.10503253708777845,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.7980967473942161
+    },
+    {
+      "id": 17,
+      "visibleSlopePerMinute": 0.003824812671584196,
+      "visibleSpanMinutes": 7.598566699028015,
+      "visibleRobustChange": 0.029063094196320048,
+      "infraredSlopePerMinute": 0.06602035616068004,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.5016600852896803
+    },
+    {
+      "id": 18,
+      "visibleSlopePerMinute": -0.0029271512727930393,
+      "visibleSpanMinutes": 7.598566699028015,
+      "visibleRobustChange": -0.022242154184462657,
+      "infraredSlopePerMinute": 0.036654458044940365,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.2785213473298897
+    },
+    {
+      "id": 19,
+      "visibleSlopePerMinute": 0.0003489295346415548,
+      "visibleSpanMinutes": 7.598566699028015,
+      "visibleRobustChange": 0.0026513643422346606,
+      "infraredSlopePerMinute": 0.03200717248556038,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.24320863764971143
+    },
+    {
+      "id": 20,
+      "visibleSlopePerMinute": -0.005264423380880125,
+      "visibleSpanMinutes": 7.598656447728475,
+      "visibleRobustChange": -0.040002544666697296,
+      "infraredSlopePerMinute": 0.14354654983315,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 1.0907480453009966
+    },
+    {
+      "id": 21,
+      "visibleSlopePerMinute": -0.007703806315457725,
+      "visibleSpanMinutes": 7.598656447728475,
+      "visibleRobustChange": -0.058538577531004186,
+      "infraredSlopePerMinute": 0.10503253708777845,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.7980967473942161
+    },
+    {
+      "id": 22,
+      "visibleSlopePerMinute": -0.011124248629867745,
+      "visibleSpanMinutes": 7.598656447728475,
+      "visibleRobustChange": -0.08452934357747918,
+      "infraredSlopePerMinute": 0.06602035616068004,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.5016600852896803
+    },
+    {
+      "id": 23,
+      "visibleSlopePerMinute": -0.0030164895045418066,
+      "visibleSpanMinutes": 7.598656447728475,
+      "visibleRobustChange": -0.022921267423191873,
+      "infraredSlopePerMinute": 0.036654458044940365,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.2785213473298897
+    },
+    {
+      "id": 24,
+      "visibleSlopePerMinute": -0.0023289454609683527,
+      "visibleSpanMinutes": 7.598656447728475,
+      "visibleRobustChange": -0.017696856443395137,
+      "infraredSlopePerMinute": 0.03200717248556038,
+      "infraredSpanMinutes": 7.598566782474518,
+      "infraredRobustChange": 0.24320863764971143
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 //convex/schema.js
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { seoulPolymarketTables } from "./lib/seoulPolymarketSchema.js";
 
 const seoulForecastStatus = v.union(
   v.literal("ok"),
@@ -180,6 +181,7 @@ const mexicoEdgeQuoteFields = {
 };
 
 export default defineSchema({
+  ...seoulPolymarketTables,
   notes: defineTable({
     stationIcao: v.optional(v.string()),
     title: v.optional(v.string()),
@@ -1276,6 +1278,41 @@ export default defineSchema({
       "rwyDir",
       "obsTimeUtc",
     ]),
+
+  seoulGk2aCloudObservations: defineTable({
+    stationIcao: v.string(),
+    date: v.string(),
+    obsTimeUtc: v.number(),
+    acquisitionTimeUtc: v.number(),
+    visibleObjectKey: v.string(),
+    infraredObjectKey: v.string(),
+    visibleLastModifiedUtc: v.number(),
+    infraredLastModifiedUtc: v.number(),
+    solarElevationDeg: v.number(),
+    reflectance: v.number(),
+    brightnessTempK: v.number(),
+    validCellCount: v.number(),
+    cells: v.array(v.object({ id: v.number(), reflectance: v.number(), brightnessTempK: v.number() })),
+    methodVersion: v.string(),
+    source: v.string(),
+    firstSeenAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_station_obs_ts", ["stationIcao", "obsTimeUtc"]),
+
+  seoulGk2aCloudCollectorStatus: defineTable({
+    stationIcao: v.string(),
+    status: v.string(),
+    collectionQueuedAt: v.number(),
+    collectionInFlightSince: v.optional(v.number()),
+    collectionRunId: v.optional(v.string()),
+    lastAttemptAt: v.number(),
+    lastSuccessAt: v.optional(v.number()),
+    latestObsTimeUtc: v.optional(v.number()),
+    lastProcessedTimeUtc: v.optional(v.number()),
+    latestRejectedTimeUtc: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_station", ["stationIcao"]),
 
   seoulGk2aSolarObservations: defineTable({
     stationIcao: v.string(),

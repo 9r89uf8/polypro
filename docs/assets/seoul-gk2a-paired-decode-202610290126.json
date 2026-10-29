@@ -1,0 +1,161 @@
+{
+  "checkedAt": "2026-10-29T02:27:02.974Z",
+  "result": {
+    "obsTimeUtc": 1793237160000,
+    "acquisitionTimeUtc": 1793237215000,
+    "visibleObjectKey": "AMI/L1B/LA/202610/29/01/gk2a_ami_le1b_vi006_la005ge_202610290126.nc",
+    "infraredObjectKey": "AMI/L1B/LA/202610/29/01/gk2a_ami_le1b_ir105_la020ge_202610290126.nc",
+    "visibleLastModifiedUtc": 1793237527000,
+    "infraredLastModifiedUtc": 1793237768000,
+    "solarElevationDeg": 33.15557310530554,
+    "reflectance": 0.8090741036002137,
+    "brightnessTempK": 259.17381319263353,
+    "validCellCount": 25,
+    "cells": [
+      {
+        "id": 0,
+        "reflectance": 0.6929542238938582,
+        "brightnessTempK": 259.17381319263353
+      },
+      {
+        "id": 1,
+        "reflectance": 0.7767792584367589,
+        "brightnessTempK": 259.17381319263353
+      },
+      {
+        "id": 2,
+        "reflectance": 0.7853026175720734,
+        "brightnessTempK": 258.814652278469
+      },
+      {
+        "id": 3,
+        "reflectance": 0.8161751897500932,
+        "brightnessTempK": 258.5298955823629
+      },
+      {
+        "id": 4,
+        "reflectance": 0.8579331838820272,
+        "brightnessTempK": 258.41569156864284
+      },
+      {
+        "id": 5,
+        "reflectance": 0.7603056268079457,
+        "brightnessTempK": 259.5500513745417
+      },
+      {
+        "id": 6,
+        "reflectance": 0.7470210233933144,
+        "brightnessTempK": 259.17381319263353
+      },
+      {
+        "id": 7,
+        "reflectance": 0.7773537938180571,
+        "brightnessTempK": 258.814652278469
+      },
+      {
+        "id": 8,
+        "reflectance": 0.8109408577668887,
+        "brightnessTempK": 258.5298955823629
+      },
+      {
+        "id": 9,
+        "reflectance": 0.8052817442761363,
+        "brightnessTempK": 258.41569156864284
+      },
+      {
+        "id": 10,
+        "reflectance": 0.7627247963815571,
+        "brightnessTempK": 259.5312835629167
+      },
+      {
+        "id": 11,
+        "reflectance": 0.7303680971274579,
+        "brightnessTempK": 259.268047356884
+      },
+      {
+        "id": 12,
+        "reflectance": 0.8130041766879837,
+        "brightnessTempK": 259.0227948558995
+      },
+      {
+        "id": 13,
+        "reflectance": 0.8138823380874184,
+        "brightnessTempK": 258.73882197873206
+      },
+      {
+        "id": 14,
+        "reflectance": 0.8349113560920924,
+        "brightnessTempK": 258.77674662933674
+      },
+      {
+        "id": 15,
+        "reflectance": 0.7918457656127675,
+        "brightnessTempK": 259.62507645271955
+      },
+      {
+        "id": 16,
+        "reflectance": 0.8090741036002137,
+        "brightnessTempK": 259.6063271022101
+      },
+      {
+        "id": 17,
+        "reflectance": 0.843723686389728,
+        "brightnessTempK": 259.6438211957086
+      },
+      {
+        "id": 18,
+        "reflectance": 0.840781623884229,
+        "brightnessTempK": 259.2303677143254
+      },
+      {
+        "id": 19,
+        "reflectance": 0.8476405666618169,
+        "brightnessTempK": 259.0794619571021
+      },
+      {
+        "id": 20,
+        "reflectance": 0.757751949017268,
+        "brightnessTempK": 259.9244415360465
+      },
+      {
+        "id": 21,
+        "reflectance": 0.853406228810037,
+        "brightnessTempK": 259.98044219788244
+      },
+      {
+        "id": 22,
+        "reflectance": 0.787847823819941,
+        "brightnessTempK": 260.2226396601723
+      },
+      {
+        "id": 23,
+        "reflectance": 0.8317336491012168,
+        "brightnessTempK": 259.7000278105035
+      },
+      {
+        "id": 24,
+        "reflectance": 0.8108385910082408,
+        "brightnessTempK": 259.56881456622625
+      }
+    ],
+    "methodVersion": "rksi-vis-ir-v1",
+    "source": "noaa_gk2a_l1b"
+  },
+  "infraredCalibration": "v.3.0_20190415",
+  "infraredAcquisitionTime": "20261029_012655",
+  "independentlyInspectedMetadata": {
+    "visible": {
+      "sceneAcquisitionTimeUtc": "2026-10-29T01:26:55Z",
+      "fileGenerationTimeUtc": "2026-10-29T01:28:16Z",
+      "processingCenter": "NMSC",
+      "processingMode": "operation"
+    },
+    "infrared": {
+      "sceneAcquisitionTimeUtc": "2026-10-29T01:26:55Z",
+      "fileGenerationTimeUtc": "2026-10-29T01:28:16Z",
+      "processingCenter": "NMSC",
+      "processingMode": "operation"
+    },
+    "checkedAtUtc": "2026-10-29T02:40:34.016Z"
+  }
+}

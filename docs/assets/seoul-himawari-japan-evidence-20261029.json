@@ -1,0 +1,469 @@
+{
+  "checkedAtUtc": "2026-10-29T02:45:32.648310+00:00",
+  "sourceListingUrl": "https://noaa-himawari9.s3.amazonaws.com/?list-type=2&prefix=AHI-L1b-Japan%2F2026%2F10%2F29%2F02&max-keys=1000",
+  "licenseSource": "https://registry.opendata.aws/noaa-himawari/",
+  "sampleMetadata": {
+    "B03": {
+      "file": "himawari9-b03-jp03-202610290230.DAT.bz2",
+      "checkedAtUtc": "2026-10-29T02:44:56.714841+00:00",
+      "format": "1.3",
+      "area": "JP03",
+      "observationStartUtc": "2026-10-29T02:35:15.573104+00:00",
+      "observationEndUtc": "2026-10-29T02:36:43.045967+00:00",
+      "fileCreationUtc": "2026-10-29T02:38:16+00:00",
+      "qualityFlags": [
+        0,
+        0,
+        77,
+        1
+      ],
+      "columns": 6000,
+      "lines": 4800,
+      "compression": 0,
+      "band": 3,
+      "projection": {
+        "subLon": 140.7,
+        "cfac": 81865099,
+        "lfac": 81865099,
+        "coff": 4300.5,
+        "loff": 9200.5,
+        "rsKm": 42164.0,
+        "equatorialRadiusKm": 6378.137,
+        "polarRadiusKm": 6356.7523
+      },
+      "rksi": {
+        "lat": 37.4602,
+        "lon": 126.4407,
+        "lineOneBased": 1818.3358904942597,
+        "columnOneBased": 1902.4766909253262,
+        "rowZeroBased": 1817,
+        "columnZeroBased": 1901,
+        "inRectangle": true,
+        "count": 830,
+        "errorCode": 65535,
+        "outsideScanCode": 65534,
+        "validCount": true,
+        "nearestCellCenterLat": 37.46247973805282,
+        "nearestCellCenterLon": 126.43727358606006,
+        "neighborhood3x3": [
+          822,
+          827,
+          821,
+          822,
+          830,
+          817,
+          818,
+          821,
+          820
+        ],
+        "validNeighborhoodCount": 9
+      },
+      "navigationCorrections": {
+        "rotationMicroradians": 0.0,
+        "count": 2,
+        "entries": [
+          {
+            "line": 1,
+            "columnShift": 0.0,
+            "lineShift": 0.0
+          },
+          {
+            "line": 4800,
+            "columnShift": 0.0,
+            "lineShift": 0.0
+          }
+        ]
+      },
+      "lineObservationTimes": [
+        {
+          "line": 1,
+          "utc": "2026-10-29T02:35:15.573104+00:00"
+        },
+        {
+          "line": 390,
+          "utc": "2026-10-29T02:35:15.573104+00:00"
+        },
+        {
+          "line": 1433,
+          "utc": "2026-10-29T02:35:44.875887+00:00"
+        },
+        {
+          "line": 2409,
+          "utc": "2026-10-29T02:36:14.078347+00:00"
+        },
+        {
+          "line": 3429,
+          "utc": "2026-10-29T02:36:43.045967+00:00"
+        },
+        {
+          "line": 4800,
+          "utc": "2026-10-29T02:36:43.045967+00:00"
+        }
+      ],
+      "note": "Research parser of JMA HSD v1.3 tables; nominal projection only, navigation-correction block not yet applied. A valid pixel is not a validated cloud or irradiance retrieval."
+    },
+    "B13": {
+      "file": "himawari9-b13-jp03-202610290230.DAT.bz2",
+      "checkedAtUtc": "2026-10-29T02:44:53.229137+00:00",
+      "format": "1.3",
+      "area": "JP03",
+      "observationStartUtc": "2026-10-29T02:35:16.271908+00:00",
+      "observationEndUtc": "2026-10-29T02:36:43.744776+00:00",
+      "fileCreationUtc": "2026-10-29T02:38:12+00:00",
+      "qualityFlags": [
+        0,
+        0,
+        77,
+        1
+      ],
+      "columns": 1500,
+      "lines": 1200,
+      "compression": 0,
+      "band": 13,
+      "projection": {
+        "subLon": 140.7,
+        "cfac": 20466275,
+        "lfac": 20466275,
+        "coff": 1075.5,
+        "loff": 2300.5,
+        "rsKm": 42164.0,
+        "equatorialRadiusKm": 6378.137,
+        "polarRadiusKm": 6356.7523
+      },
+      "rksi": {
+        "lat": 37.4602,
+        "lon": 126.4407,
+        "lineOneBased": 454.95895007987974,
+        "columnOneBased": 475.99416540823745,
+        "rowZeroBased": 454,
+        "columnZeroBased": 475,
+        "inRectangle": true,
+        "count": 2735,
+        "errorCode": 65535,
+        "outsideScanCode": 65534,
+        "validCount": true,
+        "nearestCellCenterLat": 37.45912617536302,
+        "nearestCellCenterLon": 126.44108073606073,
+        "neighborhood3x3": [
+          2737,
+          2746,
+          2747,
+          2725,
+          2735,
+          2732,
+          2715,
+          2723,
+          2724
+        ],
+        "validNeighborhoodCount": 9
+      },
+      "navigationCorrections": {
+        "rotationMicroradians": 0.0,
+        "count": 2,
+        "entries": [
+          {
+            "line": 1,
+            "columnShift": 0.0,
+            "lineShift": 0.0
+          },
+          {
+            "line": 1200,
+            "columnShift": 0.0,
+            "lineShift": 0.0
+          }
+        ]
+      },
+      "lineObservationTimes": [
+        {
+          "line": 1,
+          "utc": "2026-10-29T02:35:16.271908+00:00"
+        },
+        {
+          "line": 99,
+          "utc": "2026-10-29T02:35:16.271908+00:00"
+        },
+        {
+          "line": 359,
+          "utc": "2026-10-29T02:35:45.574693+00:00"
+        },
+        {
+          "line": 603,
+          "utc": "2026-10-29T02:36:14.777156+00:00"
+        },
+        {
+          "line": 858,
+          "utc": "2026-10-29T02:36:43.744776+00:00"
+        },
+        {
+          "line": 1200,
+          "utc": "2026-10-29T02:36:43.744776+00:00"
+        }
+      ],
+      "note": "Research parser of JMA HSD v1.3 tables; nominal projection only, navigation-correction block not yet applied. A valid pixel is not a validated cloud or irradiance retrieval."
+    }
+  },
+  "nominalSlotMethod": "Ten-minute timeline plus (JP observation number minus1) times150seconds. Exact scan start/end are embedded in the files; these metadata statistics use nominalslots, not exact pixel receipt.",
+  "pairs": [
+    {
+      "timelineUtc": "20261029T0200",
+      "observationNumber": "JP01",
+      "nominalSlotUtc": "2026-10-29T02:00:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:06:56+00:00",
+      "pairDelaySec": 416.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B03_JP01_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:06:56.000Z",
+        "bytes": 15157348
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B13_JP01_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:06:54.000Z",
+        "bytes": 1055756
+      }
+    },
+    {
+      "timelineUtc": "20261029T0200",
+      "observationNumber": "JP02",
+      "nominalSlotUtc": "2026-10-29T02:02:30+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:07:52+00:00",
+      "pairDelaySec": 322.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B03_JP02_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:07:50.000Z",
+        "bytes": 15167298
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B13_JP02_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:07:52.000Z",
+        "bytes": 1056185
+      }
+    },
+    {
+      "timelineUtc": "20261029T0200",
+      "observationNumber": "JP03",
+      "nominalSlotUtc": "2026-10-29T02:05:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:12:21+00:00",
+      "pairDelaySec": 441.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B03_JP03_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:10:59.000Z",
+        "bytes": 15177047
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B13_JP03_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:12:21.000Z",
+        "bytes": 1056353
+      }
+    },
+    {
+      "timelineUtc": "20261029T0200",
+      "observationNumber": "JP04",
+      "nominalSlotUtc": "2026-10-29T02:07:30+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:13:56+00:00",
+      "pairDelaySec": 386.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B03_JP04_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:12:43.000Z",
+        "bytes": 15187139
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0200/HS_H09_20261029_0200_B13_JP04_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:13:56.000Z",
+        "bytes": 1056576
+      }
+    },
+    {
+      "timelineUtc": "20261029T0210",
+      "observationNumber": "JP01",
+      "nominalSlotUtc": "2026-10-29T02:10:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:16:59+00:00",
+      "pairDelaySec": 419.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B03_JP01_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:16:59.000Z",
+        "bytes": 15196227
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B13_JP01_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:16:58.000Z",
+        "bytes": 1056945
+      }
+    },
+    {
+      "timelineUtc": "20261029T0210",
+      "observationNumber": "JP02",
+      "nominalSlotUtc": "2026-10-29T02:12:30+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:17:50+00:00",
+      "pairDelaySec": 320.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B03_JP02_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:17:50.000Z",
+        "bytes": 15203593
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B13_JP02_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:17:48.000Z",
+        "bytes": 1056870
+      }
+    },
+    {
+      "timelineUtc": "20261029T0210",
+      "observationNumber": "JP03",
+      "nominalSlotUtc": "2026-10-29T02:15:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:22:11+00:00",
+      "pairDelaySec": 431.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B03_JP03_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:21:09.000Z",
+        "bytes": 15210954
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B13_JP03_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:22:11.000Z",
+        "bytes": 1057311
+      }
+    },
+    {
+      "timelineUtc": "20261029T0210",
+      "observationNumber": "JP04",
+      "nominalSlotUtc": "2026-10-29T02:17:30+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:23:50+00:00",
+      "pairDelaySec": 380.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B03_JP04_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:22:50.000Z",
+        "bytes": 15216145
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0210/HS_H09_20261029_0210_B13_JP04_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:23:50.000Z",
+        "bytes": 1057356
+      }
+    },
+    {
+      "timelineUtc": "20261029T0220",
+      "observationNumber": "JP01",
+      "nominalSlotUtc": "2026-10-29T02:20:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:26:52+00:00",
+      "pairDelaySec": 412.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B03_JP01_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:26:52.000Z",
+        "bytes": 15226179
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B13_JP01_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:26:51.000Z",
+        "bytes": 1057031
+      }
+    },
+    {
+      "timelineUtc": "20261029T0220",
+      "observationNumber": "JP02",
+      "nominalSlotUtc": "2026-10-29T02:22:30+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:28:08+00:00",
+      "pairDelaySec": 338.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B03_JP02_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:28:07.000Z",
+        "bytes": 15227436
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B13_JP02_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:28:08.000Z",
+        "bytes": 1057533
+      }
+    },
+    {
+      "timelineUtc": "20261029T0220",
+      "observationNumber": "JP03",
+      "nominalSlotUtc": "2026-10-29T02:25:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:32:03+00:00",
+      "pairDelaySec": 423.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B03_JP03_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:30:49.000Z",
+        "bytes": 15231918
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B13_JP03_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:32:03.000Z",
+        "bytes": 1057752
+      }
+    },
+    {
+      "timelineUtc": "20261029T0220",
+      "observationNumber": "JP04",
+      "nominalSlotUtc": "2026-10-29T02:27:30+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:33:49+00:00",
+      "pairDelaySec": 379.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B03_JP04_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:32:43.000Z",
+        "bytes": 15237407
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0220/HS_H09_20261029_0220_B13_JP04_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:33:49.000Z",
+        "bytes": 1057369
+      }
+    },
+    {
+      "timelineUtc": "20261029T0230",
+      "observationNumber": "JP01",
+      "nominalSlotUtc": "2026-10-29T02:30:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:36:47+00:00",
+      "pairDelaySec": 407.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B03_JP01_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:36:47.000Z",
+        "bytes": 15250729
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B13_JP01_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:36:44.000Z",
+        "bytes": 1057510
+      }
+    },
+    {
+      "timelineUtc": "20261029T0230",
+      "observationNumber": "JP02",
+      "nominalSlotUtc": "2026-10-29T02:32:30+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:38:01+00:00",
+      "pairDelaySec": 331.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B03_JP02_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:37:50.000Z",
+        "bytes": 15248796
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B13_JP02_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:38:01.000Z",
+        "bytes": 1057610
+      }
+    },
+    {
+      "timelineUtc": "20261029T0230",
+      "observationNumber": "JP03",
+      "nominalSlotUtc": "2026-10-29T02:35:00+00:00",
+      "pairLastModifiedUtc": "2026-10-29T02:41:53+00:00",
+      "pairDelaySec": 413.0,
+      "B03": {
+        "key": "AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B03_JP03_R05_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:40:49.000Z",
+        "bytes": 15249786
+      },
+      "B13": {
+        "key": "AHI-L1b-Japan/2026/10/29/0230/HS_H09_20261029_0230_B13_JP03_R20_S0101.DAT.bz2",
+        "lastModifiedUtc": "2026-10-29T02:41:53.000Z",
+        "bytes": 1058200
+      }
+    }
+  ],
+  "summary": {
+    "pairs": 15,
+    "minDelaySec": 320.0,
+    "medianDelaySec": 407.0,
+    "maxDelaySec": 441.0
+  }
+}
