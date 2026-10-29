@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { formatDayMinute } from "./displayTime";
 
 const DAY_MINUTES = 1440;
 const AMOS_COLOR = "#49d8ec";
@@ -24,8 +25,7 @@ function cleanSeries(rows) {
 }
 
 function clock(minute) {
-  const rounded = Math.max(0, Math.min(DAY_MINUTES, Math.round(minute)));
-  return `${String(Math.floor(rounded / 60)).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
+  return formatDayMinute(minute);
 }
 
 function temperatureDomain(series) {
@@ -201,7 +201,7 @@ export default function TemperatureChart({
         {timeTicks.map((minute) => (
           <g key={minute}>
             <line x1={x(minute)} x2={x(minute)} y1={plot.top} y2={plot.bottom} stroke="#24344b" strokeOpacity="0.35" />
-            <text x={x(minute)} y={height - 12} fill="#91a3bd" fontSize="11" textAnchor={minute === 0 ? "start" : minute === DAY_MINUTES ? "end" : "middle"}>{clock(minute)}</text>
+            <text x={x(minute)} y={height - 12} fill="#91a3bd" fontSize="11" textAnchor={minute === 0 ? "start" : minute === DAY_MINUTES ? "end" : "middle"}>{formatDayMinute(minute, { compact: true })}</text>
           </g>
         ))}
         <g clipPath={`url(#${id}-clip)`}>

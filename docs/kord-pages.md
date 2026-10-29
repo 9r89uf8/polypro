@@ -26,7 +26,7 @@ What this page displays:
 - Compute area:
   - `Compute METAR Daily Max` button that computes **both** modes (`official` and `all`) in one run.
   - `Force Recompute` button that re-runs both modes even if already computed.
-  - Per-mode status chips (`official`, `all`), per-mode last-computed timestamps, and per-mode errors.
+  - Per-mode status chips (`official`, `all`), per-mode last-computed timestamps in 12-hour AM/PM format, and per-mode errors.
 - Comparison table (one row per day):
   - `Date` (clickable; opens day detail route).
   - `Manual Max`.
@@ -82,6 +82,7 @@ What this page displays:
   - Defaults to official rows only; unofficial `all` rows are hidden until `Show Unofficial (All)` is enabled.
   - METAR table columns: `Local Time`, `Mode`, `Temp`, `Source`, `NOAA First Seen`, `Lag vs Obs`, `Raw METAR`.
   - `Local Time` and `NOAA First Seen` are displayed in 12-hour local time with AM/PM.
+  - Poll confirmation messages use the same 12-hour AM/PM display format; stored timestamps and poll behavior are unchanged.
   - `NOAA First Seen` is populated for official rows once NOAA latest polling first observes that report.
   - `Lag vs Obs` shows `(NOAA First Seen - METAR observation tsUtc)` in minutes.
   - Optional NOAA/Synoptic table is hidden until `Show NOAA/Synoptic` is enabled.

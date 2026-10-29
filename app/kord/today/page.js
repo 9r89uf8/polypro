@@ -58,6 +58,16 @@ function minuteLabel(totalMinutes) {
     return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
 }
 
+function formatStoredLocalDateTime(value) {
+    const match = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value || "");
+    if (!match) return value || "—";
+    const hour = Number(match[2]);
+    const minute = Number(match[3]);
+    if (hour > 23 || minute > 59) return "—";
+    const seconds = match[4] ? `:${match[4]}` : "";
+    return `${match[1]} ${hour % 12 || 12}:${match[3]}${seconds} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
 function formatTemp(value, unit) {
     if (value === undefined || value === null) return "—";
     return `${value.toFixed(1)}°${unit}`;
@@ -166,9 +176,9 @@ export default function KordTodayPhoneTempsPage() {
         try {
             const result = await enqueueManualCall({ stationIcao: STATION_ICAO });
             if (result?.ok) {
-                setCallMessage(`Manual call queued for ${result.slotLocal} (Chicago).`);
+                setCallMessage(`Manual call queued for ${formatStoredLocalDateTime(result.slotLocal)} (Chicago).`);
             } else if (result?.reason === "already_enqueued") {
-                setCallMessage(`Call already queued for ${result.slotLocal}.`);
+                setCallMessage(`Call already queued for ${formatStoredLocalDateTime(result.slotLocal)}.`);
             } else {
                 setCallMessage(
                     `Manual call was not queued (${result?.reason ?? "unknown"}).`,
@@ -194,7 +204,7 @@ export default function KordTodayPhoneTempsPage() {
                         KORD Phone Temperature (Today) — {date}
                     </h1>
                     <p className="mt-2 text-sm text-black/65">
-                        Scheduled calls at 12:45, 1:45, 2:45, 3:45, 4:45 (America/Chicago). Each call records 45 seconds, then is transcribed via Whisper and parsed for temperature.
+                        Scheduled calls at :49 and :52 each hour from 12 PM through 4 PM (America/Chicago). Each call records 45 seconds, then is transcribed via Whisper and parsed for temperature.
                     </p>
 
                     <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -269,8 +279,8 @@ export default function KordTodayPhoneTempsPage() {
                             <tbody>
                             {rows.map((row) => (
                                 <tr key={row._id} className="border-t border-black/10">
-                                    <td className="px-3 py-2 text-black/80">{row.slotLocal}</td>
-                                    <td className="px-3 py-2 text-black/65">{row.tsLocal ?? "—"}</td>
+                                    <td className="px-3 py-2 text-black/80">{formatStoredLocalDateTime(row.slotLocal)}</td>
+                                    <td className="px-3 py-2 text-black/65">{formatStoredLocalDateTime(row.tsLocal)}</td>
                                     <td className="px-3 py-2 text-black/80">{row.status}</td>
                                     <td className="px-3 py-2 text-black/80">
                                         {formatTemp(displayUnit === "C" ? row.tempC : row.tempF, displayUnit)}

@@ -2568,7 +2568,7 @@ function nextDayTafAvailability(forecast, window, nowMs) {
       label: "Estimated issue window in",
       targetAt: window.startAt,
       detail:
-        "Recent 00Z cycles have supplied tomorrow’s TX around 17:00–18:00 Mexico City time; this is an estimate, not a deadline.",
+        "Recent 12 AM UTC cycles have supplied tomorrow’s TX around 5:00–6:00 PM Mexico City time; this is an estimate, not a deadline.",
     };
   }
   if (nowMs <= window.endAt) {

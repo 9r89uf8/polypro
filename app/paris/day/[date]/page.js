@@ -260,7 +260,7 @@ function formatOfficialPollMessage(result) {
     : null;
 
   const didSave = (result.insertedCount ?? 0) > 0 || (result.patchedCount ?? 0) > 0;
-  return `Latest official poll: ${didSave ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
+  return `Latest official poll: ${didSave ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${formatStoredLocalDateTime(result.row?.obsTimeLocal)}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
 }
 
 function formatNoaaPollMessage(result) {
@@ -273,7 +273,7 @@ function formatNoaaPollMessage(result) {
     : null;
 
   const didSave = (result.insertedCount ?? 0) > 0 || (result.patchedCount ?? 0) > 0;
-  return `Default NOAA sync: ${didSave ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${lastModifiedText ? ` tgftp Last-Modified ${lastModifiedText}.` : ""}`;
+  return `Default NOAA sync: ${didSave ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${formatStoredLocalDateTime(result.row?.obsTimeLocal)}.${lastModifiedText ? ` tgftp Last-Modified ${lastModifiedText}.` : ""}`;
 }
 
 function buildLineDataset(rows, unit) {

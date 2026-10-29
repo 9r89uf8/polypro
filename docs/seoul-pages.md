@@ -1,9 +1,9 @@
 # Seoul RKSI live-temperature page
 
 This document describes the streamlined RKSI dashboard: Seoul time, KMA
-forecast maximum and peak times, the official routine-METAR maximum, observed
-cloud cover and its trend, the daily temperature chart, and today's Seoul
-Polymarket quotes. Collector and
+forecast maximum, captured high revisions and peak times, the official
+routine-METAR maximum, observed cloud cover and its trend, the daily
+temperature chart, and Seoul Polymarket price history with today's quotes. Collector and
 approval documentation remains below; the former diagnostic dashboard is
 retained only as a historical appendix.
 
@@ -138,7 +138,12 @@ The selected date governs the observations and forecast shown; the Seoul
 clock remains an actual current clock, not a simulated historical clock.
 
 1. **Seoul time.** Display the current time in `Asia/Seoul` (KST), independently
-   of the browser's or execution host's timezone.
+   of the browser's or execution host's timezone. All Seoul display surfaces use
+   a 12-hour clock with AM/PM: the live clock, cards, peak windows, chart axes,
+   tooltips, inspection controls, forecast capture history, and quote times.
+   Midnight is `12:00 AM` and noon is `12:00 PM`. This changes presentation only;
+   stored timestamps, KST date boundaries, ordering, and source clocks remain
+   unchanged.
 2. **KMA forecast maximum and times.** Display KMA/AMO's published daily high
    for RKSI and the selected date, exactly as captured. Do not raise it to the
    observed AMOS maximum or substitute a model estimate. Derive peak times
@@ -149,6 +154,20 @@ clock remains an actual current clock, not a simulated historical clock.
    high, identify the hourly value and its times separately. Those times are
    not an asserted time of the daily maximum. Missing daily or hourly guidance
    remains missing, and stale stored guidance stays visibly stale.
+   The same card includes a compact captured-high history for the selected
+   KST day, with the first and latest captured daily high and their difference.
+   Expandable captured values show each distinct high in sequence and when it
+   was first captured. Repeated identical captures are grouped; a return to an
+   earlier high remains a new change. Missing or failed captures remain
+   explicit gaps. This is the published daily high for that target date, not
+   the hourly peak, observed maximum, or a model's revision history.
+   Times are labeled `Captured` or collection time. The stored `capturedAt`
+   is set before the HTTP request; it is not an exact receipt or provider
+   issuance time. `pageReportedAt` belongs to the current-conditions header
+   and is not relabeled as forecast issuance. A separately returned prior-day
+   baseline is never folded into the same-day first-to-latest change. If the
+   query truncates that day's captures, the overall change is unavailable
+   rather than claiming a full-day delta from a retained tail.
 3. **Official high so far.** Compute the maximum from the selected day's
    routine METAR observations, explicitly excluding reports identified as
    `SPECI`. Label this boundary `Routine reports`. This is distinct from the
@@ -212,9 +231,25 @@ clock remains an actual current clock, not a simulated historical clock.
    the 15L runway threshold. AMOS gaps over five minutes and forecast gaps
    over 90 minutes break their respective lines;
    no Weather.com, threshold-model, or inferred sensor series fills them.
-6. **Today's Seoul market.** A separate compact section below the temperature
-   chart lists the current event's temperature outcomes with YES bid, YES ask,
-   and last-trade price in cents. Decimal strings are formatted exactly; a
+6. **Seoul market through the day.** A separate section below the temperature
+   chart plots each temperature outcome's YES bid/ask midpoint in cents, with
+   outcome toggles and captured-time inspection. The history uses the latest
+   stored poll in each elapsed five-minute KST window and is labeled
+   `5-minute samples`. Actual `polledAt` values remain the point times;
+   empty windows and unusable quotes break lines. Both sides must be finite,
+   uncrossed and backed by positive available sizes, with fresh provider and
+   receipt clocks at capture time. Last-trade and Gamma prices never fill a
+   midpoint gap. Event/rules/date/YES-asset checks prevent unrelated contracts
+   or outcomes from being joined. Retained past dates within the rolling
+   fourteen-day window can show their recorded chart. If the rolling cutoff
+   omits the oldest retained date's opening hours, `truncated: true` produces a
+   partial-day notice. Latest collector errors
+   or delays do not erase valid earlier history while approval remains active;
+   revoked approval hides all of it. Future or uncollected dates do not get
+   fabricated history.
+   Today's current quote table remains collapsed below the chart and lists
+   the event's temperature outcomes with YES bid, YES ask, and last-trade
+   price in cents. Decimal strings are formatted exactly; a
    missing value stays unavailable rather than becoming zero or a Gamma
    fallback. Quote tooltips show available shares and our book receipt time.
    Last-trade tooltips identify our retrieval time and explicitly state that
@@ -226,18 +261,20 @@ clock remains an actual current clock, not a simulated historical clock.
    precision, rounding, corrections, and fallback provisions belong to the
    event's full rules; the AMOS reading and page's official-high card are not
    substituted for a contract settlement calculation.
-   Disabled or missing approval, unknown rules, closed events, source failures,
-   and missing data show a short status rather than prices. The latest poll
+   In the current quote table, disabled or missing approval, unknown rules,
+   closed events, source failures, and missing data show a short status rather
+   than prices. The latest poll
    must be no older than three minutes; each book's provider snapshot timestamp
    and our receipt timestamp must both pass that limit and reject future clocks.
    A fresh download cannot freshen an old cached book. Last-trade retrieval
    time is checked independently, without inferring when the trade executed.
    The existing 15-second client clock ages prices out between server writes.
    Crossed books and duplicate outcome identities are rejected. Archived and
-   future pages omit the section and its query entirely.
+   future pages omit this current table and its today-only query; archived
+   chart history uses its own bounded read query.
 
 The visible page omits the old target selectors, remaining-ceiling decisions,
-forecast assessments, revision/evaluation diagnostics, secondary Weather.com
+forecast assessments, model revision/evaluation diagnostics, secondary Weather.com
 comparisons, GK2A panel, and associated collection controls. Their backend
 retention, scheduled jobs, and approval gates are unchanged by this UI work.
 
@@ -250,15 +287,39 @@ satellite cloud trend. Both pass `{ stationIcao: "RKSI", date }` and are read
 subscriptions; neither requests a download. They are skipped for archived and
 future dates, and revocation/disabled source state suppresses the corresponding
 direction independently.
-`seoulPolymarket:getDashboard({ stationIcao: "RKSI", date })` is another
-today-only read subscription for the separate market section. It neither
-collects quotes nor places orders; server collection and any required
-access/retention/public-display approval checks remain independent of browser
-refresh. See [seoul.md](./seoul.md) for the collector's source and gate details.
+`seoulPolymarket:getDashboard({ stationIcao: "RKSI", date })` remains the
+today-only read subscription for the collapsed current quote table.
+`seoulPolymarket:getPriceHistory({ stationIcao: "RKSI", date })` supplies the
+chart for today and retained past dates. It reads at most one existing snapshot
+per elapsed five-minute KST window (288 for a full day). Both queries require
+all four existing market gates to equal the exact string `true` before any
+protected database read; neither collects quotes nor places orders. Server
+collection and approval checks remain independent of browser refresh. See
+[Seoul market data](./seoul-polymarket.md#daily-sampled-price-history) for
+sampling, identity, freshness, retention, and null-gap details.
 `seoulWeather:getHighPredictionDashboard` continues to supply stored,
 approval-checked KMA captures; only the KMA forecast fields required by the
 streamlined UI are presented. Reusing that existing read endpoint does not
 make its legacy prediction or Weather.com fields current UI features.
+
+`seoulDashboardHistory:getForecastHighHistory({ stationIcao: "RKSI", date })`
+supplies the inline daily-high revision history from immutable
+`seoulKmaForecastCaptures`. It first requires
+`KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED === "true"`; absent or revoked
+approval returns no history, first/latest values, or prior-day baseline before
+reading either captures or collector metadata. The date-bounded read retains
+at most 160 captures for the selected KST day and up to 160 from the previous
+day for a separate baseline, with truncation reported explicitly. It selects
+the requested target date's published daily high, keeps capture and
+page-reported clocks distinct, and returns a same-day first/latest delta only
+when the day's result is not truncated. It makes no external request, queues
+no work, and does not substitute Weather.com, an hourly peak, or a model value.
+The source and approval contract is documented in
+[captured daily-high history](./seoul.md#captured-daily-high-history).
+
+These two history reads and the AM/PM presentation change add no collector,
+schema, cron, flag, or approval activation. The earlier production release
+records above describe their named releases and do not verify this extension.
 
 For today's route, initial entry and the manual refresh request only:
 

@@ -101,7 +101,7 @@ Each accepted snapshot preserves:
 - `polledAt`, the latest completed endpoint receipt, and `firstSeenAt`, the
   database insertion clock. Neither is a trade-execution or price-change time.
 
-The public query is today-only. Both a book's provider timestamp and its
+The current-quote query, `seoulPolymarket:getDashboard`, is today-only. Both a book's provider timestamp and its
 receipt must be no more than three minutes old and not in the future before
 bid/ask values are shown. Fresh HTTP receipt cannot refresh an old cached
 book. Per-row age checks are repeated on reads, and the browser also ages
@@ -125,8 +125,56 @@ not a guarantee of all provider omission behavior.
 Snapshots are immutable and retained for fourteen days. An hourly
 database-only cleanup removes at most 256 expired rows per invocation, enough
 to exceed normal one-minute insertion volume. The cleanup remains available
-after revocation. No public history endpoint, same-price trade reconstruction,
-or sub-minute reaction-time claim is provided by this module.
+after revocation. The separate history query below reads those existing
+snapshots; it does not reconstruct same-price trades or establish sub-minute
+reaction times.
+
+## Daily sampled price history
+
+`seoulPolymarket:getPriceHistory({ stationIcao: "RKSI", date })` is a bounded,
+read-only query for today's or a retained past KST date within the rolling
+fourteen-day window. Invalid, future, and expired dates return `out_of_range`.
+It uses the existing `seoulPolymarketSnapshots` table and
+`by_station_date_polled` index. It does not fetch a provider, collect a missing
+day, or change the minute collection schedule or retention policy.
+
+The query selects the latest stored poll in each elapsed five-minute KST
+window, with at most 288 snapshot reads for a full day. Each usable chart
+point retains its actual `polledAt`; the window boundary is not substituted
+for an observed capture time. Empty windows contribute a null marker so the
+chart does not bridge missing data. Sampling can omit changes between selected
+polls, so the UI labels the series **5-minute samples**.
+The rolling retention cutoff can remove the opening hours of the oldest
+available date; that response sets `truncated: true` and the UI marks it as a
+partial day instead of implying midnight-to-midnight coverage.
+
+Each temperature outcome plots only its YES bid/ask midpoint, numerically in
+the range zero to one and displayed in cents. A point needs both finite prices
+between zero and one, a bid no greater than its ask, positive available sizes,
+an `ok` book, and provider/receipt timestamps within three minutes of that
+snapshot's `polledAt`. Historical freshness is evaluated at capture time;
+valid old points do not become invalid merely because the selected day ended.
+One-sided, crossed, stale, malformed, and missing quotes produce null points.
+Neither last-trade nor Gamma prices fill those gaps.
+
+Date, station, source, event slug/ID, the reviewed rules fingerprint, the
+date-specific resolution URL, and the market/YES-token/bucket identities must
+match. A changed event or asset cannot be joined to an existing outcome's
+line. The compact response contains event identity, `collectorStatus`,
+`latestPolledAt`, sample count and interval, and per-outcome point arrays;
+point details retain the exact bid/ask strings and separate book clocks.
+
+The same four exact-`true` Convex gates apply before any snapshot or collector
+metadata read. Revocation therefore hides retained history as well as current
+quotes. While approval remains active, a delayed or failed latest collection
+can leave previously valid history visible with a delayed status. This does
+not relax the current table's freshness/error checks.
+
+The daily page shows the chart below the weather chart, with outcome toggles
+and captured-time inspection. Today's current quote table is collapsed below
+the history chart; retained past dates can show the chart without a current
+quote table. Future dates have no captured history. All displayed Seoul times,
+including axes, inspection values and quote tooltips, use AM/PM in KST.
 
 ## Approval and operational boundaries
 
@@ -169,7 +217,8 @@ lease expires naturally. Deletion-only retention work remains permitted.
 Protected entry points are `seoulPolymarket:queueScheduledRefresh`,
 `seoulPolymarket:collectMarket`, `seoulPolymarket:getPollState`,
 `seoulPolymarket:finishPoll`, the internal `fetchPublicJson` request boundary,
-and `seoulPolymarket:getDashboard`. The only public function is the read query.
+`seoulPolymarket:getDashboard`, and `seoulPolymarket:getPriceHistory`.
+Both public functions are read queries; neither can queue collection or trade.
 `seoulPolymarket:pruneExpiredSnapshots` only deletes expired records.
 
 Deploy code/schema/schedules with the flags absent and verify the disabled
@@ -201,7 +250,9 @@ research, and none was inferred from the user's request to add the feature.
 ## Implementation and verification
 
 - `convex/seoulPolymarket.js`: bounded collection, leases, immutable storage,
-  public query, and deletion-only retention.
+  current-quote and history queries, and deletion-only retention.
+- `convex/lib/seoulDashboardHistory.js`: sampled history, capture-time quote
+  validation, event/asset continuity checks, and explicit missing-data gaps.
 - `convex/lib/seoulPolymarket.js`: KST date selection, event/rule/asset
   validation, and Seoul quote construction. It reuses the existing tested
   decimal, order-book, and last-trade normalizers from
@@ -210,6 +261,16 @@ research, and none was inferred from the user's request to add the feature.
   `seoulPolymarketTables` schema entries.
 - `test/seoulPolymarket.test.mjs`: fixture-only parser, transport, permission,
   revocation, timing, lease, stale-quote, and cleanup checks.
+- `test/seoulDashboardHistory.test.mjs`: fixture-only market-history and KMA
+  history checks, including approval-before-read boundaries, bounded date
+  queries, null gaps, source/asset identity, and captured forecast deltas.
+
+The daily-history extension adds only read queries, presentation, and fixture
+tests. It changes no collector, schema, cron, approval flag, or activation
+state. Its focused run passed eleven new history tests plus the eighteen existing
+market tests. Earlier deployment records below describe the initial quote
+table release; they do not by themselves verify deployment of the new history
+queries or chart.
 
 Schema integration imports and spreads `seoulPolymarketTables`. The registered
 `seoul_polymarket_every_minute` job targets

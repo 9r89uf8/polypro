@@ -5,14 +5,15 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TemperatureChart from "./TemperatureChart";
+import MarketChart from "./MarketChart";
+import { buildForecastHistory, buildMarketHistory } from "./historyData";
+import { formatDayMinute, formatSeoulTime } from "./displayTime";
 import { buildTemperatureSeries, summarizeClouds, summarizeForecast, summarizeSatelliteCloudTrend, summarizeSeoulMarket, summarizeSunlight } from "./dashboardData";
 import styles from "./dashboard.module.css";
 
 const STATION = { stationIcao: "RKSI" };
 const EMPTY_ROWS = [];
 const dateFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" });
-const clockFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
-const timeFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const longDateFormatter = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", weekday: "long", day: "numeric", month: "long" });
 function validDate(date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
@@ -25,9 +26,9 @@ function shiftedDate(date, offset) {
   shifted.setUTCDate(shifted.getUTCDate() + offset);
   return shifted.toISOString().slice(0, 10);
 }
-function timeLabel(time) { return Number.isFinite(time) ? timeFormatter.format(time) : "—"; }
+function timeLabel(time) { return formatSeoulTime(time); }
 function temperature(value, decimal = false) { return Number.isFinite(value) ? `${decimal ? value.toFixed(1) : value.toLocaleString("en-US", { maximumFractionDigits: 1 })}°` : "—"; }
-function hourLabel(hour) { const m = Math.round(hour * 60); return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; }
+function hourLabel(hour) { return formatDayMinute(hour * 60); }
 function peakLabel(windows) {
   if (!windows?.length) return "Peak time unavailable";
   return windows.map(({ startHour, endHour }) => startHour === endHour ? hourLabel(startHour) : `${hourLabel(startHour)}–${hourLabel(endHour)}`).join(" · ");
@@ -37,7 +38,7 @@ function SeoulClock() {
   useEffect(() => { setNow(Date.now()); const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   return <div className={styles.clock}>
     <span className={styles.eyebrow}>Time in Seoul <span className={styles.timezone}>KST · UTC+9</span></span>
-    <time dateTime={now ? new Date(now).toISOString() : undefined}>{now ? clockFormatter.format(now) : "—:—:—"}</time>
+    <time dateTime={now ? new Date(now).toISOString() : undefined}>{now ? formatSeoulTime(now, { seconds: true }) : "—"}</time>
     <span className={styles.clockDate}>{now ? longDateFormatter.format(now) : "Seoul local time"}</span>
   </div>;
 }
@@ -54,15 +55,47 @@ function CloudVisual({ minimum, maximum, label }) {
   </div>;
 }
 
-function SeoulMarket({ market }) {
+function ForecastHistory({ history, currentHighC }) {
+  if (!history.first) return <p className={styles.forecastHistoryEmpty} role="status">{history.message}</p>;
+  const { first, latest, changes, deltaC, truncated } = history;
+  const count = changes.length - 1;
+  const amount = (value) => `${value > 0 ? "+" : ""}${Number(value.toFixed(2))}°C`;
+  const matches = Number.isFinite(currentHighC) && Math.abs(currentHighC - latest.highC) < 0.001;
+  const headline = truncated ? "Partial forecast history"
+    : count === 0 ? history.captureCount > 1 ? "No change in captured highs" : "First forecast capture"
+      : deltaC === 0 ? `Back to ${temperature(first.highC)}C`
+        : `${deltaC > 0 ? "Raised" : "Lowered"} ${amount(Math.abs(deltaC)).replace("+", "")}`;
+  return <div className={styles.forecastHistory}>
+    <strong className={styles.forecastChange}>{headline}</strong>
+    <p>{count > 0 ? <>{temperature(first.highC)}C → {temperature(latest.highC)}C <span>since {timeLabel(first.capturedAt)}</span></>
+      : <>Captured {timeLabel(first.capturedAt)} <span>KST</span></>}
+      {!matches ? <span> · recorded history</span> : null}</p>
+    <details className={styles.forecastDetails}>
+      <summary>Captured highs{count ? ` · ${count} ${count === 1 ? "change" : "changes"}` : ""}</summary>
+      <ol>{changes.map((point, index) => <li key={point.capturedAt}>
+        <time dateTime={new Date(point.capturedAt).toISOString()}>{timeLabel(point.capturedAt)}</time>
+        <strong>{temperature(point.highC)}C</strong><span>{index === 0 ? truncated ? "First retained" : "First captured" : amount(point.deltaC)}</span>
+      </li>)}</ol>
+      <p>Collection times in KST; the change may have occurred between checks.</p>
+      {history.hasGaps ? <p>Some checks had no usable high.</p> : null}
+      {truncated ? <p>Earlier captures are missing; a full-day change cannot be calculated.</p> : null}
+    </details>
+    <span className={styles.forecastLastCheck}>Last usable capture {timeLabel(latest.capturedAt)} KST</span>
+  </div>;
+}
+
+function SeoulMarket({ market, history, date, isToday }) {
+  const eventUrl = history.eventUrl ?? market.eventUrl;
   const quoteTitle = (side, row) => row[`${side}Label`] === "—" ? "No fresh quote available." : row[`${side}Size`] !== null
     ? `${row[`${side}Size`]} shares available when checked at ${timeLabel(row.bookReceivedAt)} KST.`
     : row.bookReceivedAt ? `Checked at ${timeLabel(row.bookReceivedAt)} KST; available size unknown.` : "No fresh quote available.";
   return <section className={styles.marketCard} aria-labelledby="market-heading">
     <div className={styles.marketHeader}><div><span className={styles.eyebrow}>POLYMARKET</span><h2 id="market-heading">Seoul temperature market</h2></div>
-      {market.eventUrl ? <a href={market.eventUrl} target="_blank" rel="noreferrer" className={styles.marketLink}>Event & rules ↗</a> : null}
+      {eventUrl ? <a href={eventUrl} target="_blank" rel="noreferrer" className={styles.marketLink}>Event & rules ↗</a> : null}
     </div>
-    {market.markets.length ? <>
+    {history.series.length ? <MarketChart history={history} date={date} /> : <div className={styles.marketEmpty} role="status"><strong>{history.label}</strong><p>{history.message}</p></div>}
+    {isToday && market.markets.length ? <details className={styles.quoteDetails}>
+      <summary>Current quotes & last trades</summary>
       <div className={styles.marketTableScroll} role="region" aria-label="Seoul market YES prices" tabIndex={0}>
         <table className={styles.marketTable}>
           <caption className={styles.srOnly}>Today’s Seoul temperature outcomes. YES bid, ask, and last-trade prices are in cents.</caption>
@@ -76,8 +109,8 @@ function SeoulMarket({ market }) {
         </table>
       </div>
       <p className={styles.marketNote}>Resolution: AWC routine reports for RKSI · SPECI excluded. Last trade is separate from current quotes.</p>
-    </> : <div className={styles.marketEmpty} role="status"><strong>{market.label}</strong><p>{market.message}</p></div>}
-    <div className={styles.marketFooter}><span>{market.markets.length ? market.label : "Today’s event"}</span><span>{market.polledAt ? `Checked ${timeLabel(market.polledAt)} KST` : "Awaiting market data"}</span></div>
+    </details> : null}
+    <div className={styles.marketFooter}><span>{history.label}</span><span>{history.latestAt ? `Last usable sample ${timeLabel(history.latestAt)} KST` : "Awaiting recorded prices"}</span></div>
   </section>;
 }
 
@@ -101,6 +134,8 @@ export default function SeoulDayPage() {
   const solarDashboard = useQuery("seoulGk2a:getSolarHeatingDashboard", isToday ? { ...STATION, date } : "skip");
   const satelliteCloudDashboard = useQuery("seoulGk2aClouds:getCloudTrendDashboard", isToday ? { ...STATION, date } : "skip");
   const marketDashboard = useQuery("seoulPolymarket:getDashboard", isToday ? { ...STATION, date } : "skip");
+  const marketHistoryDashboard = useQuery("seoulPolymarket:getPriceHistory", dateValid ? { ...STATION, date } : "skip");
+  const forecastHistoryDashboard = useQuery("seoulDashboardHistory:getForecastHighHistory", dateValid ? { ...STATION, date } : "skip");
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
   const pollAmos = useAction("seoul:pollLatestAmosTemperatureSites");
   const refreshForecast = useMutation("seoulKmaForecast:requestAirportForecastRefresh");
@@ -111,6 +146,8 @@ export default function SeoulDayPage() {
   const sunlight = useMemo(() => summarizeSunlight(solarDashboard, date, now, isToday), [solarDashboard, date, now, isToday]);
   const satelliteClouds = useMemo(() => summarizeSatelliteCloudTrend(satelliteCloudDashboard, date, now, isToday), [satelliteCloudDashboard, date, now, isToday]);
   const market = useMemo(() => summarizeSeoulMarket(marketDashboard, date, now, isToday), [marketDashboard, date, now, isToday]);
+  const marketHistory = useMemo(() => buildMarketHistory(marketHistoryDashboard, date, now), [marketHistoryDashboard, date, now]);
+  const forecastHistory = useMemo(() => buildForecastHistory(forecastHistoryDashboard, date, now), [forecastHistoryDashboard, date, now]);
   const refresh = useCallback(async (quiet = false) => {
     if (!isToday || refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -147,6 +184,7 @@ export default function SeoulDayPage() {
         <div className={styles.bigNumber}>{forecastDashboard === undefined ? "…" : temperature(forecast.highC)}{forecastAvailable ? <span>C</span> : null}</div>
         <p className={styles.peakTime}>{forecastAvailable ? peakLabel(forecast.peakWindows) : forecastStatus}</p>
         <p className={styles.cardNote}>{forecastAvailable && forecast.peakWindows?.length ? `${peakMatchesHigh ? "Peak hours" : `Hourly forecast peaks at ${temperature(forecast.hourlyPeakC)}C`} · KST` : "Official airport forecast"}</p>
+        <ForecastHistory history={forecastHistory} currentHighC={forecast.highC} />
         <div className={styles.cardFooter}>{forecast.status === "error" && forecastAvailable ? <span className={styles.stale}>Stored forecast · refresh failed</span> : forecast.status === "stale" ? <span className={styles.stale}>Older forecast</span> : isPast ? "Stored KMA forecast" : "Published daily maximum"}{forecast.capturedAt ? <span>Captured {timeLabel(forecast.capturedAt)}</span> : null}</div>
       </article>
       <article className={styles.card}>
@@ -177,7 +215,7 @@ export default function SeoulDayPage() {
       {day === undefined ? <div className={styles.chartLoading} role="status">Loading the day’s temperatures…</div> : <TemperatureChart amos={series.amos} metar={series.metar} forecast={forecast.hourly} date={date} isToday={isToday} nowMinute={nowMinute} />}
       <div className={styles.chartFooter}><span>All times are Seoul time (KST). AMOS reads to 0.1°C; METAR reports whole degrees.{["stale", "error"].includes(forecast.status) && forecast.hourly.length ? " Dashed forecast is retained from an older capture." : ""}</span><span>{isToday ? "Updates automatically every minute" : "Available stored history"}</span></div>
     </section>
-    {isToday ? <SeoulMarket market={market} /> : null}
+    <SeoulMarket market={market} history={marketHistory} date={date} isToday={isToday} />
     <footer className={styles.footer}><span>RKSI · Incheon International Airport</span><span>KMA / AMO observations & forecast · NOAA METAR</span></footer>
   </div></main>;
 }

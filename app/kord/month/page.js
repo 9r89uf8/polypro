@@ -263,10 +263,10 @@ function KordMonthWorkspace() {
   const officialError = monthRun?.metarLastError;
   const allError = monthRun?.metarAllLastError;
   const officialComputedAt = monthRun?.metarLastComputedAt
-    ? new Date(monthRun.metarLastComputedAt).toLocaleString()
+    ? new Date(monthRun.metarLastComputedAt).toLocaleString("en-US", { hour12: true })
     : null;
   const allComputedAt = monthRun?.metarAllLastComputedAt
-    ? new Date(monthRun.metarAllLastComputedAt).toLocaleString()
+    ? new Date(monthRun.metarAllLastComputedAt).toLocaleString("en-US", { hour12: true })
     : null;
 
   async function handleSaveManual() {

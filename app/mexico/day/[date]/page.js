@@ -2725,7 +2725,7 @@ export default function MexicoDayPage() {
           <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-slate-500">
-                00:00—23:59 · America/Mexico_City
+                12:00 AM–11:59 PM · America/Mexico_City
               </p>
               <h2 className="mt-1 text-xl font-medium text-slate-100">
                 Temperature and weather timeline · {date}

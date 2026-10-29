@@ -34,7 +34,7 @@ function toLocalDayEndExclusiveMs(value) {
 }
 
 function formatCreatedAt(value) {
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleString("en-US", { hour12: true });
 }
 
 function normalizeStationInput(value) {

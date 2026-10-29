@@ -23,6 +23,9 @@ What this page displays:
 
 - Compact navigation with Wellington date controls, live Auckland clock, and
   `C` / `F` toggle.
+- Visible clocks, observation/collector timestamps, chart labels, collection
+  windows, and forecast-archive capture times use 12-hour AM/PM formatting.
+  Stored timestamps, date keys, and collection schedules are unchanged.
 - A dominant station `93439` temperature hero with:
   - explicit near-live, delayed, stale, archive, unavailable, or
     approval-required state

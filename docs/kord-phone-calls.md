@@ -19,7 +19,8 @@ This document covers the KORD phone-call temperature workflow shown on `/kord/to
         - horizontally scrollable chart region (`overflow-x-auto`) with `min-width: 1200px`
         - larger point hit area and x-axis nearest-point interaction for touch
         - mobile tip text (`swipe horizontally to inspect call points and times`)
-    - calls table with slot, recorded time, status, temp, transcript excerpt
+    - calls table with slot and recorded time in 12-hour AM/PM format, status, temp, transcript excerpt
+    - manual-call confirmations use the same AM/PM display format; schedule copy reflects the existing :49/:52 calls from 12 PM through 4 PM
   - Supports:
     - `Home` button back to `/`
     - `Open METAR Live Day Chart` link to `/kord/day/YYYY-MM-DD`

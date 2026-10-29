@@ -762,3 +762,11 @@ forecast revisions, exact labeled market quotes with staleness, and a
 synchronized reaction timeline without modifying the old Mexico pages. Live
 settlement-source data and faster CAPMA polling may remain correctly gated and
 disabled until approval is granted.
+
+## AM/PM display consistency — 2026-10-29
+
+The next-day TAF help text now shows the midnight UTC cycle and estimated
+5:00–6:00 PM Mexico City issue window in AM/PM format. The existing estimate,
+forecast timing logic, provider timestamps, raw reports, and approval boundaries
+are unchanged. The companion day chart labels its full-day range as
+12:00 AM–11:59 PM.

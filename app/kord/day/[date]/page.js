@@ -203,9 +203,9 @@ function formatLivePollMessage(result, label) {
     : "";
 
   if (result.inserted) {
-    return `${label}: saved ${result.tsLocal}.${timingSuffix}`;
+    return `${label}: saved ${formatStoredLocalDateTime(result.tsLocal)}.${timingSuffix}`;
   }
-  return `${label}: no new report (${result.tsLocal}).${timingSuffix}`;
+  return `${label}: no new report (${formatStoredLocalDateTime(result.tsLocal)}).${timingSuffix}`;
 }
 
 function formatBackfillMessage(result, label) {

@@ -74,7 +74,8 @@ function formatStoredLocalDateTime(localStr) {
   const match = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/.exec(localStr);
   if (!match) return localStr;
   const [, , mo, da, hh, mm] = match;
-  return `${da}/${mo} ${hh}:${mm}`;
+  const hour = Number(hh);
+  return `${da}/${mo} ${hour % 12 || 12}:${mm} ${hour >= 12 ? "PM" : "AM"}`;
 }
 
 // ── Section 1: Accuracy by Lead Time ────────────────────────────────────────

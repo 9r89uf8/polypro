@@ -13,7 +13,12 @@ compares 687 minute observations with the day's first 23 routine reports,
 preserving the observed mismatch and decision-time limits. Its shortest-lead
 new-high test has three correct alerts and one false alert. The
 [Seoul Polymarket integration](./seoul-polymarket.md) documents the current
-AWC-based contract, schema, minute schedule, and separate approval gates.
+AWC-based contract, schema, minute schedule, separate approval gates, and
+five-minute sampled daily price history from retained snapshots. The history
+query checks the same approvals before database reads and leaves unusable
+midpoints as gaps; it does not change collection or substitute last-trade or
+Gamma prices. The [Seoul page contract](./seoul-pages.md) covers the daily
+chart, captured KMA high revisions, and AM/PM display times in KST.
 These follow-ups supersede earlier single-sample implications about typical
 satellite speed; they do not establish a tradable advantage.
 
@@ -1302,6 +1307,9 @@ Every protected entry point uses the same current flag:
   `seoulWeather:getHighPredictionDecisionSummaries`,
   `seoulWeather:getDayPageWeather`, and
   `seoulWeather:getHighPredictionAccuracy` are the protected read surfaces.
+- `seoulDashboardHistory:getForecastHighHistory` checks the exact same approval
+  before reading either retained KMA captures or collector metadata. Revocation
+  clears its history, first/latest values, delta, and separate prior-day baseline.
 
 The public/manual and scheduled queue mutations check the flag before writing
 queue state or scheduling work. The internal worker checks it again when it
@@ -1353,6 +1361,11 @@ page/current-conditions reported time may also be retained, but is not given
 forecast-issue semantics. Captures preserve provider revisions instead of
 updating one mutable forecast in place.
 
+The collector sets `capturedAt` at collection start, before the outbound HTTP
+request. It is therefore a collection clock, not an exact response receipt,
+first availability, or provider-issued time. `createdAt` records storage;
+`pageReportedAt` remains the separately named current-conditions header clock.
+
 The request uses a 15-second abort timeout. The parser reads the response in
 memory and stores only normalized fields; the raw HTML is not retained.
 
@@ -1364,6 +1377,56 @@ The canonical daily maximum, hourly curve, conditions, ceiling values, peak
 time, and capture timestamp always come from one coherent successful page
 response. KMA hours are not reconstructed across revisions; a missing hour
 stays missing rather than being carried forward with a newer capture time.
+
+### Captured daily-high history
+
+`seoulDashboardHistory:getForecastHighHistory({ stationIcao: "RKSI", date })`
+provides the daily page's compact KMA high-revision history. This read-only
+query uses the existing `seoulKmaForecastCaptures` table and
+`by_station_capturedAt` index; it adds no fetch, schema, schedule, approval
+flag, or collection trigger. Invalid, future, and dates outside its rolling
+fourteen-day query window return `out_of_range`. That query bound is not a new
+KMA storage-deletion policy.
+
+Approval is checked before any capture or collector-state read. With the
+existing `KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED` value exactly `true`, the
+query reads at most 160 captures from the selected KST day and at most 160 from
+the preceding day. Each bounded read requests one extra row to detect and
+report truncation. Only matching RKSI/KMA source captures with the requested
+target date's finite daily high contribute a value; short-term rows take
+precedence where short-term and midterm guidance overlap. Missing target highs
+and failed captures remain unavailable entries. No hourly maximum, observed
+temperature, Weather.com value, or prediction-model output fills them.
+
+The result includes `history`, `first`, `latest`, `revisionCount`, and
+`deltaC`. The first and latest values come only from captures made during the
+selected KST day, and `deltaC` is their difference. Repeated identical highs
+are still retained checks; the UI groups them into a captured-value sequence,
+showing a new step whenever the high changes, including a return to an earlier
+value. If the same-day read is truncated, `deltaC` is null and the UI leaves the
+overall change unavailable. Missing/error checks are identified; a later
+failure does not erase valid earlier captures.
+
+`previousDayBaseline` is a separately named latest usable capture from the
+preceding KST day for that same target date. It is not the first point of the
+selected-day series and is never silently used to calculate a same-day
+revision or first/latest delta. Its independent truncation flag preserves the
+bounded-read limit.
+
+The frontend presents a compact first/latest comparison in the forecast card
+and expandable captured values. It labels their clocks as captured/collection
+times and displays AM/PM in KST, consistently with the live clock, peak times,
+chart axes, inspection values, and market quote tooltips. Neither
+`capturedAt` nor `pageReportedAt` becomes a forecast issuance timestamp. This
+source-capture sequence is separate from the model-prediction revisions
+described below.
+
+`test/seoulDashboardHistory.test.mjs` covers these boundaries with fixtures,
+alongside the market-history gate, sampling, and quote checks. The focused
+history and existing market test run passed 29 tests without external
+requests or flag changes.
+
+### Prediction retention and evaluation
 
 The backend stores target-specific numbered high-prediction revisions for
 historical retention and evaluation. Current revisions use

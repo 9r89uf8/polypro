@@ -1,3 +1,5 @@
+import { formatSeoulTime } from "./displayTime.js";
+
 const MINUTE_MS = 60_000;
 const KST_OFFSET_MS = 9 * 60 * MINUTE_MS;
 const CLOUD_FRESHNESS_MS = 45 * MINUTE_MS;
@@ -19,7 +21,7 @@ function seoulMinute(time) {
 }
 
 function localTime(time) {
-  return new Date(time + KST_OFFSET_MS).toISOString().slice(11, 16);
+  return formatSeoulTime(time);
 }
 
 function fromLocalTimestamp(value) {

@@ -9,6 +9,7 @@ import {
   seoulMarketSlug, seoulQuoteSnapshotStatus,
 } from "./lib/seoulPolymarket.js";
 import { seoulMarketSnapshotValidator } from "./lib/seoulPolymarketSchema.js";
+import { buildSeoulPriceHistory, seoulHistoryDay, seoulPriceHistoryWindows } from "./lib/seoulDashboardHistory.js";
 
 const MINUTE = 60_000;
 const LEASE_MS = 90_000;
@@ -247,6 +248,33 @@ export const getDashboard = queryGeneric({
     });
     const status = seoulQuoteSnapshotStatus(markets);
     return { ...base, status, markets: ["ok", "partial"].includes(status) ? markets : [] };
+  },
+});
+
+export const getPriceHistory = queryGeneric({
+  args: { stationIcao: v.optional(v.string()), date: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    station(args.stationIcao);
+    const now = Date.now(), today = seoulMarketDate(now), date = args.date ?? today;
+    const access = gate(true);
+    const empty = { stationIcao: "RKSI", date, today, configured: access.allowed,
+      source: SEOUL_MARKET_SOURCE, metric: "yes_bid_ask_midpoint", timeZone: "Asia/Seoul",
+      event: null, series: [], collectorStatus: "no_data", latestPolledAt: null,
+      sampleCount: 0, samplingIntervalMinutes: 5, truncated: false };
+    if (!access.allowed) return { ...empty, status: access.status };
+    if (!seoulHistoryDay(date, now)) return { ...empty, status: "out_of_range" };
+    const windows = seoulPriceHistoryWindows(date, now);
+    // One latest sample per elapsed five-minute window bounds full-document
+    // reads to 288 while keeping the entire KST day and explicit empty windows.
+    const [collector, samples] = await Promise.all([
+      statusRow(ctx), Promise.all(windows.map(async (window) => ({ ...window,
+        snapshot: await ctx.db.query("seoulPolymarketSnapshots")
+          .withIndex("by_station_date_polled", (q) => q.eq("stationIcao", "RKSI").eq("date", date)
+            .gte("polledAt", window.start).lt("polledAt", Math.min(window.end, now + 1)))
+          .order("desc").first(),
+      }))),
+    ]);
+    return { ...empty, ...buildSeoulPriceHistory({ samples, date, now, collector }) };
   },
 });
 

@@ -233,7 +233,7 @@ function formatOfficialPollMessage(result) {
     ? `${Math.max(0, result.availabilityLagMs / 60000).toFixed(1)} min lag`
     : null;
 
-  return `Latest MeteoAM poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${result.row?.obsTimeLocal ?? ""}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
+  return `Latest MeteoAM poll: ${result.insertedCount > 0 ? "saved" : "no new report"} ${result.row?.reportType ?? "message"} ${formatStoredLocalDateTime(result.row?.obsTimeLocal)}.${firstSeenText ? ` First seen ${firstSeenText}${lagText ? ` (${lagText})` : ""}.` : ""}`;
 }
 
 function formatRefreshMessage(officialResult, noaaResult) {

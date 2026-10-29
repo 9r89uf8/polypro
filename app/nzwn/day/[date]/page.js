@@ -23,31 +23,31 @@ const APPROVAL_FLAG = "METSERVICE_PUBLICDATA_ACCESS_APPROVED";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 
-const aucklandClockFormatter = new Intl.DateTimeFormat("en-NZ", {
+const aucklandClockFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: AUCKLAND_TIMEZONE,
   weekday: "short",
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
-  hour12: false,
+  hour12: true,
   timeZoneName: "short",
 });
 
-const aucklandTimeFormatter = new Intl.DateTimeFormat("en-NZ", {
+const aucklandTimeFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: AUCKLAND_TIMEZONE,
   hour: "2-digit",
   minute: "2-digit",
-  hour12: false,
+  hour12: true,
 });
 
-const aucklandDateTimeFormatter = new Intl.DateTimeFormat("en-NZ", {
+const aucklandDateTimeFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: AUCKLAND_TIMEZONE,
   day: "2-digit",
   month: "short",
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",
-  hour12: false,
+  hour12: true,
 });
 
 function getDateParts(formatter, date) {
@@ -144,6 +144,15 @@ function formatAucklandClock(epochMs) {
   return Number.isFinite(epochMs)
     ? aucklandClockFormatter.format(new Date(epochMs))
     : "—";
+}
+
+function formatCollectionTime(localTime) {
+  const match = /^(\d{2}):(\d{2})$/.exec(localTime || "");
+  if (!match) return "—";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return "—";
+  return `${hour % 12 || 12}:${match[2]} ${hour >= 12 ? "PM" : "AM"}`;
 }
 
 function formatAucklandTime(epochMs, withDate = false) {
@@ -292,7 +301,7 @@ function emptyHeroCopy(statusKey) {
       display: "RESTING",
       title: "The daytime collector is outside its operating window.",
       detail:
-        "Collection resumes automatically at 09:00 Wellington time. The latest accepted reading will appear here when the window opens.",
+        "Collection resumes automatically at 9:00 AM Wellington time. The latest accepted reading will appear here when the window opens.",
     };
   }
   if (statusKey === "archive") {
@@ -976,7 +985,7 @@ export default function NzwnDayPage() {
                 <span className="text-white/55">Collection window</span>
                 <span className="font-mono text-white/65">
                   {collectionWindow
-                    ? `${collectionWindow.startLocal}–${collectionWindow.endLocal}`
+                    ? `${formatCollectionTime(collectionWindow.startLocal)}–${formatCollectionTime(collectionWindow.endLocal)}`
                     : "—"}
                 </span>
               </div>
