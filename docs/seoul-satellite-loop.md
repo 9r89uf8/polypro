@@ -39,8 +39,9 @@ expired image blobs and their database rows.
 ## What the images show
 
 - **Visible:** B03, 0.64 µm, using the embedded updated calibration. A fixed
-  solar-angle normalization and display scale make successive images
-  comparable. Frames below the visual daylight threshold are unavailable.
+  solar-angle normalization and enhanced contrast curve make successive images
+  comparable while separating darker and middle shades more clearly. Frames
+  below the visual daylight threshold are unavailable.
   This visual threshold is separate from the stricter forecasting-model
   screen used in the earlier research.
 - **Infrared:** B13, 10.4 µm, using the embedded Planck calibration. A fixed
@@ -83,7 +84,7 @@ failed keys are retried on later refreshes within the retained window. Failure
 records are bounded to 50 keys and remain visible in the player. A failed
 listing stops that run rather than accepting an incomplete discovery result.
 
-Only airport JPEG derivatives and source/timing metadata are retained in
+Only airport PNG derivatives and source/timing metadata are retained in
 Convex storage and the database. Compressed regional objects and expanded
 raw arrays are temporary worker memory. Requests use the fixed NOAA host,
 reject redirects, and enforce byte and timeout limits. The decoder validates
@@ -97,10 +98,12 @@ rows. A delayed provider therefore yields a shorter available sequence,
 rather than an old hour presented as current. The initial hour fills from
 available recent source objects after activation.
 
-Uploads carry the dedicated JPEG MIME profile `rksi-himawari-loop-v1`.
+New uploads carry the dedicated PNG MIME profile `rksi-himawari-loop-v2`.
+Legacy JPEGs carry `rksi-himawari-loop-v1`; both exact content-type/profile
+combinations remain recognized for cleanup during the transition.
 In addition to per-upload cleanup, the retention job advances a persisted
 cursor through 200 storage records per run and removes only unreferenced
-files with that exact profile once they are at least five minutes old. This
+files with those exact profiles once they are at least five minutes old. This
 recovers files left by interrupted workers; the full sweep duration depends
 on total storage size. Referenced frames and other integrations' files are
 preserved, and this cleanup also runs while collection is disabled.
@@ -122,6 +125,37 @@ The live loop is available only on today's Seoul page. Past and future date
 pages do not start collection or display the current loop as historical
 imagery. At KST midnight the date check prevents a previous-day page from
 continuing to masquerade as live.
+
+## Lossless rendering and contrast update
+
+Renderer `rksi-himawari-image-v2` stores RGB PNGs that preserve every rendered
+pixel exactly, including the missing-data color. The 256 × 256 grid, original
+source sampling and geographic extent are unchanged. Increasing the file's
+pixel dimensions would not add satellite detail.
+
+Visible images use the fixed smooth curve
+`y = r² / (r² + p²)`, with `p = 0.22` and nonnegative solar-normalized
+reflectance `r`. This allocates more display shades to dark and middle
+reflectances than the original square-root curve, with a gradual shoulder for
+bright clouds. Positive reflectances remain ordered even above one, without
+the previous hard white cutoff. This favors darker texture and compresses
+bright-cloud contrast; it does not improve contrast equally in every scene.
+No per-frame histogram,
+local sharpening, synthetic detail or changing contrast setting is applied.
+Infrared retains its existing fixed 190–300 K scale and also uses PNG.
+
+The collector upgrades legacy frames from their original source objects.
+An upgraded row replaces its prior image only after successful validation;
+failed upgrades leave the older image intact. Each channel plays one renderer
+version at a time, switching to PNG once usable PNG frames exist. The available
+sequence can temporarily shorten while recent frames are reprocessed. Prior
+workers cannot save JPEGs into a new renderer run, and both storage profiles
+continue to expire normally.
+
+The update passed 36 focused decoder and backend tests, including exact PNG
+pixel round trips, monotonic contrast above reflectance one, old-worker
+rejection, validated replacement, failure preservation and single-version
+playback. Retained real B03/B13 objects also passed the lossless checks.
 
 ## References
 

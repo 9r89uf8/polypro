@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
-import jpeg from "jpeg-js";
+import { PNG } from "pngjs";
 import {
   decompressHimawariBzip, parseHimawariHsd, himawariNativePosition, himawariNativeCenter,
   himawariLineTime, himawariSolarGeometry, himawariInfraredTemperature, sampleHimawariPoint,
-  renderHimawariRaster, decodeHimawariImage, MAX_HIMAWARI_EXPANDED_BYTES,
+  renderHimawariRaster, decodeHimawariImage, encodeHimawariPng, himawariVisibleDisplayValue, MAX_HIMAWARI_EXPANDED_BYTES,
 } from "../convex/lib/seoulHimawariImage.js";
 
 const NOMINAL = Date.parse("2026-10-29T01:00:00Z");
@@ -192,14 +192,45 @@ test("visible updated calibration uses a fixed scale and refuses night without a
   const expected = (600 * .31089897 - 6.21797943) * .00192798475658132 / sample.cosZenith;
   assert.ok(Math.abs(sample.value - expected) < 1e-12);
   const day = renderHimawariRaster(h);
-  assert.equal(day.status, "ok"); assert.equal(day.display.minimum, 0); assert.equal(day.display.maximum, 1);
-  assert.equal(day.display.gamma, .5);
+  assert.equal(day.status, "ok"); assert.equal(day.display.minimum, 0); assert.equal(day.display.maximum, null);
+  assert.equal(day.display.toneCurve, "fixed rational contrast");
+  assert.equal(day.display.contrastPivot, .22);
   h.lineTimes = h.lineTimes.map(row => ({ ...row, mjd: row.mjd + .5 }));
   const night = renderHimawariRaster(h);
   assert.equal(night.status, "unavailable"); assert.match(night.reason, /solar elevation/);
   assert.equal(night.rgba, undefined);
   const ir = fixture({ nominal: NOMINAL + 12 * 3600_000 });
   assert.equal(renderHimawariRaster(parseHimawariHsd(ir.bytes, ir.options)).status, "ok");
+});
+
+test("fixed visible enhancement separates midtones without frame-dependent contrast or clipping the bright range", () => {
+  assert.equal(himawariVisibleDisplayValue(-.1), 0);
+  assert.equal(himawariVisibleDisplayValue(0), 0);
+  assert.ok(himawariVisibleDisplayValue(1) < himawariVisibleDisplayValue(1.1));
+  assert.ok(himawariVisibleDisplayValue(1.1) < himawariVisibleDisplayValue(2));
+  assert.ok(himawariVisibleDisplayValue(2) < 1);
+  assert.equal(himawariVisibleDisplayValue(Number.MAX_VALUE), 1);
+  assert.throws(() => himawariVisibleDisplayValue(NaN), /finite/);
+  for (let i = 1; i <= 3000; i++) {
+    assert.ok(himawariVisibleDisplayValue(i / 1000) > himawariVisibleDisplayValue((i - 1) / 1000));
+  }
+  const oldSeparation = Math.sqrt(.22) - Math.sqrt(.16);
+  const newSeparation = himawariVisibleDisplayValue(.22) - himawariVisibleDisplayValue(.16);
+  assert.ok(newSeparation > 2 * oldSeparation);
+  assert.ok(himawariVisibleDisplayValue(.8) < himawariVisibleDisplayValue(.9));
+});
+
+test("PNG round trip preserves every display pixel including missing-data color", () => {
+  const rgba = Buffer.alloc(256 * 256 * 4);
+  for (let i = 0; i < rgba.length; i += 4) {
+    const shade = (i / 4) % 256;
+    rgba.set([shade, shade, shade, 255], i);
+  }
+  rgba.set([36, 25, 50, 255], 4 * 300);
+  const encoded = encodeHimawariPng(rgba), decoded = PNG.sync.read(encoded);
+  assert.equal(decoded.width, 256); assert.equal(decoded.height, 256);
+  assert.deepEqual(decoded.data, rgba);
+  assert.throws(() => encodeHimawariPng(Buffer.alloc(100)), /size/);
 });
 
 // Optional local integration evidence: hashes and expected values come from
@@ -218,7 +249,7 @@ const realCases = [
 ];
 for (const row of realCases) {
   const path = new URL(row.file, import.meta.url);
-  test(`retained real ${row.channel} HSD agrees with Python and encodes an actual JPEG`, { skip: !existsSync(path) }, () => {
+  test(`retained real ${row.channel} HSD agrees with Python and encodes losslessly`, { skip: !existsSync(path) }, () => {
     const compressed = readFileSync(path);
     assert.equal(createHash("sha256").update(compressed).digest("hex"), row.hash);
     const options = { key: row.key, nominalTimeUtc: row.nominal, channel: row.channel };
@@ -230,9 +261,10 @@ for (const row of realCases) {
     assert.equal(image.status, "ok");
     assert.ok(Math.abs(image.observedAt - row.observedAt) < 1);
     assert.ok(Math.abs(image.solarElevationDeg - row.solar) < 1e-7);
-    const encoded = jpeg.encode({ data: image.rgba, width: 256, height: 256 }, 85);
-    const decoded = jpeg.decode(encoded.data, { useTArray: true });
+    const encoded = encodeHimawariPng(image.rgba);
+    const decoded = PNG.sync.read(encoded);
     assert.equal(decoded.width, 256); assert.equal(decoded.height, 256);
-    assert.ok(encoded.data.length < 2 * 1024 * 1024);
+    assert.deepEqual(decoded.data, image.rgba);
+    assert.ok(encoded.length < 2 * 1024 * 1024);
   });
 }

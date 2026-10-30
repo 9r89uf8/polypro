@@ -69,6 +69,11 @@ play/pause, frame scrubbing, speed and 20/50/100 km zoom controls. The default
 view is 50 km across. Frame times use KST with AM/PM; missing frames, delayed
 imagery and daytime-only visible coverage are explicit. The live image loop
 does not appear as historical imagery on past or future date pages.
+New frames use lossless PNGs with a stronger, fixed visible contrast curve.
+The same source brightness keeps the same displayed shade throughout a loop;
+there is no separate automatic contrast adjustment for individual frames.
+Playback switches to the new rendering version as it becomes available and
+does not alternate legacy and enhanced frames.
 
 The streamlined implementation contains six information areas. This section
 is the source contract for the current UI; historical panel descriptions at

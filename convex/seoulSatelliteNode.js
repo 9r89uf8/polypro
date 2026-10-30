@@ -10,10 +10,13 @@ const ORIGIN = "https://noaa-himawari9.s3.amazonaws.com";
 const HOUR = 60 * 60_000;
 const MAX_COMPRESSED = 24 * 1024 * 1024;
 const MAX_LISTING = 2 * 1024 * 1024;
-const MAX_JPEG = 2 * 1024 * 1024;
+const MAX_PNG = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
 const MAX_BATCH_MS = 140_000;
-const IMAGE_CONTENT_TYPE = "image/jpeg; profile=rksi-himawari-loop-v1";
+const RENDERER_VERSION = "rksi-himawari-image-v2";
+const IMAGE_CONTENT_TYPE = "image/png; profile=rksi-himawari-loop-v2";
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+const PNG_IEND = [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130];
 
 function enabled() { return process.env.NOAA_HIMAWARI_IMAGES_ENABLED === "true"; }
 function concise(error) { return String(error instanceof Error ? error.message : error).replace(/\s+/g, " ").trim().slice(0, 300); }
@@ -127,7 +130,7 @@ export const collectFrames = internalActionGeneric({
   handler: async (ctx, args) => {
     if (!enabled()) return { status: "disabled" };
     const claim = await ctx.runMutation(internal.seoulSatellite.claimWorker, { runId: args.runId });
-    if (!claim) return { status: "superseded_or_busy" };
+    if (!claim || claim.rendererVersion !== RENDERER_VERSION) return { status: "superseded_or_busy" };
     const workerToken = claim.workerToken;
     const attemptedKeys = [];
     const objectErrors = [];
@@ -153,33 +156,39 @@ export const collectFrames = internalActionGeneric({
         try {
           decoded = decodeHimawariImage(response.bytes, { key: candidate.key, nominalTimeUtc: candidate.nominalTimeUtc, channel: candidate.channel });
         } catch (error) {
-          decoded = { status: "unavailable", reason: `Image decode rejected: ${concise(error)}`, observedAt: candidate.nominalTimeUtc };
+          decoded = { status: "unavailable", version: RENDERER_VERSION, reason: `Image decode rejected: ${concise(error)}`, observedAt: candidate.nominalTimeUtc };
         }
         await assertWorker(ctx, args.runId, workerToken);
+        if (decoded.version !== RENDERER_VERSION) throw new Error("Decoder renderer version does not match the active image renderer.");
         const observedAt = decoded.observedAt;
         if (!Number.isFinite(observedAt) || observedAt < candidate.nominalTimeUtc || observedAt > candidate.nominalTimeUtc + 150_000) throw new Error("Decoder returned an invalid acquisition time.");
         let storageId;
         try {
           if (decoded.status === "ok") {
-            const jpeg = decoded.jpegBytes;
-            if (!(jpeg instanceof Uint8Array) || jpeg.byteLength < 4 || jpeg.byteLength > MAX_JPEG
-                || jpeg[0] !== 0xff || jpeg[1] !== 0xd8 || jpeg.at(-2) !== 0xff || jpeg.at(-1) !== 0xd9) throw new Error("Decoder returned an invalid or oversized JPEG.");
+            const png = decoded.pngBytes;
+            if (!(png instanceof Uint8Array) || png.byteLength < 45 || png.byteLength > MAX_PNG
+                || !PNG_SIGNATURE.every((value, index) => png[index] === value)
+                || !PNG_IEND.every((value, index) => png[png.byteLength - 12 + index] === value)) throw new Error("Decoder returned an invalid or oversized PNG.");
+            const header = Buffer.from(png.buffer, png.byteOffset, png.byteLength);
+            if (header.toString("ascii", 12, 16) !== "IHDR" || header.readUInt32BE(16) !== 256 || header.readUInt32BE(20) !== 256) {
+              throw new Error("Decoder PNG dimensions differ from the fixed256-pixel grid.");
+            }
             await assertWorker(ctx, args.runId, workerToken);
-            storageId = await ctx.storage.store(new Blob([jpeg], { type: IMAGE_CONTENT_TYPE }));
+            storageId = await ctx.storage.store(new Blob([png], { type: IMAGE_CONTENT_TYPE }));
             // Safe even if a later mutation response is lost: only unreferenced uploads are removed.
             await ctx.scheduler.runAfter(5 * 60_000, internal.seoulSatellite.deleteUploadIfUnreferenced, { storageId });
           } else if (decoded.status !== "unavailable") throw new Error("Decoder returned an unsupported status.");
           const frame = { stationIcao: "RKSI", channel: candidate.channel, source: "noaa_himawari9", sourceKey: candidate.key,
-            nominalTimeUtc: candidate.nominalTimeUtc, obsTimeUtc: observedAt, status: decoded.status,
+            nominalTimeUtc: candidate.nominalTimeUtc, obsTimeUtc: observedAt, status: decoded.status, rendererVersion: RENDERER_VERSION,
             sourceLastModifiedAt: candidate.sourceLastModifiedAt, sourceSize: candidate.sourceSize,
             fetchedAt: response.receivedAt, capturedAt: Date.now(), sourceSha256: digest(response.bytes),
-            ...(storageId ? { storageId, imageSha256: digest(decoded.jpegBytes) } : { reason: concise(decoded.reason ?? "Image unavailable.") }),
+            ...(storageId ? { storageId, imageSha256: digest(decoded.pngBytes) } : { reason: concise(decoded.reason ?? "Image unavailable.") }),
             ...(Number.isFinite(decoded.solarElevationDeg) ? { solarElevationDeg: decoded.solarElevationDeg } : {}),
             ...(Number.isFinite(decoded.validFraction) ? { validFraction: decoded.validFraction } : {}),
             ...(decoded.geometry ? { geometry: decoded.geometry } : {}), ...(decoded.display ? { display: decoded.display } : {}) };
           const result = await ctx.runMutation(internal.seoulSatellite.saveFrame, { runId: args.runId, workerToken, frame });
           if (["disabled", "superseded"].includes(result.status)) return result;
-          if (["invalid_frame", "invalid_image"].includes(result.status)) throw new Error(`Satellite frame save rejected: ${result.status}.`);
+          if (["invalid_frame", "invalid_image", "upgrade_unavailable", "source_changed"].includes(result.status)) throw new Error(`Satellite frame save rejected: ${result.status}.`);
         } catch (error) {
           if (storageId) await ctx.runMutation(internal.seoulSatellite.deleteUploadIfUnreferenced, { storageId }).catch(() => {});
           throw error;

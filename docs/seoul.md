@@ -1835,3 +1835,9 @@ hour. Its dedicated operational switch is `NOAA_HIMAWARI_IMAGES_ENABLED`;
 existing protected-source approvals and temperature models are unchanged.
 The live Seoul dashboard provides playback, scrubbing, speed and zoom controls
 with KST AM/PM observation times, explicit gaps and stale-image states.
+
+The image-quality follow-up uses lossless PNG derivatives and a stronger,
+fixed visible contrast curve. It retains the original satellite sampling;
+every frame uses the same brightness mapping. Legacy JPEGs are replaced from
+their source objects with validation and retention checks, and playback does
+not mix renderer versions. Details are in the satellite-loop documentation.

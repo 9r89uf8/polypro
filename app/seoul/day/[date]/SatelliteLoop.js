@@ -265,7 +265,7 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
       </div>
     </div>
     <footer className={styles.footer}>
-      <span>{channel === "visible" ? "Visible brightness" : "Infrared brightness temperature"} · not a cloud mask · no cloud-height correction</span>
+      <span>{channel === "visible" ? (displayed?.display?.toneCurve ? "Enhanced visible contrast" : "Visible brightness") : "Infrared brightness temperature"} · not a cloud mask · no cloud-height correction</span>
       <a href={SOURCE_URL} target="_blank" rel="noreferrer">JMA / NOAA source ↗</a>
     </footer>
   </section>;

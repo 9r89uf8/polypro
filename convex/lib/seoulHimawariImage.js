@@ -1,9 +1,11 @@
+"use node";
+
 import Bunzip from "seek-bzip";
-import jpeg from "jpeg-js";
+import { PNG } from "pngjs";
 
 // Offline Node-only renderer. These images show calibrated satellite texture;
 // they are not cloud classifications, surface sunlight or temperature forecasts.
-export const HIMAWARI_IMAGE_VERSION = "rksi-himawari-image-v1";
+export const HIMAWARI_IMAGE_VERSION = "rksi-himawari-image-v2";
 export const HIMAWARI_IMAGE_SIZE = 256;
 export const HIMAWARI_IMAGE_SPAN_KM = 100;
 export const MAX_HIMAWARI_COMPRESSED_BYTES = 24 * 1024 * 1024;
@@ -15,6 +17,7 @@ const DAY_MS = 86_400_000;
 const MIN_VISIBLE_ELEVATION = 5;
 const MIN_VISIBLE_COSINE = Math.sin(MIN_VISIBLE_ELEVATION * Math.PI / 180);
 const INVALID_RGB = Object.freeze([36, 25, 50]);
+const VISIBLE_CONTRAST_PIVOT = 0.22;
 const radians = value => value * Math.PI / 180;
 const degrees = value => value * 180 / Math.PI;
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
@@ -300,6 +303,25 @@ function distanceKm(a, b) {
   return 2 * 6371.0088 * Math.asin(Math.sqrt(clamp(h, 0, 1)));
 }
 
+// A fixed, smooth, monotonic display curve separates dark/midtone texture
+// without clipping the bright-cloud range. No frame histogram, neighborhood,
+// or previous image affects it, so a fixed reflectance keeps the same shade
+// throughout a loop. This is display enhancement, not a cloud classification.
+export function himawariVisibleDisplayValue(reflectance) {
+  requireValue(finite(reflectance), "visible display value must be finite");
+  // Solar normalization can legitimately produce values above one. Retain
+  // their ordering through the bright shoulder rather than clipping at one.
+  if (reflectance <= 0) return 0;
+  return 1 / (1 + (VISIBLE_CONTRAST_PIVOT / reflectance) ** 2);
+}
+
+export function encodeHimawariPng(rgba) {
+  requireValue(rgba instanceof Uint8Array && rgba.byteLength === HIMAWARI_IMAGE_SIZE ** 2 * 4,
+    "invalid image raster size");
+  return PNG.sync.write({ data: rgba, width: HIMAWARI_IMAGE_SIZE, height: HIMAWARI_IMAGE_SIZE },
+    { colorType: 2, inputColorType: 6, inputHasAlpha: true, bitDepth: 8, deflateLevel: 6, deflateStrategy: 0 });
+}
+
 export function renderHimawariRaster(hsd) {
   const width = HIMAWARI_IMAGE_SIZE, spanKm = HIMAWARI_IMAGE_SPAN_KM;
   const kmPerLongitudeDegree = 111.32 * Math.cos(radians(RKSI.latitude));
@@ -319,8 +341,9 @@ export function renderHimawariRaster(hsd) {
     sampling: "nearest native source pixel; display grid spacing is not source resolution",
     cloudHeightCorrection: false };
   const display = hsd.channel === "visible"
-    ? { quantity: "solar-normalized B03 reflectance", units: "fraction", minimum: 0, maximum: 1,
-      gamma: 0.5, whiteMeans: "brighter visible reflection", minimumSolarElevationDeg: MIN_VISIBLE_ELEVATION,
+    ? { quantity: "solar-normalized B03 reflectance", units: "fraction", minimum: 0, maximum: null,
+      toneCurve: "fixed rational contrast", contrastPivot: VISIBLE_CONTRAST_PIVOT, contrastExponent: 2,
+      whiteMeans: "brighter visible reflection", minimumSolarElevationDeg: MIN_VISIBLE_ELEVATION,
       lowSun: solar.solarElevationDeg < 20, invalidColor: "#241932" }
     : { quantity: "B13 brightness temperature", units: "K", minimum: 190, maximum: 300,
       gamma: 1, whiteMeans: "colder infrared brightness temperature", invalidColor: "#241932" };
@@ -343,7 +366,7 @@ export function renderHimawariRaster(hsd) {
       if (!nativeSamples.has(key)) nativeSamples.set(key, sampleNative(hsd, position.row, position.column));
       const sample = nativeSamples.get(key), offset = 4 * (y * width + x);
       if (sample && finite(sample.value)) {
-        const unit = hsd.channel === "visible" ? Math.sqrt(clamp(sample.value, 0, 1)) : clamp((300 - sample.value) / 110, 0, 1);
+        const unit = hsd.channel === "visible" ? himawariVisibleDisplayValue(sample.value) : clamp((300 - sample.value) / 110, 0, 1);
         const shade = Math.round(unit * 255);
         rgba[offset] = rgba[offset + 1] = rgba[offset + 2] = shade;
         validCount++;
@@ -365,6 +388,5 @@ export function decodeHimawariImage(compressedBytes, options) {
   const hsd = parseHimawariHsd(decompressHimawariBzip(compressedBytes), options);
   const { rgba, ...result } = renderHimawariRaster(hsd);
   if (result.status !== "ok") return result;
-  const encoded = jpeg.encode({ data: rgba, width: HIMAWARI_IMAGE_SIZE, height: HIMAWARI_IMAGE_SIZE }, 85);
-  return { ...result, jpegBytes: encoded.data };
+  return { ...result, pngBytes: encodeHimawariPng(rgba) };
 }

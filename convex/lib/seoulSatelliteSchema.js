@@ -15,6 +15,7 @@ export const satelliteFrameFields = {
   sourceLastModifiedAt: v.number(), sourceSize: v.number(),
   fetchedAt: v.number(), capturedAt: v.number(),
   sourceSha256: v.optional(v.string()), imageSha256: v.optional(v.string()),
+  rendererVersion: v.optional(v.string()),
   solarElevationDeg: v.optional(v.number()), validFraction: v.optional(v.number()),
   geometry: v.optional(v.any()), display: v.optional(v.any()),
 };
@@ -31,6 +32,7 @@ export const seoulSatelliteTables = {
     queuedAt: v.optional(v.number()), lastAttemptAt: v.optional(v.number()),
     lastSuccessAt: v.optional(v.number()), lastError: v.optional(v.string()),
     activeRunId: v.optional(v.string()), runStartedAt: v.optional(v.number()),
+    runRendererVersion: v.optional(v.string()),
     leaseUntil: v.optional(v.number()), workerToken: v.optional(v.string()),
     workerActiveUntil: v.optional(v.number()), workerSequence: v.optional(v.number()),
     continuationCount: v.optional(v.number()), planReady: v.optional(v.boolean()),

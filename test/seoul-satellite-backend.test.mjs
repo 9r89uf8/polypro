@@ -9,7 +9,9 @@ const construct = new Function("internalMutationGeneric", "internalQueryGeneric"
   source.replace(/import[\s\S]*?from\s+"[^"]+";\s*/g, "").replace(/export const /g, "const ")
   + `\nreturn {${names.join(",")}};`);
 const NOW = Date.parse("2026-10-30T01:20:00Z"), MINUTE = 60_000, HOUR = 60 * MINUTE;
-const MIME = "image/jpeg; profile=rksi-himawari-loop-v1";
+const MIME = "image/png; profile=rksi-himawari-loop-v2";
+const LEGACY_MIME = "image/jpeg; profile=rksi-himawari-loop-v1";
+const VERSION = "rksi-himawari-image-v2";
 
 function candidate(time = NOW - 10 * MINUTE, channel = "infrared") {
   const base = Math.floor(time / 600_000) * 600_000;
@@ -43,6 +45,8 @@ function harness(flag = "true") {
     async insert(table, fields) { const row = { _id: `row${++nextId}`, ...structuredClone(fields) }; tables[table].push(row); return row._id; },
     async patch(id, fields) { const row = Object.values(tables).flat().find(value => value._id === id); assert.ok(row);
       for (const [key, value] of Object.entries(fields)) { if (value === undefined) delete row[key]; else row[key] = structuredClone(value); } },
+    async replace(id, fields) { for (const table of Object.values(tables)) { const index = table.findIndex(row => row._id === id);
+      if (index >= 0) { table[index] = { _id: id, ...structuredClone(fields) }; return; } } throw new Error("Missing replacement row"); },
     async delete(id) { for (const table of Object.values(tables)) { const index = table.findIndex(row => row._id === id); if (index >= 0) table.splice(index, 1); } },
     system: { async get(table, id) { assert.equal(table, "_storage"); return uploads.get(id) ?? null; },
       query(table) { assert.equal(table, "_storage"); return { order() { return this; }, async paginate({ cursor, numItems }) {
@@ -73,7 +77,7 @@ function harness(flag = "true") {
       return { stationIcao: "RKSI", source: "noaa_himawari9", channel: item.channel, sourceKey: item.key,
         nominalTimeUtc: item.nominalTimeUtc, obsTimeUtc: item.nominalTimeUtc + 54_000,
         sourceLastModifiedAt: item.sourceLastModifiedAt, sourceSize: item.sourceSize, status: "ok", storageId,
-        fetchedAt: clock, capturedAt: clock, validFraction: .95,
+        fetchedAt: clock, capturedAt: clock, validFraction: .95, rendererVersion: VERSION,
         geometry: { spanKm: 100, centerLatitude: 37.4602, centerLongitude: 126.4407 }, ...changes };
     } };
 }
@@ -137,7 +141,7 @@ test("flag revocation, superseded workers and invalid/future saves clean new upl
     if (mode === "invalid_geometry") frame.geometry.spanKm = 200;
     if (mode === "bad_type") h.uploads.get(mode).contentType = "text/html";
     assert.equal((await h.call("saveFrame", { ...owner, frame })).stored, false);
-    assert.equal(h.uploads.has(mode), false);
+    assert.equal(h.uploads.has(mode), mode === "bad_type", "Cleanup must not delete an unowned MIME upload");
     assert.equal(h.tables.seoulSatelliteFrames.length, 0);
   }
 });
@@ -209,13 +213,76 @@ test("per-source failures persist while older candidates continue, then clear on
 test("orphan sweep recovers store-before-schedule crashes without touching other uploads", async () => {
   const h = harness(), old = NOW - 6 * MINUTE;
   h.upload("crashed-before-schedule", { _creationTime: old });
+  h.upload("legacy-crash", { _creationTime: old, contentType: LEGACY_MIME });
   h.upload("other-jpeg", { _creationTime: old, contentType: "image/jpeg" });
   h.upload("recent-owned", { _creationTime: NOW - MINUTE });
   h.upload("referenced-owned", { _creationTime: old });
   await h.db.insert("seoulSatelliteFrames", h.frame(candidate(), "referenced-owned"));
   h.env.NOAA_HIMAWARI_IMAGES_ENABLED = "false";
   const result = await h.call("pruneExpiredFrames");
-  assert.equal(result.orphanUploadsDeleted, 1);
-  assert.equal(result.storageObjectsScanned, 4);
+  assert.equal(result.orphanUploadsDeleted, 2);
+  assert.equal(result.storageObjectsScanned, 5);
   assert.deepEqual([...h.uploads.keys()], ["other-jpeg", "recent-owned", "referenced-owned"]);
+});
+
+test("deployment supersedes legacy active leases and rejects late legacy worker writes", async () => {
+  const h = harness(), item = candidate();
+  await h.db.insert("seoulSatelliteCollectorStatus", { stationIcao: "RKSI", status: "collecting", updatedAt: NOW,
+    activeRunId: "RKSI:legacy", runStartedAt: NOW, queuedAt: NOW, leaseUntil: NOW + 180_000,
+    workerToken: "legacy-token", workerActiveUntil: NOW + 180_000, pendingCandidates: [item], planReady: true });
+  assert.equal(await h.call("checkWorker", { runId: "RKSI:legacy", workerToken: "legacy-token" }), false);
+  assert.equal((await h.call("requestRefresh")).queued, true, "Old lease and cooldown cannot delay the new renderer");
+  const runId = h.status().activeRunId, claim = await h.call("claimWorker", { runId });
+  await h.call("savePlan", { runId, workerToken: claim.workerToken, candidates: [item] });
+  h.upload("late-legacy", { contentType: LEGACY_MIME });
+  const legacy = h.frame(item, "late-legacy"); delete legacy.rendererVersion;
+  assert.equal((await h.call("saveFrame", { runId: "RKSI:legacy", workerToken: "legacy-token", frame: legacy })).status, "superseded");
+  assert.equal(h.uploads.has("late-legacy"), false);
+  h.upload("wrong-current-token-version", { contentType: LEGACY_MIME }); legacy.storageId = "wrong-current-token-version";
+  assert.equal((await h.call("saveFrame", { runId, workerToken: claim.workerToken, frame: legacy })).status, "invalid_frame");
+  assert.equal(h.uploads.has("wrong-current-token-version"), false);
+});
+
+test("legacy source keys rerender atomically, current versions dedupe and queries never mix contrast", async () => {
+  const h = harness(), first = candidate(), older = candidate(NOW - 15 * MINUTE), visible = candidate(NOW - 10 * MINUTE, "visible");
+  for (const [item, id] of [[first, "old-first"], [older, "old-second"], [visible, "old-visible"]]) {
+    h.upload(id, { contentType: LEGACY_MIME }); const frame = h.frame(item, id); delete frame.rendererVersion;
+    await h.db.insert("seoulSatelliteFrames", frame);
+  }
+  const before = await h.call("getLoop");
+  assert.equal(before.channels.infrared.frames.length, 2);
+  assert.ok(before.frames.every(frame => frame.rendererVersion === "rksi-himawari-image-v1"));
+  const owner = await h.prepare([first, older, visible]);
+  assert.equal(h.status().pendingCandidates.length, 3, "Existing v1 identity remains eligible");
+  const originalId = h.tables.seoulSatelliteFrames.find(row => row.sourceKey === first.key)._id;
+  h.upload("new-first");
+  assert.equal((await h.call("saveFrame", { ...owner, frame: h.frame(first, "new-first") })).replaced, true);
+  assert.equal(h.tables.seoulSatelliteFrames.find(row => row.sourceKey === first.key)._id, originalId);
+  assert.equal(h.uploads.has("old-first"), false);
+  assert.equal(h.uploads.has("old-second"), true);
+  h.calls.urls.length = 0;
+  const after = await h.call("getLoop");
+  assert.deepEqual(after.channels.infrared.frames.map(frame => frame.url), ["https://storage.test/new-first"]);
+  assert.equal(after.channels.infrared.rendererVersion, VERSION);
+  assert.equal(after.channels.visible.rendererVersion, "rksi-himawari-image-v1");
+  assert.equal(h.calls.urls.includes("old-second"), false, "Hidden legacy frames must not even receive URLs");
+  assert.equal(h.calls.urls.includes("old-visible"), true);
+  assert.deepEqual((await h.call("savePlan", { ...owner, candidates: [first] })), []);
+});
+
+test("invalid, unavailable or source-changed upgrades preserve the old success and clean only new owned data", async () => {
+  for (const kind of ["invalid", "unavailable", "source_changed"]) {
+    const h = harness(), item = candidate(); h.upload("legacy", { contentType: LEGACY_MIME });
+    const old = h.frame(item, "legacy", { sourceSha256: "original-source" }); delete old.rendererVersion;
+    await h.db.insert("seoulSatelliteFrames", old);
+    const owner = await h.prepare([item]); h.upload("new");
+    const updated = h.frame(item, "new", { sourceSha256: kind === "source_changed" ? "replaced-source" : "original-source" });
+    if (kind === "invalid") updated.geometry.spanKm = 200;
+    if (kind === "unavailable") { updated.status = "unavailable"; delete updated.storageId; updated.reason = "Low sunlight"; }
+    assert.equal((await h.call("saveFrame", { ...owner, frame: updated })).stored, false);
+    assert.equal(h.tables.seoulSatelliteFrames.length, 1);
+    assert.equal(h.tables.seoulSatelliteFrames[0].storageId, "legacy");
+    assert.equal(h.uploads.has("legacy"), true);
+    if (kind !== "unavailable") assert.equal(h.uploads.has("new"), false);
+  }
 });

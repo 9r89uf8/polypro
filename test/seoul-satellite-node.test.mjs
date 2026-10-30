@@ -8,6 +8,14 @@ const construct = new Function("internalActionGeneric", "v", "createHash", "inte
   source.replace(/import[\s\S]*?from\s+"[^"]+";\s*/g, "").replace(/export const /g, "const ")
   + "\nreturn {collectFrames,parseListing,parseListedCandidate,hourlyPrefixes};");
 const NOW = Date.parse("2026-10-30T01:20:00Z"), MINUTE = 60_000, ORIGIN = "https://noaa-himawari9.s3.amazonaws.com";
+const VERSION = "rksi-himawari-image-v2";
+function pngBytes() {
+  const bytes = Buffer.alloc(45);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes);
+  bytes.write("IHDR", 12, "ascii"); bytes.writeUInt32BE(256, 16); bytes.writeUInt32BE(256, 20);
+  Buffer.from([0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]).copy(bytes, 33);
+  return bytes;
+}
 function object(time = NOW - 10 * MINUTE, channel = "infrared") {
   const base = Math.floor(time / 600_000) * 600_000, iso = new Date(base).toISOString();
   const date = iso.slice(0, 10).replaceAll("-", ""), hm = iso.slice(11, 16).replace(":", "");
@@ -53,7 +61,7 @@ function harness({ flag = "true", objects = [object()], onRead, responseOverride
     async runQuery(name, args) { calls.queries.push({ name, args }); return env.NOAA_HIMAWARI_IMAGES_ENABLED === "true" && checkWorker(calls); },
     async runMutation(name, args) {
       calls.mutations.push({ name, args });
-      if (name === "claimWorker") return busy ? null : { workerToken: "run:1", planReady: Boolean(pending), pendingCandidates: pending ?? [] };
+      if (name === "claimWorker") return busy ? null : { workerToken: "run:1", rendererVersion: VERSION, planReady: Boolean(pending), pendingCandidates: pending ?? [] };
       if (name === "savePlan") { calls.plan = args.candidates; return args.candidates.slice(0, 4); }
       if (name === "saveFrame") { calls.saved.push(args.frame); return { stored: true, status: args.frame.status }; }
       if (name === "recordSourceFailure") { calls.failures.push(args); return env.NOAA_HIMAWARI_IMAGES_ENABLED === "true"
@@ -62,12 +70,12 @@ function harness({ flag = "true", objects = [object()], onRead, responseOverride
       if (name === "deleteUploadIfUnreferenced") { calls.cleanup.push(args.storageId); return null; }
       throw new Error(`Unexpected mutation ${name}`);
     },
-    storage: { async store(blob) { assert.equal(blob.type, "image/jpeg; profile=rksi-himawari-loop-v1"); calls.stored.push(blob.size); onStore?.({ env, calls }); return `upload${++nextUpload}`; } },
+    storage: { async store(blob) { assert.equal(blob.type, "image/png; profile=rksi-himawari-loop-v2"); calls.stored.push(blob.size); onStore?.({ env, calls }); return `upload${++nextUpload}`; } },
     scheduler: { async runAfter(delay, name, args) { calls.scheduled.push({ delay, name, args }); } },
   };
   const decoder = (bytes, opts) => {
     calls.decoded.push({ size: bytes.length, ...opts });
-    return decode ? decode(bytes, opts) : { status: "ok", jpegBytes: Buffer.from([255, 216, 255, 217]),
+    return decode ? decode(bytes, opts) : { status: "ok", version: VERSION, pngBytes: pngBytes(),
       observedAt: opts.nominalTimeUtc + 54_000, solarElevationDeg: 30, validFraction: .95,
       geometry: { spanKm: 100, centerLatitude: 37.4602, centerLongitude: 126.4407 }, display: { kind: "fixture" } };
   };
@@ -132,7 +140,7 @@ test("streaming timeout and revocation cancel reading without uploads", async ()
 });
 
 test("quality unavailability and structural rejections persist without fabricated images", async () => {
-  for (const decode of [(_bytes, opts) => ({ status: "unavailable", reason: "Low solar elevation", observedAt: opts.nominalTimeUtc + 54_000 }),
+  for (const decode of [(_bytes, opts) => ({ status: "unavailable", version: VERSION, reason: "Low solar elevation", observedAt: opts.nominalTimeUtc + 54_000 }),
     () => { throw new Error("Corrupt data block"); }]) {
     const h = harness({ objects: [object(NOW - 10 * MINUTE, "visible")], decode });
     await h.run(); assert.equal(h.calls.saved.length, 1); assert.equal(h.calls.saved[0].status, "unavailable");
@@ -140,10 +148,10 @@ test("quality unavailability and structural rejections persist without fabricate
   }
 });
 
-test("continuation avoids listing again and rejects oversized JPEGs before storage", async () => {
+test("continuation avoids listing again and rejects oversized PNGs before storage", async () => {
   const item = object(); const { bytes, ...pending } = item;
-  const h = harness({ objects: [item], pending: [pending], decode: (_bytes, opts) => ({ status: "ok", observedAt: opts.nominalTimeUtc,
-    jpegBytes: Buffer.alloc(2 * 1024 * 1024 + 1) }) });
+  const h = harness({ objects: [item], pending: [pending], decode: (_bytes, opts) => ({ status: "ok", version: VERSION, observedAt: opts.nominalTimeUtc,
+    pngBytes: Buffer.alloc(2 * 1024 * 1024 + 1) }) });
   assert.equal((await h.run()).status, "error"); assert.equal(h.calls.fetch.length, 1); assert.equal(h.calls.stored.length, 0);
 });
 
@@ -157,4 +165,19 @@ test("a persistent newest-object failure cannot starve older available frames", 
   assert.deepEqual(h.calls.saved.map(frame => frame.sourceKey), objects.slice(1, 4).map(row => row.key));
   assert.equal(h.calls.finish[0].attemptedKeys.length, 4);
   assert.equal(h.calls.finish[0].continueAfterErrors, true);
+});
+
+test("only exact-version, correctly framed 256-square PNG output reaches storage", async () => {
+  for (const kind of ["legacy_version", "jpeg", "signature", "iend", "dimensions"]) {
+    const h = harness({ decode: (_bytes, opts) => {
+      const result = { status: "ok", version: VERSION, observedAt: opts.nominalTimeUtc + 54_000, pngBytes: pngBytes() };
+      if (kind === "legacy_version") result.version = "rksi-himawari-image-v1";
+      if (kind === "jpeg") result.pngBytes = Buffer.from([255, 216, 255, 217]);
+      if (kind === "signature") result.pngBytes[0] = 0;
+      if (kind === "iend") result.pngBytes[result.pngBytes.length - 1] = 0;
+      if (kind === "dimensions") result.pngBytes.writeUInt32BE(512, 16);
+      return result;
+    } });
+    await h.run(); assert.equal(h.calls.stored.length, 0, kind); assert.equal(h.calls.failures.length, 1, kind);
+  }
 });
