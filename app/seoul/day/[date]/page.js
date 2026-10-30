@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TemperatureChart from "./TemperatureChart";
 import MarketChart from "./MarketChart";
+import SatelliteLoop from "./SatelliteLoop";
 import { buildForecastHistory, buildMarketHistory } from "./historyData";
 import { formatDayMinute, formatSeoulTime } from "./displayTime";
 import { buildTemperatureSeries, summarizeClouds, summarizeForecast, summarizeSatelliteCloudTrend, summarizeSeoulMarket, summarizeSunlight } from "./dashboardData";
@@ -215,6 +216,7 @@ export default function SeoulDayPage() {
       {day === undefined ? <div className={styles.chartLoading} role="status">Loading the day’s temperatures…</div> : <TemperatureChart amos={series.amos} metar={series.metar} forecast={forecast.hourly} date={date} isToday={isToday} nowMinute={nowMinute} />}
       <div className={styles.chartFooter}><span>All times are Seoul time (KST). AMOS reads to 0.1°C; METAR reports whole degrees.{["stale", "error"].includes(forecast.status) && forecast.hourly.length ? " Dashed forecast is retained from an older capture." : ""}</span><span>{isToday ? "Updates automatically every minute" : "Available stored history"}</span></div>
     </section>
+    <SatelliteLoop date={date} isToday={isToday} />
     <SeoulMarket market={market} history={marketHistory} date={date} isToday={isToday} />
     <footer className={styles.footer}><span>RKSI · Incheon International Airport</span><span>KMA / AMO observations & forecast · NOAA METAR</span></footer>
   </div></main>;

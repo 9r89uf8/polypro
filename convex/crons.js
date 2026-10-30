@@ -411,6 +411,23 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
+// Keep the latest hour of airport-centered Himawari images independently of
+// open browsers. This public NOAA imagery collector has its own runtime switch.
+crons.cron(
+  "seoul_himawari_images_every_minute",
+  "* * * * *",
+  internal.seoulSatellite.queueScheduledRefresh,
+  { stationIcao: "RKSI" },
+);
+
+// Storage cleanup runs even when image collection is disabled.
+crons.cron(
+  "seoul_himawari_images_retention",
+  "* * * * *",
+  internal.seoulSatellite.pruneExpiredFrames,
+  { stationIcao: "RKSI" },
+);
+
 // GK2A SWRAD frames are produced on a ten-minute cadence and commonly appear
 // about twelve minutes later. Queue at a sixteen-minute offset for every frame;
 // the server-side Haurwitz gate skips work below 50 W/m² modeled clear-sky DSR.

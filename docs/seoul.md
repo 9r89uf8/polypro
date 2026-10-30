@@ -1824,3 +1824,14 @@ The decision rule should be:
   continuously.
 - Use AWC/NOAA and WIS2 to verify the eventual official METAR, not to drive the
   freshest temperature display.
+
+## Airport satellite animation — October 30, 2026
+
+The [RKSI satellite image loop](./seoul-satellite-loop.md) adds a retained
+last-hour animation from public NOAA Himawari-9 visible and infrared imagery.
+The server crops every available supported frame to the same airport-centered
+view, stores small image derivatives, and expires frames and blobs after one
+hour. Its dedicated operational switch is `NOAA_HIMAWARI_IMAGES_ENABLED`;
+existing protected-source approvals and temperature models are unchanged.
+The live Seoul dashboard provides playback, scrubbing, speed and zoom controls
+with KST AM/PM observation times, explicit gaps and stale-image states.

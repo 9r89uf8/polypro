@@ -2,6 +2,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { seoulPolymarketTables } from "./lib/seoulPolymarketSchema.js";
+import { seoulSatelliteTables } from "./lib/seoulSatelliteSchema.js";
 
 const seoulForecastStatus = v.union(
   v.literal("ok"),
@@ -182,6 +183,7 @@ const mexicoEdgeQuoteFields = {
 
 export default defineSchema({
   ...seoulPolymarketTables,
+  ...seoulSatelliteTables,
   notes: defineTable({
     stationIcao: v.optional(v.string()),
     title: v.optional(v.string()),

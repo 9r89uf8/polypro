@@ -154,3 +154,9 @@ Madrid Airframes stream only when its independent approval and operational
 connection flags are both exact `true`; it likewise has no KORD phone path,
 data, or credentials. KORD phone-call scheduling behavior is unchanged by
 either job.
+
+The `seoul_himawari_images_every_minute` and
+`seoul_himawari_images_retention` entries collect and expire the separate
+RKSI satellite animation. They do not change the KORD call schedule, call
+limits, credentials, or phone-call data. See
+[the Seoul satellite loop](./seoul-satellite-loop.md).

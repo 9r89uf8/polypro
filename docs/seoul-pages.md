@@ -62,6 +62,14 @@ collection does not restore historical rows deleted with the old database.
 
 ## Routes and current dashboard contract
 
+The live page also includes an [RKSI satellite image loop](./seoul-satellite-loop.md)
+below the temperature chart. It retains the last hour of available Himawari
+visible and infrared images, centers every frame on the airport, and offers
+play/pause, frame scrubbing, speed and 20/50/100 km zoom controls. The default
+view is 50 km across. Frame times use KST with AM/PM; missing frames, delayed
+imagery and daytime-only visible coverage are explicit. The live image loop
+does not appear as historical imagery on past or future date pages.
+
 The streamlined implementation contains six information areas. This section
 is the source contract for the current UI; historical panel descriptions at
 the end of this document do not describe the streamlined page.
