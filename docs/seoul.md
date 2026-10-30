@@ -1852,3 +1852,48 @@ The UI adds a named recipe and interpretation legend without changing any
 temperature, cloud-trend or market model. Scientific calibration, daylight
 screens, limitations and validation are documented in the
 [satellite-loop contract](./seoul-satellite-loop.md#daytime-cloud-analysis).
+
+## Hourly GOCI-II airport view — October 30, 2026
+
+An approval-gated [GOCI-II hourly view](./seoul-goci2.md) adds the sharpest
+public geostationary imagery of RKSI: GK-2B GOCI-II local-area slot S007 has
+about 0.265 × 0.356 km pixels at the airport, about twice as fine per axis
+as Himawari-9 B03. It is daytime only, observed about hourly (about
+08:27–17:27 KST in October 2026) and was published about 14 minutes after
+observation.
+
+- **Source:** KHOA National Ocean Satellite Center OPeNDAP (Hyrax),
+  `https://nosc.go.kr/opendap/GOCI-II/YYYY/MM/DD/L1B_COMP/`. Slot
+  directories, file names and the slot holding RKSI are discovered from the
+  THREDDS catalogs on every run. Only DAP2 subsets (latitude, longitude and
+  `L_TOA_660/555/443` over a ~311 × 433-pixel airport window, about 2.7 MB
+  per hour) are requested; the 433 MB slot files are never downloaded.
+- **Approval:** NOSC publishes no reuse terms for OPeNDAP and its OPEN API
+  terms forbid storing or retransmitting results, so everything is behind the
+  server-side Convex flag `KHOA_GOCI2_ACCESS_APPROVED` (exact `true` only).
+  The cron, the public refresh mutation, the worker (again before every NOSC
+  request), the internal mutations and the public query all enforce it. KHOA /
+  NOSC (`kosc@kiost.ac.kr`) must approve automated download, 24-hour storage
+  and public display before the user sets it. Activation and removal commands,
+  the disabled behavior and every protected entry point are in the
+  [GOCI-II contract](./seoul-goci2.md#source-terms-and-approval).
+- **Collector:** `convex/seoulGoci2.js` (queue, lease, saves, retention,
+  purge and the `getLatest` query) and `convex/seoulGoci2Node.js` (the
+  worker). The renderer `convex/lib/seoulGoci2Image.js` writes a north-up
+  100 km, 512 × 512 approximate true-colour PNG (`rksi-goci2-truecolor-v1`)
+  from radiance, file F0 when present or labelled reference F0, solar
+  geometry and an approximate Rayleigh removal. Parsing and the request
+  allowlist are in `convex/lib/seoulGoci2Source.js`.
+- **Schema:** `seoulGoci2Frames` (one row per slot file with full request
+  provenance; `by_station_time`, `by_station_key`, `by_storage`) and
+  `seoulGoci2CollectorStatus` (`by_station`), defined in
+  `convex/lib/seoulGoci2Schema.js`.
+- **Schedule:** `seoul_goci2_rksi_every_5_min` queues in the daylight window
+  and does no work within 50 minutes of the newest stored observation;
+  `seoul_goci2_rksi_retention` (hourly at :23) deletes images older than
+  24 hours and orphaned blobs, also while access is not approved.
+
+It was built and tested with synthetic fixtures only and is not activated.
+Real NOSC response formats still need one approved comparison before
+activation. The Himawari loop, its switch and all temperature models are
+unchanged.

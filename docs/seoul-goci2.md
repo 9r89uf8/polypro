@@ -1,0 +1,258 @@
+# RKSI GOCI-II hourly view (approval-gated)
+
+The Seoul dashboard has a second satellite card next to the Himawari-9 loop:
+an hourly, daytime, true-colour view of Incheon International Airport,
+**RKSI, 37.4602° N, 126.4407° E**, from GOCI-II on GK-2B. It is for visual
+inspection only. It does not change the temperature forecast, cloud-trend
+model, market display or any trading decision.
+
+## Status
+
+Built and tested with **synthetic fixtures only**. Nothing is activated:
+`KHOA_GOCI2_ACCESS_APPROVED` is absent on every deployment, and this code has
+made no request to NOSC. The code has not been deployed yet. Real NOSC
+response formats are unverified (see [Before activation](#before-activation)).
+
+## Why GOCI-II
+
+Measurements from the October 30, 2026 investigation (check again before
+relying on them):
+
+- **Sharper.** RKSI lies in local-area slot S007 at row 541, column 1449.
+  The file's own latitude/longitude give pixels of about 0.265 × 0.356 km
+  there; a geostationary model at 128.2° E gives 0.259 × 0.360 km. Himawari-9
+  B03 is about 0.545 × 0.735 km at RKSI, so GOCI-II is about twice as fine
+  per axis. No other public geostationary source is sharper at RKSI.
+- **Hourly and daytime only.** S007 was observed at about :27 UTC. The
+  local-area nominal hours are 23:15–08:15 UTC, so observations fall at about
+  08:27–17:27 KST. The slot NetCDF appeared about 14 minutes after observation
+  (02:41:49 GMT for 02:27:16–02:28:20 UTC).
+- It complements, and does not replace, the 2.5-minute Himawari loop.
+
+NOSC posted ten GK-2B schedule-change notices between May and October 2026,
+and one directory that day was 06:16:30 rather than 06:15:30. Directories,
+times and slots are therefore discovered on every run, never hard-coded.
+
+## Source, terms and approval
+
+- **Source:** KHOA National Ocean Satellite Center (NOSC) OPeNDAP (Hyrax),
+  `https://nosc.go.kr/opendap/GOCI-II/YYYY/MM/DD/L1B_COMP/`. Each slot
+  directory `GK2_GC2_L1B_YYYYMMDD_HHMMSS/` holds one file per slot,
+  `GK2_GOCI2_L1B_YYYYMMDD_HHMMSS_LA_Snnn.nc` (about 433 MB): 12 UInt32
+  `L_TOA` radiance bands (380–865 nm) plus latitude and longitude on a
+  2780 × 2780 geostationary grid (sub-satellite longitude 128.2° E).
+- **Terms:** NOSC pages state only "All rights reserved". The license and
+  acknowledgement attributes in the L1B file are empty (publisher KHOA-NOSC,
+  creator contact `kosc@kiost.ac.kr`). The NOSC OPEN API terms
+  (`https://www.nosc.go.kr/openapi/actionOpenApiIssue.do`, article 6-3) forbid
+  copying, storing or retransmitting results. No reuse terms were found for
+  OPeNDAP. Production use is therefore treated as approval-required.
+- **Approving authority and scope:** KHOA / NOSC must confirm, in writing,
+  all three uses: (1) automated hourly retrieval of DAP2 subsets of GOCI-II
+  L1B slot files by a server, (2) storage of derived airport images for up
+  to 24 hours, and (3) public display of those images on the dashboard with
+  attribution. Contact: NOSC / KHOA, `kosc@kiost.ac.kr`.
+- **Flag:** `KHOA_GOCI2_ACCESS_APPROVED`, a server-side Convex environment
+  variable. Only the exact string `true` enables anything; missing, empty,
+  `false`, `TRUE`, `1`, `" true"` and any other value fail closed. No
+  credential is needed today. If NOSC later issues a key, store it in a
+  separate variable; a working key never implies approval. A reachable,
+  keyless server does not imply approval either.
+
+The hosted app currently uses the Convex deployment `striped-chipmunk-763`,
+which the CLI classifies as development, so use its explicit name. Set the
+flag only after the user confirms that KHOA/NOSC granted the scope above:
+
+```text
+npx convex env set KHOA_GOCI2_ACCESS_APPROVED true --deployment-name striped-chipmunk-763
+```
+
+Remove it to stop new downloads, storage and display immediately. Stored
+images are then hidden at once and deleted by retention within 24 hours; to
+delete them immediately, run the purge until it reports `remaining: false`:
+
+```text
+npx convex env remove KHOA_GOCI2_ACCESS_APPROVED --deployment-name striped-chipmunk-763
+npx convex run seoulGoci2:purgeStoredImages --deployment-name striped-chipmunk-763
+```
+
+For a Convex production target, the same commands use `--prod`
+(`npx convex env set KHOA_GOCI2_ACCESS_APPROVED true --prod`,
+`npx convex env remove KHOA_GOCI2_ACCESS_APPROVED --prod`). Code deployment
+and approval activation are separate operations: deploy with the flag absent
+and verify the disabled state first.
+
+## Protected entry points
+
+| Entry point | Without approval |
+| --- | --- |
+| Cron `seoul_goci2_rksi_every_5_min` → `seoulGoci2:queueScheduledRefresh` | Returns `approval_required` before any database read or scheduling. |
+| Public mutation `seoulGoci2:requestRefresh` (card Refresh button) | Same queue and gate. |
+| Worker action `seoulGoci2Node:collectLatest` | Returns before claiming. Before **every** NOSC request it re-checks the flag locally and through `checkWorker`; streaming reads check it per chunk and cancel on revocation; it is checked again before storing the PNG. |
+| `claimWorker`, `checkWorker`, `recordSourceFailure`, `finishWorker` | Return `null`, `false` or `approval_required`; no state change. |
+| `saveFrame` | Deletes the just-uploaded PNG and stores nothing. |
+| Public query `seoulGoci2:getLatest` | Returns `approval_required` with no database read, storage URL or collector detail. |
+
+There are no HTTP routes. Deletion-only maintenance is intentionally not
+gated so revocation never extends retention: `pruneExpiredFrames` (cron
+`seoul_goci2_rksi_retention`), `deleteUploadIfUnreferenced` and
+`purgeStoredImages`.
+
+**Disabled behavior.** The card says "GOCI-II approval required" and explains
+that nothing is collected or shown until KHOA grants permission. It renders
+no image element and no proxy imagery: Himawari or any other source is never
+shown or relabelled as GOCI-II. Refresh and zoom are disabled.
+
+## Collection
+
+1. **Discovery.** Day catalogs `…/L1B_COMP/catalog.xml` (THREDDS) for the
+   current UTC day and the UTC day three hours earlier; a missing day folder
+   is not an error. Slot directories with a nominal time in the last three
+   hours are considered, newest first, skipping those already stored with the
+   current renderer and those that failed in the last 30 minutes. At most two
+   directories are processed per run.
+2. **Slot selection.** The directory catalog lists `…_LA_Snnn.nc` files. The
+   last verified slot (`lastSlot`) is tried first. On the first run, or if
+   that slot no longer contains the airport square, other published slots are
+   probed with a 3 × 3 latitude/longitude sample. Without a remembered slot
+   the worker waits until a directory is 30 minutes old; with one, it waits up
+   to 45 minutes for that slot before searching.
+3. **Locate.** The slot's DDS gives the grid shape and types. A 72 × 72
+   strided latitude/longitude sample locates RKSI; an affine fit around it
+   maps the 100 km square plus margin to a native window (about 311 × 433
+   pixels). A square that crosses the slot edge is rejected, not partly drawn.
+4. **Download.** The DAS, then five DAP2 subsets of that window: latitude,
+   longitude and `L_TOA_660`, `L_TOA_555`, `L_TOA_443`, about 0.54 MB each.
+   About 2.7 MB per hourly image; whole slot files are never requested.
+
+Every request passes an allowlist of exactly these URL classes on
+`https://nosc.go.kr`: day catalog, directory catalog, `.das`, `.dds`, and a
+`.dods` subset of one allowlisted variable in one canonical encoding (group
+slashes as `%2F`, brackets as `%5B`/`%5D`) with at most 420 × 520 elements.
+Redirects are rejected, `Accept-Encoding` is `identity`, and responses have
+byte limits (catalog 512 KiB, DAS 256 KiB, DDS 64 KiB, subset exact size plus
+16 KiB) and a 25-second deadline. A steady hour costs about 12 requests for
+the image, plus two or three small catalog requests per five-minute poll in
+the period before the next image is due.
+
+Each frame keeps its provenance: source key, slot, nominal and observation
+clocks, catalog size and modification time, the native window, and the
+constraint, byte count and SHA-256 of every request (at most 16).
+
+## Rendering
+
+- **Grid.** A north-up 100 × 100 km square centered on RKSI (local
+  equirectangular), 512 × 512 cells: 5.12 cells per km, 0.195 km cells. This
+  meets the "at least 400 cells per 100 km" requirement; the Himawari grid
+  (256 cells, 0.39 km) would discard GOCI-II detail.
+- **Navigation.** A cubic least-squares map from local km to native
+  row/column is fitted to every second valid file latitude/longitude pair,
+  and every valid pair must agree within 0.35 pixel. The airport marker is
+  the exact coordinate.
+- **Sampling.** Bilinear between native pixels; the nearest valid pixel at a
+  fill edge; otherwise the invalid color `#241932`. Display cells are finer
+  than the source, and zoom does not add detail beyond the native pixels.
+- **Calibration.** Radiance = count × `scale_factor` + `add_offset` from the
+  DAS. `units` must be W m⁻² µm⁻¹ sr⁻¹. `_FillValue` and any
+  `valid_min`/`valid_max` make a pixel invalid.
+- **Reflectance.** ρ = π L d² / (F0 μs). The Earth–Sun distance d follows the
+  day of year. μs comes from the NOAA solar-position equations at each
+  location for the mid-observation time, the mean of the file's
+  `observation_start_time` and `observation_end_time` (about 64 s apart).
+- **F0.** A per-band file attribute named `F0`, `solar_irradiance` or
+  `mean_solar_irradiance` is used when present (W m⁻² µm⁻¹, or
+  mW cm⁻² µm⁻¹, within 15% of the reference); an implausible value rejects
+  the frame. Otherwise the renderer uses reference values of 1885, 1840 and
+  1545 W m⁻² µm⁻¹ for 443, 555 and 660 nm. These are approximate 10 nm
+  band-centre values that agree within about 2% with Thuillier-based F0 for
+  neighbouring ocean-colour bands; they are not official GOCI-II
+  band-integrated values, and no published GOCI-II F0 table was found. The
+  source used is recorded per frame (`display.f0`).
+- **Rayleigh.** An approximate single-scattering removal for colour balance:
+  Hansen & Travis optical depth at standard pressure, Rayleigh phase function
+  at the scattering angle, diffuse transmittance e^(−τ/2μ) and a
+  single-scattering spherical albedo. Multiple scattering, aerosol, gas
+  absorption and terrain pressure are ignored, so some blue haze remains.
+- **Tone.** True colour from 660/555/443 nm with one fixed gamma-2.2 curve
+  over reflectance 0–1.1 for every image; there is no per-image stretch.
+- **Quality.** The sun must be at least 10° above the horizon at RKSI and
+  5° at each pixel, and at least 90% of cells must be valid; otherwise the
+  frame is stored as an honest `unavailable` record with its reason and is
+  not downloaded again. Sun glint is not masked; the card notes it when the
+  minimum glint angle is below 25°.
+- **Limits.** This is not a cloud mask or surface-reflectance product.
+  Cloud height (parallax) is not corrected: GK-2B is almost due south of
+  RKSI at a 43.4° viewing zenith, so a 10 km cloud top appears about 9.5 km
+  north of the point beneath it. Ocean-colour band saturation on bright
+  cloud has not been checked against real files.
+
+## Storage, retention and schedule
+
+- `seoulGoci2Frames`: one row per slot file (`sourceKey`), `ok` with a PNG or
+  `unavailable` with a reason, plus the provenance above. Indexes:
+  `by_station_time`, `by_station_key`, `by_storage`.
+- `seoulGoci2CollectorStatus`: one RKSI row with the run lease and worker
+  token, `lastSlot`, the cleanup cursor and at most 20 recent failures.
+- PNGs are 512 × 512 lossless RGB with the MIME profile
+  `image/png; profile=rksi-goci2-truecolor-v1`, at most 3 MB.
+- **Retention:** 24 hours by observation time. The hourly
+  `seoul_goci2_rksi_retention` cron (`23 * * * *`) deletes expired rows and
+  blobs and sweeps unreferenced blobs of this profile older than 10 minutes,
+  also while access is not approved.
+- **Schedule:** `seoul_goci2_rksi_every_5_min` (`*/5 * * * *`). The queue
+  does no work outside the daylight window (sun at least 5° at RKSI at some
+  point in the last 150 minutes), within 2 minutes of the previous queue,
+  while a run holds its 5-minute lease, or within 50 minutes of the newest
+  stored observation, because the next hourly slot cannot exist yet.
+
+## Dashboard
+
+The card is described in the [Seoul page contract](./seoul-pages.md). It
+shows today's KST images only (latest by default, hourly buttons for earlier
+ones), with 20/50/100 km zoom, an RKSI marker, north arrow, scale bar and
+KST AM/PM observation times. Past and future date pages do not query it.
+
+## Verification (October 30, 2026)
+
+- `node --test test/seoul-goci2-*.test.mjs`: 33 tests covering naming,
+  catalogs, DAS/DDS/DAP2 parsing, the URL allowlist, navigation, reflectance
+  and rendering, every approval entry point for eight non-`true` flag values,
+  queue spacing and leases, frame validation, retention and purge while
+  disabled, and full worker runs against a fake NOSC host (including slot
+  search, waiting, revocation mid-download, provider errors and backoff).
+  All fixtures are synthetic; no request leaves the test process.
+- The actual card was rendered in a browser from an esbuild fixture with
+  labelled synthetic data at 1440, 1100 and 375 px: the approval-required
+  state has no image and disabled controls, and the populated, night,
+  collecting, unavailable and past-date states render without console errors
+  or page overflow. A failing query shows the card's own error state while
+  the Himawari loop keeps working.
+- **Not verified:** real NOSC catalog, DAS/DDS and `.dods` formats; the
+  attribute names for times, scaling, units and F0; real image appearance,
+  PNG size and timing; deployment and the production disabled state.
+
+## Before activation
+
+1. Ask the user before any request to NOSC. With their permission, compare
+   one S007 `.das` and `.dds` and the day and directory `catalog.xml` with
+   the synthetic fixture (`test/fixtures/goci2Synthetic.mjs`): variable
+   paths, the observation time attributes, `scale_factor`, `units`,
+   `_FillValue`, any F0 attribute and the catalog element names. Update the
+   parser and fixture if they differ.
+2. Deploy the Convex code, schema and crons with the flag absent, before the
+   frontend. If the frontend ships first, the missing query fails and an
+   error boundary limits the damage to this card ("GOCI-II status could not
+   load"). Verify that `seoulGoci2:getLatest` returns `approval_required`
+   with no frames and that `seoulGoci2:requestRefresh` returns
+   `approval_required` without queuing.
+3. Set the flag only after the user confirms KHOA/NOSC approval of the scope
+   above, then watch the first runs (collector status, failures, PNG size
+   and appearance).
+
+## References
+
+- [Seoul data sources](./seoul.md#hourly-goci-ii-airport-view--october-30-2026)
+- [RKSI satellite image loop](./seoul-satellite-loop.md)
+- NOSC GOCI-II specification: `https://www.nosc.go.kr/eng/boardContents/actionBoardContentsCons0024.do`
+- NOSC OPEN API terms: `https://www.nosc.go.kr/openapi/actionOpenApiIssue.do`
+- GOCI-II time attribute names: [Satpy GOCI-II L2 reader](https://satpy.readthedocs.io/en/latest/api/satpy.readers.goci2_l2_nc.html)

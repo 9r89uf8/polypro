@@ -87,6 +87,30 @@ remain available independently, including infrared at night. The composite
 has roughly 2 km nominal source sampling at nadir, coarser near RKSI; zoom
 does not add cloud detail. See the [scientific recipe and limitations](./seoul-satellite-loop.md#daytime-cloud-analysis).
 
+An **Hourly high-resolution view** card from GOCI-II on GK-2B sits next to
+the loop: side by side from 1280 px wide, and below it on narrower screens.
+GOCI-II pixels at RKSI are about 0.26 × 0.36 km, about twice as fine per axis
+as Himawari visible, but there is only one image per hour and only in
+daylight. The card shows today's KST images only, the latest by default, with
+hour buttons for earlier ones, 20/50/100 km zoom (50 km default), the RKSI
+marker, a north arrow, a scale bar and KST AM/PM observation times. Notes
+state the native pixel size (zoom adds no detail beyond it), low sun and
+possible sun glint. An image older than 80 minutes in daylight is labelled
+delayed; a rejected newer image shows its reason next to the older image.
+Night, collecting, no-image-yet and failed-collection states are explicit.
+If the card's query itself fails, an error boundary shows "GOCI-II status
+could not load" in the card only; the rest of the page keeps working.
+Past and future date pages show "Available on today's dashboard" and do not
+query the card. The colours are approximate true colour (660/555/443 nm) with
+a fixed curve; they are not a cloud mask and have no cloud-height correction.
+
+The card is approval-gated by `KHOA_GOCI2_ACCESS_APPROVED`. Until KHOA/NOSC
+approve automated download, storage and display and the user sets that flag,
+the card shows **GOCI-II approval required** with that explanation, renders no
+image and no proxy imagery, and disables Refresh and zoom. The page makes no
+other change to the Himawari loop. Collection, rendering, retention and the
+activation and removal commands are in the [GOCI-II contract](./seoul-goci2.md).
+
 The streamlined implementation contains six information areas. This section
 is the source contract for the current UI; historical panel descriptions at
 the end of this document do not describe the streamlined page.
@@ -345,6 +369,16 @@ The source and approval contract is documented in
 These two history reads and the AM/PM presentation change add no collector,
 schema, cron, flag, or approval activation. The earlier production release
 records above describe their named releases and do not verify this extension.
+
+The GOCI-II card reads `seoulGoci2:getLatest({ stationIcao: "RKSI" })` on
+today's route only. Without `KHOA_GOCI2_ACCESS_APPROVED === "true"` it returns
+`approval_required` before any database read or storage URL. It makes no
+external request. Only the card's own Refresh button calls the
+`seoulGoci2:requestRefresh` mutation, which shares the server cron's approval
+gate, daylight window, 2-minute cooldown, lease and hourly spacing. Page entry
+and the page-level Refresh button do not request GOCI-II work. The server
+collects every five minutes in daylight whether or not the page is open, and
+the browser re-evaluates image age every 15 seconds.
 
 For today's route, initial entry and the manual refresh request only:
 

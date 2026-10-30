@@ -428,6 +428,24 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
+// GOCI-II local-area slots are hourly in daylight and appeared about 14 minutes
+// after observation. The queue performs no NOSC request unless the server-side
+// KHOA_GOCI2_ACCESS_APPROVED flag is exactly "true" (docs/seoul-goci2.md).
+crons.cron(
+  "seoul_goci2_rksi_every_5_min",
+  "*/5 * * * *",
+  internal.seoulGoci2.queueScheduledRefresh,
+  { stationIcao: "RKSI" },
+);
+
+// Deletion-only retention runs even while GOCI-II access is not approved.
+crons.cron(
+  "seoul_goci2_rksi_retention",
+  "23 * * * *",
+  internal.seoulGoci2.pruneExpiredFrames,
+  { stationIcao: "RKSI" },
+);
+
 // GK2A SWRAD frames are produced on a ten-minute cadence and commonly appear
 // about twelve minutes later. Queue at a sixteen-minute offset for every frame;
 // the server-side Haurwitz gate skips work below 50 W/m² modeled clear-sky DSR.
