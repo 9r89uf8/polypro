@@ -2,6 +2,30 @@ export const LOOP_WINDOW_MS = 60 * 60 * 1000;
 export const FRAME_CADENCE_MS = 150 * 1000;
 export const STALE_AFTER_MS = 12 * 60 * 1000;
 export const MAX_CHANNEL_FRAMES = 32;
+export const LOOP_CHANNELS = ["visible", "infrared", "cloudAnalysis"];
+export const CLOUD_ANALYSIS_RECIPE = "jma-day-microphysics-warm-v1";
+
+export function isLoopNight(channel, state) {
+  if (!["visible", "cloudAnalysis"].includes(channel)) return false;
+  if (["night", "nighttime", "dark", "low_sun"].includes(state?.status)) return true;
+  const reason = typeof state?.unavailableReason === "string" ? state.unavailableReason.trim() : "";
+  return /\b(?:requires?|needs?)\s+(?:daylight|sunlight|solar\s+elevation)\b/i.test(reason)
+    || /\bsolar\s+elevation\s+(?:is\s+)?below\b/i.test(reason)
+    || /^(?:low\s+(?:solar\s+elevation|sun(?:light)?)|night(?:time)?|darkness)\b/i.test(reason);
+}
+
+export function cloudAnalysisGuide(frame) {
+  const display = frame?.display;
+  if (frame?.channel !== "cloudAnalysis" || display?.recipe !== CLOUD_ANALYSIS_RECIPE
+    || !Array.isArray(display.legend) || !display.legend.length || display.legend.length > 12) return null;
+  if (display.legend.some((entry) => !entry || !/^#[0-9a-f]{6}$/i.test(entry.color ?? "")
+    || typeof entry.label !== "string" || !entry.label.trim() || entry.label.length > 100)) return null;
+  const legend = display.legend.map((entry) => ({ color: entry.color, label: entry.label.trim() }));
+  if (new Set(legend.map((entry) => `${entry.color.toLowerCase()}:${entry.label}`)).size !== legend.length) return null;
+  return { legend, recipe: CLOUD_ANALYSIS_RECIPE,
+    recipeLabel: typeof display.recipeLabel === "string" && display.recipeLabel.trim() && display.recipeLabel.length <= 140
+      ? display.recipeLabel.trim() : "JMA Day Microphysics RGB · warm-season settings" };
+}
 
 const dateFormat = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
@@ -33,7 +57,7 @@ function usableUrl(url) {
 
 export function recentLoopFrames(data, channel, now, { date, isToday = true } = {}) {
   if (!isLiveLoopDate(date, now, isToday) || data?.enabled !== true
-    || data.stationIcao !== "RKSI" || !["visible", "infrared"].includes(channel)) return [];
+    || data.stationIcao !== "RKSI" || !LOOP_CHANNELS.includes(channel)) return [];
   const slots = new Map();
   for (const frame of data.frames ?? []) {
     const time = Number.isFinite(frame?.obsTimeUtc) ? frame.obsTimeUtc : frame?.observedAt;

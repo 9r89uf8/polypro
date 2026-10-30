@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createLoopImagePool, formatLoopDate, formatLoopTime, isLiveLoopDate, LOOP_WINDOW_MS,
+import { CLOUD_ANALYSIS_RECIPE, cloudAnalysisGuide, createLoopImagePool, formatLoopDate, formatLoopTime, isLiveLoopDate, isLoopNight, LOOP_WINDOW_MS,
   MAX_CHANNEL_FRAMES, missingLoopSlots, nextLoopFrame, recentLoopFrames, resolveLoopDisplay,
 } from "../app/seoul/day/[date]/satelliteLoopState.js";
 
@@ -47,6 +47,58 @@ test("frames are chronological, distinct by nominal slot, and keep channels sepa
   assert.deepEqual(rows.map((r) => r.id), ["old", "new"]);
   assert.equal(missingLoopSlots(rows), 1);
   assert.equal(recentLoopFrames(data([frame("ir", 1000, { channel: "infrared" })]), "infrared", NOW, { date: DATE }).length, 1);
+});
+
+test("cloud analysis is a distinct exact channel with the same live-hour and future boundaries", () => {
+  const saved = data([frame("visible", 300000), frame("ir", 150000, { channel: "infrared" }),
+    frame("rgb-old", LOOP_WINDOW_MS, { channel: "cloudAnalysis" }),
+    frame("rgb-new", 1000, { channel: "cloudAnalysis" }),
+    frame("rgb-future", -1, { channel: "cloudAnalysis" }),
+    frame("wrong-case", 1000, { channel: "cloudanalysis" })]);
+  const rows = recentLoopFrames(saved, "cloudAnalysis", NOW, { date: DATE });
+  assert.deepEqual(rows.map((row) => row.id), ["rgb-old", "rgb-new"]);
+  assert.ok(rows.every((row) => row.key.startsWith("cloudAnalysis:")));
+  assert.deepEqual(recentLoopFrames(saved, "cloudanalysis", NOW, { date: DATE }), []);
+  assert.deepEqual(recentLoopFrames(saved, "cloudAnalysis", NOW + LOOP_WINDOW_MS + 15000, { date: DATE }), []);
+  assert.deepEqual(recentLoopFrames(saved, "cloudAnalysis", NOW, { date: "2026-10-29" }), []);
+  assert.deepEqual(recentLoopFrames({ ...saved, enabled: false }, "cloudAnalysis", NOW, { date: DATE }), []);
+});
+
+test("an unavailable cloud-analysis bundle never substitutes visible or infrared images", () => {
+  const saved = data([frame("visible", 1000), frame("ir", 1000, { channel: "infrared" })], {
+    channels: { cloudAnalysis: { status: "unavailable", unavailableReason: "Matching source bands are missing." } },
+  });
+  assert.deepEqual(recentLoopFrames(saved, "cloudAnalysis", NOW, { date: DATE }), []);
+  const daylight = frame("rgb", 300000, { channel: "cloudAnalysis", solarElevationDeg: 22 });
+  saved.frames.push(daylight);
+  saved.channels.cloudAnalysis.unavailableReason = "Daytime RGB requires sunlight.";
+  assert.deepEqual(recentLoopFrames(saved, "cloudAnalysis", NOW, { date: DATE }).map((row) => row.id), ["rgb"]);
+});
+
+test("cloud guide uses only the displayed analysis frame's supported recipe and validated legend", () => {
+  const display = { recipe: CLOUD_ANALYSIS_RECIPE, recipeLabel: "Named synthetic recipe fixture",
+    legend: [{ color: "#ff9933", label: "Synthetic example A" }, { color: "#aabbcc", label: "Synthetic example B" }] };
+  const rgb = frame("rgb", 1000, { channel: "cloudAnalysis", display });
+  assert.deepEqual(cloudAnalysisGuide(rgb).legend, display.legend);
+  assert.equal(cloudAnalysisGuide(rgb).recipeLabel, display.recipeLabel);
+  assert.equal(cloudAnalysisGuide({ ...rgb, channel: "visible" }), null);
+  assert.equal(cloudAnalysisGuide({ ...rgb, display: { ...display, recipe: "unknown-recipe" } }), null);
+  assert.equal(cloudAnalysisGuide({ ...rgb, display: { ...display, legend: [] } }), null);
+  assert.equal(cloudAnalysisGuide({ ...rgb, display: { ...display, legend: [{ color: "url(https://bad.test/)", label: "Bad" }] } }), null);
+  assert.equal(cloudAnalysisGuide({ ...rgb, display: { ...display, legend: [{ color: "#ffffff", label: "" }] } }), null);
+  assert.equal(cloudAnalysisGuide(null), null);
+});
+
+test("night messages require an explicit illumination rejection, not a general daytime quality failure", () => {
+  const state = (unavailableReason) => ({ status: "unavailable", unavailableReason });
+  assert.equal(isLoopNight("cloudAnalysis", state("Day Microphysics requires solar elevation of at least 10 degrees.")), true);
+  assert.equal(isLoopNight("visible", state("Visible image requires solar elevation of at least 5 degrees")), true);
+  assert.equal(isLoopNight("visible", state("Low solar elevation.")), true);
+  assert.equal(isLoopNight("cloudAnalysis", { status: "night" }), true);
+  assert.equal(isLoopNight("cloudAnalysis", state("More than 10 percent of the image lacks reliable daylight, synchronized bands or valid thermal separation.")), false);
+  assert.equal(isLoopNight("cloudAnalysis", state("Missing B07 for the daylight band bundle.")), false);
+  assert.equal(isLoopNight("infrared", state("Low solar elevation.")), false);
+  assert.equal(isLoopNight("cloudAnalysis", undefined), false);
 });
 
 test("loading a selection holds a valid image with its own timestamp; expiry removes it", () => {

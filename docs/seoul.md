@@ -1841,3 +1841,14 @@ fixed visible contrast curve. It retains the original satellite sampling;
 every frame uses the same brightness mapping. Legacy JPEGs are replaced from
 their source objects with validation and retention checks, and playback does
 not mix renderer versions. Details are in the satellite-loop documentation.
+
+The daytime cloud-analysis follow-up adds a fixed JMA Day Microphysics RGB
+composite from public NOAA Himawari-9 B04/R10, B07/R20 and B13/R20 objects.
+It shares `NOAA_HIMAWARI_IMAGES_ENABLED` and the existing one-minute collection
+and retention schedules. Only complete same-slot bundles with validated
+acquisition clocks are rendered; missing bands stay explicit. Per-band keys,
+hashes, source timestamps and acquisition times are retained with each frame.
+The UI adds a named recipe and interpretation legend without changing any
+temperature, cloud-trend or market model. Scientific calibration, daylight
+screens, limitations and validation are documented in the
+[satellite-loop contract](./seoul-satellite-loop.md#daytime-cloud-analysis).

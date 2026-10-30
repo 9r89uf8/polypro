@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import { createHash } from "node:crypto";
 import { internal } from "./_generated/api.js";
 import { decodeHimawariImage } from "./lib/seoulHimawariImage.js";
+import { decodeHimawariMicrophysics } from "./lib/seoulHimawariMicrophysics.js";
 
 const ORIGIN = "https://noaa-himawari9.s3.amazonaws.com";
 const HOUR = 60 * 60_000;
@@ -14,7 +15,11 @@ const MAX_PNG = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
 const MAX_BATCH_MS = 140_000;
 const RENDERER_VERSION = "rksi-himawari-image-v2";
+const CLOUD_RENDERER_VERSION = "rksi-himawari-microphysics-v1";
+const COLLECTION_VERSION = "rksi-himawari-collection-v3";
 const IMAGE_CONTENT_TYPE = "image/png; profile=rksi-himawari-loop-v2";
+const CLOUD_CONTENT_TYPE = "image/png; profile=rksi-himawari-microphysics-v1";
+const CLOUD_BANDS = ["B04", "B07", "B13"];
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const PNG_IEND = [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130];
 
@@ -36,20 +41,19 @@ function xmlTag(text, name) {
   return matches.length === 1 ? matches[0][1] : null;
 }
 function parseListedCandidate(key, size, modified) {
-  const match = /^AHI-L1b-Japan\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\/HS_H09_(\d{8})_(\d{4})_(B03|B13)_JP(0[1-4])_(R05|R20)_S0101\.DAT\.bz2$/.exec(key ?? "");
+  const match = /^AHI-L1b-Japan\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})\/HS_H09_(\d{8})_(\d{4})_(B03|B04|B07|B13)_JP(0[1-4])_(R05|R10|R20)_S0101\.DAT\.bz2$/.exec(key ?? "");
   if (!match) return null;
   const [, year, month, day, timeline, date, nameTime, band, jp, resolution] = match;
-  const channel = band === "B03" ? "visible" : "infrared";
   if (date !== `${year}${month}${day}` || timeline !== nameTime || Number(timeline.slice(0, 2)) > 23
       || Number(timeline.slice(2)) > 59 || Number(timeline.slice(2)) % 10 !== 0
-      || resolution !== (channel === "visible" ? "R05" : "R20")) return null;
+      || resolution !== ({ B03: "R05", B04: "R10", B07: "R20", B13: "R20" })[band]) return null;
   const base = Date.parse(`${year}-${month}-${day}T${timeline.slice(0, 2)}:${timeline.slice(2)}:00Z`);
   if (!Number.isFinite(base) || new Date(base).toISOString().slice(0, 10) !== `${year}-${month}-${day}`) return null;
   const nominalTimeUtc = base + (Number(jp) - 1) * 150_000;
   const sourceLastModifiedAt = Date.parse(modified ?? "");
   if (!/^\d+$/.test(size ?? "") || !Number.isSafeInteger(Number(size)) || Number(size) <= 0 || Number(size) > MAX_COMPRESSED
       || !Number.isFinite(sourceLastModifiedAt) || sourceLastModifiedAt < nominalTimeUtc) return null;
-  return { key, channel, nominalTimeUtc, sourceLastModifiedAt, sourceSize: Number(size) };
+  return { key, band, resolution, nominalTimeUtc, sourceLastModifiedAt, sourceSize: Number(size) };
 }
 function parseListing(text, prefix, now) {
   if (!text.includes("<ListBucketResult") || !text.includes("</ListBucketResult>") || /<!DOCTYPE|<!ENTITY/i.test(text)
@@ -72,7 +76,7 @@ async function boundedFetch(ctx, runId, workerToken, url, limit) {
   const listing = endpoint.pathname === "/" && endpoint.searchParams.get("list-type") === "2"
     && /^AHI-L1b-Japan\/\d{4}\/\d{2}\/\d{2}\/\d{2}$/.test(endpoint.searchParams.get("prefix") ?? "")
     && endpoint.searchParams.get("max-keys") === "1000" && [...endpoint.searchParams.keys()].length === 3;
-  const binary = !endpoint.search && /^\/AHI-L1b-Japan\/\d{4}\/\d{2}\/\d{2}\/\d{4}\/HS_H09_\d{8}_\d{4}_B(?:03|13)_JP0[1-4]_R(?:05|20)_S0101\.DAT\.bz2$/.test(endpoint.pathname);
+  const binary = !endpoint.search && /^\/AHI-L1b-Japan\/\d{4}\/\d{2}\/\d{2}\/\d{4}\/HS_H09_\d{8}_\d{4}_B(?:03|04|07|13)_JP0[1-4]_R(?:05|10|20)_S0101\.DAT\.bz2$/.test(endpoint.pathname);
   if (endpoint.origin !== ORIGIN || endpoint.username || endpoint.password || endpoint.hash || (!listing && !binary)) throw new Error("Unexpected NOAA satellite endpoint.");
   await assertWorker(ctx, runId, workerToken); // Same server-side switch immediately before each request.
   const startedAt = Date.now();
@@ -119,10 +123,68 @@ async function discover(ctx, runId, workerToken) {
       found.set(candidate.key, candidate);
     }
   }
-  // No more than25 regional slots/channel can contribute to the last hour.
-  const ordered = [...found.values()].sort((a, b) => b.nominalTimeUtc - a.nominalTimeUtc || a.channel.localeCompare(b.channel));
-  const counts = { visible: 0, infrared: 0 };
-  return ordered.filter(candidate => ++counts[candidate.channel] <= 25);
+  const candidates = [], slots = new Map(), missingBundles = [];
+  for (const source of found.values()) {
+    if (!slots.has(source.nominalTimeUtc)) slots.set(source.nominalTimeUtc, new Map());
+    slots.get(source.nominalTimeUtc).set(source.band, source);
+    if (source.band === "B03" || source.band === "B13") {
+      candidates.push({ key: source.key, channel: source.band === "B03" ? "visible" : "infrared",
+        nominalTimeUtc: source.nominalTimeUtc, sourceLastModifiedAt: source.sourceLastModifiedAt, sourceSize: source.sourceSize });
+    }
+  }
+  for (const [nominalTimeUtc, bands] of slots) {
+    const missingBands = CLOUD_BANDS.filter(band => !bands.has(band));
+    if (missingBands.length) { missingBundles.push({ nominalTimeUtc, missingBands }); continue; }
+    const sources = CLOUD_BANDS.map(band => bands.get(band));
+    candidates.push({ key: sources[0].key, channel: "cloudAnalysis", nominalTimeUtc, sources,
+      sourceSize: sources.reduce((sum, source) => sum + source.sourceSize, 0),
+      sourceLastModifiedAt: Math.max(...sources.map(source => source.sourceLastModifiedAt)) });
+  }
+  // Rebuild newest-first work at least once/minute between batches. Existing
+  // current-renderer frames are removed transactionally by savePlan.
+  const ordered = candidates.sort((a, b) => b.nominalTimeUtc - a.nominalTimeUtc || a.channel.localeCompare(b.channel));
+  const counts = { visible: 0, infrared: 0, cloudAnalysis: 0 };
+  return { candidates: ordered.filter(candidate => ++counts[candidate.channel] <= 25),
+    missingBundles: missingBundles.sort((a, b) => b.nominalTimeUtc - a.nominalTimeUtc).slice(0, 25) };
+}
+
+function sourcesFor(candidate) {
+  if (!["visible", "infrared", "cloudAnalysis"].includes(candidate.channel)) throw new Error("Unsupported satellite image channel.");
+  const sources = candidate.channel === "cloudAnalysis" ? candidate.sources : [parseListedCandidate(candidate.key,
+    String(candidate.sourceSize), new Date(candidate.sourceLastModifiedAt).toISOString())];
+  if (!Array.isArray(sources) || sources.length !== (candidate.channel === "cloudAnalysis" ? 3 : 1)) throw new Error("Incomplete satellite source bundle.");
+  for (const source of sources) {
+    if (!source) throw new Error("Invalid satellite source identity.");
+    const parsed = parseListedCandidate(source.key, String(source.sourceSize), new Date(source.sourceLastModifiedAt).toISOString());
+    if (!parsed || !["key", "band", "resolution", "nominalTimeUtc", "sourceLastModifiedAt", "sourceSize"].every(key => parsed[key] === source[key])
+        || source.nominalTimeUtc !== candidate.nominalTimeUtc) throw new Error("Source bands do not share one valid satellite slot.");
+  }
+  if (candidate.channel === "cloudAnalysis" && (!CLOUD_BANDS.every(band => sources.filter(source => source.band === band).length === 1)
+      || candidate.key !== sources.find(source => source.band === "B04")?.key
+      || candidate.sourceSize !== sources.reduce((sum, source) => sum + source.sourceSize, 0)
+      || candidate.sourceLastModifiedAt !== Math.max(...sources.map(source => source.sourceLastModifiedAt)))) throw new Error("Invalid cloud-analysis bundle identity.");
+  if (candidate.channel !== "cloudAnalysis" && sources[0].band !== (candidate.channel === "visible" ? "B03" : "B13")) throw new Error("Satellite band does not match its channel.");
+  return [...sources].sort((a, b) => a.band.localeCompare(b.band));
+}
+
+function sourceObservations(decoded, downloaded, cloud) {
+  if (!cloud) return downloaded.map(source => ({ ...source, observedAt: decoded.observedAt }));
+  const observations = decoded.sourceObservations ?? [];
+  if (!Array.isArray(observations) || observations.length > 3 || (decoded.status === "ok" && observations.length !== 3)
+      || new Set(observations.map(source => source.key)).size !== observations.length) throw new Error("Invalid decoded source-observation coverage.");
+  for (const observation of observations) {
+    const source = downloaded.find(item => item.key === observation.key && item.band === observation.band);
+    if (!source || !Number.isFinite(observation.observedAt) || observation.observedAt < source.nominalTimeUtc
+        || observation.observedAt > source.nominalTimeUtc + 150_000 || observation.observedAt > Date.now()) throw new Error("Invalid per-band acquisition time.");
+  }
+  if (decoded.status === "ok") {
+    const times = observations.map(source => source.observedAt);
+    if (Math.max(...times) - Math.min(...times) > 60_000 || decoded.observedAt !== Math.max(...times)) throw new Error("Cloud-analysis bands are not synchronized within60seconds.");
+  }
+  return downloaded.map(source => {
+    const observation = observations.find(item => item.key === source.key);
+    return { ...source, ...(observation ? { observedAt: observation.observedAt } : {}) };
+  });
 }
 
 export const collectFrames = internalActionGeneric({
@@ -130,16 +192,17 @@ export const collectFrames = internalActionGeneric({
   handler: async (ctx, args) => {
     if (!enabled()) return { status: "disabled" };
     const claim = await ctx.runMutation(internal.seoulSatellite.claimWorker, { runId: args.runId });
-    if (!claim || claim.rendererVersion !== RENDERER_VERSION) return { status: "superseded_or_busy" };
+    if (!claim || claim.collectionVersion !== COLLECTION_VERSION) return { status: "superseded_or_busy" };
     const workerToken = claim.workerToken;
     const attemptedKeys = [];
     const objectErrors = [];
+    let reusableInfrared = null;
     const batchStarted = Date.now();
     try {
       let candidates = claim.pendingCandidates;
       if (!claim.planReady) {
         const discovered = await discover(ctx, args.runId, workerToken);
-        candidates = await ctx.runMutation(internal.seoulSatellite.savePlan, { runId: args.runId, workerToken, candidates: discovered });
+        candidates = await ctx.runMutation(internal.seoulSatellite.savePlan, { runId: args.runId, workerToken, ...discovered });
         if (candidates === null) return { status: "superseded" };
       }
       for (const candidate of candidates.slice(0, 4)) {
@@ -148,24 +211,45 @@ export const collectFrames = internalActionGeneric({
         await assertWorker(ctx, args.runId, workerToken);
         attemptedKeys.push(candidate.key);
         try {
-        const response = await boundedFetch(ctx, args.runId, workerToken, `${ORIGIN}/${candidate.key}`, MAX_COMPRESSED);
-        if (response.contentLength !== candidate.sourceSize || Date.parse(response.lastModified ?? "") !== candidate.sourceLastModifiedAt) {
-          throw new Error("NOAA object changed between listing and download; it will be rediscovered on the next refresh.");
+        const plannedSources = sourcesFor(candidate);
+        const downloaded = [];
+        for (const source of plannedSources) {
+          await assertWorker(ctx, args.runId, workerToken);
+          let captured = reusableInfrared?.key === source.key && reusableInfrared.sourceLastModifiedAt === source.sourceLastModifiedAt
+            && reusableInfrared.sourceSize === source.sourceSize ? reusableInfrared : null;
+          if (!captured) {
+            let response;
+            try { response = await boundedFetch(ctx, args.runId, workerToken, `${ORIGIN}/${source.key}`, MAX_COMPRESSED); }
+            catch (error) { throw new Error(`${source.band} source request failed: ${concise(error)}`); }
+            if (response.contentLength !== source.sourceSize || Date.parse(response.lastModified ?? "") !== source.sourceLastModifiedAt) {
+              throw new Error(`${source.band} NOAA object changed between listing and download; it will be rediscovered on the next refresh.`);
+            }
+            captured = { ...source, bytes: response.bytes, fetchedAt: response.receivedAt, sourceSha256: digest(response.bytes) };
+            if (source.band === "B13") reusableInfrared = captured; // At most one reusable binary retained.
+          }
+          downloaded.push(captured);
         }
+        const cloud = candidate.channel === "cloudAnalysis";
+        const rendererVersion = cloud ? CLOUD_RENDERER_VERSION : RENDERER_VERSION;
         let decoded;
         try {
-          decoded = decodeHimawariImage(response.bytes, { key: candidate.key, nominalTimeUtc: candidate.nominalTimeUtc, channel: candidate.channel });
+          decoded = cloud
+            ? decodeHimawariMicrophysics(downloaded, { nominalTimeUtc: candidate.nominalTimeUtc, channel: "cloudAnalysis" })
+            : decodeHimawariImage(downloaded[0].bytes, { key: candidate.key, nominalTimeUtc: candidate.nominalTimeUtc, channel: candidate.channel });
         } catch (error) {
-          decoded = { status: "unavailable", version: RENDERER_VERSION, reason: `Image decode rejected: ${concise(error)}`, observedAt: candidate.nominalTimeUtc };
+          decoded = { status: "unavailable", version: rendererVersion, reason: `Image decode rejected: ${concise(error)}`, observedAt: candidate.nominalTimeUtc };
         }
         await assertWorker(ctx, args.runId, workerToken);
-        if (decoded.version !== RENDERER_VERSION) throw new Error("Decoder renderer version does not match the active image renderer.");
+        if (decoded.version !== rendererVersion) throw new Error("Decoder renderer version does not match the active image renderer.");
         const observedAt = decoded.observedAt;
-        if (!Number.isFinite(observedAt) || observedAt < candidate.nominalTimeUtc || observedAt > candidate.nominalTimeUtc + 150_000) throw new Error("Decoder returned an invalid acquisition time.");
+        if (!Number.isFinite(observedAt) || observedAt < candidate.nominalTimeUtc || observedAt > candidate.nominalTimeUtc + 150_000 || observedAt > Date.now()) throw new Error("Decoder returned an invalid acquisition time.");
+        const sources = sourceObservations(decoded, downloaded, cloud).map(({ bytes: _bytes, ...source }) => source);
+        const imageBytes = cloud ? decoded.imageBytes : decoded.pngBytes;
         let storageId;
         try {
           if (decoded.status === "ok") {
-            const png = decoded.pngBytes;
+            if (cloud && decoded.contentType !== "image/png") throw new Error("Cloud-analysis decoder returned an unexpected content type.");
+            const png = imageBytes;
             if (!(png instanceof Uint8Array) || png.byteLength < 45 || png.byteLength > MAX_PNG
                 || !PNG_SIGNATURE.every((value, index) => png[index] === value)
                 || !PNG_IEND.every((value, index) => png[png.byteLength - 12 + index] === value)) throw new Error("Decoder returned an invalid or oversized PNG.");
@@ -174,15 +258,16 @@ export const collectFrames = internalActionGeneric({
               throw new Error("Decoder PNG dimensions differ from the fixed256-pixel grid.");
             }
             await assertWorker(ctx, args.runId, workerToken);
-            storageId = await ctx.storage.store(new Blob([png], { type: IMAGE_CONTENT_TYPE }));
+            storageId = await ctx.storage.store(new Blob([png], { type: cloud ? CLOUD_CONTENT_TYPE : IMAGE_CONTENT_TYPE }));
             // Safe even if a later mutation response is lost: only unreferenced uploads are removed.
             await ctx.scheduler.runAfter(5 * 60_000, internal.seoulSatellite.deleteUploadIfUnreferenced, { storageId });
           } else if (decoded.status !== "unavailable") throw new Error("Decoder returned an unsupported status.");
           const frame = { stationIcao: "RKSI", channel: candidate.channel, source: "noaa_himawari9", sourceKey: candidate.key,
-            nominalTimeUtc: candidate.nominalTimeUtc, obsTimeUtc: observedAt, status: decoded.status, rendererVersion: RENDERER_VERSION,
+            nominalTimeUtc: candidate.nominalTimeUtc, obsTimeUtc: observedAt, status: decoded.status, rendererVersion,
             sourceLastModifiedAt: candidate.sourceLastModifiedAt, sourceSize: candidate.sourceSize,
-            fetchedAt: response.receivedAt, capturedAt: Date.now(), sourceSha256: digest(response.bytes),
-            ...(storageId ? { storageId, imageSha256: digest(decoded.pngBytes) } : { reason: concise(decoded.reason ?? "Image unavailable.") }),
+            fetchedAt: Math.max(...sources.map(source => source.fetchedAt)), capturedAt: Date.now(), sourceObjects: sources,
+            sourceSha256: cloud ? digest(JSON.stringify(sources.map(source => ({ key: source.key, sourceSha256: source.sourceSha256 })))) : sources[0].sourceSha256,
+            ...(storageId ? { storageId, imageSha256: digest(imageBytes) } : { reason: concise(decoded.reason ?? "Image unavailable.") }),
             ...(Number.isFinite(decoded.solarElevationDeg) ? { solarElevationDeg: decoded.solarElevationDeg } : {}),
             ...(Number.isFinite(decoded.validFraction) ? { validFraction: decoded.validFraction } : {}),
             ...(decoded.geometry ? { geometry: decoded.geometry } : {}), ...(decoded.display ? { display: decoded.display } : {}) };

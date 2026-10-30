@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { decodeHimawariMicrophysics as realMicrophysicsDecoder } from "../convex/lib/seoulHimawariMicrophysics.js";
 
 const source = await readFile(new URL("../convex/seoulSatelliteNode.js", import.meta.url), "utf8");
-const construct = new Function("internalActionGeneric", "v", "createHash", "internal", "decodeHimawariImage", "process", "Date", "fetch", "setTimeout", "clearTimeout", "Buffer", "Blob",
+const construct = new Function("internalActionGeneric", "v", "createHash", "internal", "decodeHimawariImage", "decodeHimawariMicrophysics", "process", "Date", "fetch", "setTimeout", "clearTimeout", "Buffer", "Blob",
   source.replace(/import[\s\S]*?from\s+"[^"]+";\s*/g, "").replace(/export const /g, "const ")
   + "\nreturn {collectFrames,parseListing,parseListedCandidate,hourlyPrefixes};");
 const NOW = Date.parse("2026-10-30T01:20:00Z"), MINUTE = 60_000, ORIGIN = "https://noaa-himawari9.s3.amazonaws.com";
 const VERSION = "rksi-himawari-image-v2";
+const CLOUD_VERSION = "rksi-himawari-microphysics-v1";
+const COLLECTION_VERSION = "rksi-himawari-collection-v3";
 function pngBytes() {
   const bytes = Buffer.alloc(45);
   Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes);
@@ -24,13 +28,25 @@ function object(time = NOW - 10 * MINUTE, channel = "infrared") {
   return { key, channel, nominalTimeUtc: time, sourceLastModifiedAt: time + 6 * MINUTE,
     sourceSize: 100, bytes: Buffer.alloc(100, 3) };
 }
+function objectBand(band, time = NOW - 10 * MINUTE) {
+  const original = object(time, band === "B03" ? "visible" : "infrared");
+  return { ...original, band,
+    key: original.key.replace(/_B(?:03|13)_/, `_${band}_`).replace(/_R(?:05|20)_/, `_${band === "B03" ? "R05" : band === "B04" ? "R10" : "R20"}_`) };
+}
+function cloudResult(inputs, opts) {
+  const sourceObservations = inputs.map((input, index) => ({ key: input.key, band: input.band, observedAt: opts.nominalTimeUtc + 54_000 + index * 500 }));
+  return { status: "ok", version: CLOUD_VERSION, imageBytes: pngBytes(), contentType: "image/png",
+    observedAt: Math.max(...sourceObservations.map(source => source.observedAt)), sourceObservations,
+    solarElevationDeg: 30, validFraction: .95,
+    geometry: { spanKm: 100, centerLatitude: 37.4602, centerLongitude: 126.4407 }, display: { kind: "cloud-fixture" } };
+}
 const xml = (entries, truncated = "false") => `<ListBucketResult><IsTruncated>${truncated}</IsTruncated>${entries.map(row => `<Contents><Key>${row.key}</Key><LastModified>${new Date(row.sourceLastModifiedAt).toISOString()}</LastModified><Size>${row.sourceSize}</Size></Contents>`).join("")}</ListBucketResult>`;
 
-function harness({ flag = "true", objects = [object()], onRead, responseOverrides, decode, busy = false,
+function harness({ flag = "true", objects = [object()], onRead, responseOverrides, decode, microdecode, busy = false, now = NOW,
   checkWorker = () => true, onStore, pending } = {}) {
   const env = { NOAA_HIMAWARI_IMAGES_ENABLED: flag };
-  let clock = NOW, nextUpload = 0;
-  const calls = { fetch: [], decoded: [], stored: [], saved: [], failures: [], cleanup: [], scheduled: [], queries: [], mutations: [], cancelled: [], finish: [] };
+  let clock = now, nextUpload = 0;
+  const calls = { fetch: [], decoded: [], microDecoded: [], stored: [], saved: [], failures: [], cleanup: [], scheduled: [], queries: [], mutations: [], cancelled: [], finish: [] };
   function response(bytes, label, headers = {}) {
     const override = responseOverrides?.(label, headers) ?? {};
     const values = { "content-length": String(bytes.length), ...headers, ...override.headers };
@@ -61,8 +77,8 @@ function harness({ flag = "true", objects = [object()], onRead, responseOverride
     async runQuery(name, args) { calls.queries.push({ name, args }); return env.NOAA_HIMAWARI_IMAGES_ENABLED === "true" && checkWorker(calls); },
     async runMutation(name, args) {
       calls.mutations.push({ name, args });
-      if (name === "claimWorker") return busy ? null : { workerToken: "run:1", rendererVersion: VERSION, planReady: Boolean(pending), pendingCandidates: pending ?? [] };
-      if (name === "savePlan") { calls.plan = args.candidates; return args.candidates.slice(0, 4); }
+      if (name === "claimWorker") return busy ? null : { workerToken: "run:1", collectionVersion: COLLECTION_VERSION, planReady: Boolean(pending), pendingCandidates: pending ?? [] };
+      if (name === "savePlan") { calls.plan = args.candidates; calls.bundleGaps = args.missingBundles; return args.candidates.slice(0, 4); }
       if (name === "saveFrame") { calls.saved.push(args.frame); return { stored: true, status: args.frame.status }; }
       if (name === "recordSourceFailure") { calls.failures.push(args); return env.NOAA_HIMAWARI_IMAGES_ENABLED === "true"
         ? { recorded: true, status: "source_failed" } : { recorded: false, status: "disabled" }; }
@@ -70,7 +86,8 @@ function harness({ flag = "true", objects = [object()], onRead, responseOverride
       if (name === "deleteUploadIfUnreferenced") { calls.cleanup.push(args.storageId); return null; }
       throw new Error(`Unexpected mutation ${name}`);
     },
-    storage: { async store(blob) { assert.equal(blob.type, "image/png; profile=rksi-himawari-loop-v2"); calls.stored.push(blob.size); onStore?.({ env, calls }); return `upload${++nextUpload}`; } },
+    storage: { async store(blob) { assert.ok(["image/png; profile=rksi-himawari-loop-v2", "image/png; profile=rksi-himawari-microphysics-v1"].includes(blob.type));
+      calls.stored.push(blob.size); onStore?.({ env, calls }); return `upload${++nextUpload}`; } },
     scheduler: { async runAfter(delay, name, args) { calls.scheduled.push({ delay, name, args }); } },
   };
   const decoder = (bytes, opts) => {
@@ -79,9 +96,13 @@ function harness({ flag = "true", objects = [object()], onRead, responseOverride
       observedAt: opts.nominalTimeUtc + 54_000, solarElevationDeg: 30, validFraction: .95,
       geometry: { spanKm: 100, centerLatitude: 37.4602, centerLongitude: 126.4407 }, display: { kind: "fixture" } };
   };
+  const cloudDecoder = (inputs, opts) => {
+    calls.microDecoded.push({ keys: inputs.map(source => source.key), bands: inputs.map(source => source.band), opts });
+    return microdecode ? microdecode(inputs, opts) : cloudResult(inputs, opts);
+  };
   class FakeDate extends Date { static now() { return clock; } }
   const v = new Proxy({}, { get: () => () => ({}) });
-  const module = construct(value => value, v, createHash, internal, decoder, { env }, FakeDate, fetch,
+  const module = construct(value => value, v, createHash, internal, decoder, cloudDecoder, { env }, FakeDate, fetch,
     () => 1, () => {}, Buffer, Blob);
   return { calls, env, module, ctx, run: () => module.collectFrames.handler(ctx, { runId: "run" }) };
 }
@@ -180,4 +201,122 @@ test("only exact-version, correctly framed 256-square PNG output reaches storage
     } });
     await h.run(); assert.equal(h.calls.stored.length, 0, kind); assert.equal(h.calls.failures.length, 1, kind);
   }
+});
+
+test("cloud analysis captures only a complete same-slot bundle with per-object hashes and acquisition times", async () => {
+  const objects = ["B03", "B04", "B07", "B13"].map(band => objectBand(band));
+  const h = harness({ objects }); await h.run();
+  assert.equal(h.calls.microDecoded.length, 1);
+  assert.deepEqual(h.calls.microDecoded[0].bands, ["B04", "B07", "B13"]);
+  const cloud = h.calls.saved.find(frame => frame.channel === "cloudAnalysis");
+  assert.ok(cloud);
+  assert.equal(cloud.rendererVersion, CLOUD_VERSION);
+  assert.equal(cloud.sourceKey, objects[1].key);
+  assert.equal(cloud.sourceSize, 300);
+  assert.equal(cloud.obsTimeUtc, objects[1].nominalTimeUtc + 55_000);
+  assert.deepEqual(cloud.sourceObjects.map(source => source.band), ["B04", "B07", "B13"]);
+  assert.ok(cloud.sourceObjects.every(source => /^[a-f0-9]{64}$/.test(source.sourceSha256) && source.fetchedAt === NOW && Number.isFinite(source.observedAt)));
+  assert.equal(h.calls.saved.length, 3);
+  assert.equal(h.calls.fetch.filter(call => new URL(call.url).pathname.endsWith("bz2")).length, 4,
+    "The same downloaded B13 is reused for the individual IR frame");
+});
+
+test("missing or cross-slot cloud bands stay explicit gaps without a partial composite", async () => {
+  for (const objects of [[objectBand("B04"), objectBand("B13")],
+    [objectBand("B04"), objectBand("B07", NOW - 12.5 * MINUTE), objectBand("B13")]]) {
+    const h = harness({ objects }); await h.run();
+    assert.equal(h.calls.microDecoded.length, 0);
+    assert.equal(h.calls.saved.some(frame => frame.channel === "cloudAnalysis"), false);
+    assert.ok(h.calls.bundleGaps.some(gap => gap.missingBands.includes("B07")));
+  }
+});
+
+test("a failed source in an advertised full bundle does not upload a partial image or starve individual channels", async () => {
+  const objects = ["B03", "B04", "B07", "B13"].map(band => objectBand(band));
+  const h = harness({ objects, responseOverrides: label => label === objects[2].key ? { ok: false, status: 503 } : {} });
+  await h.run();
+  assert.equal(h.calls.microDecoded.length, 0);
+  assert.equal(h.calls.failures.length, 1);
+  assert.equal(h.calls.failures[0].key, objects[1].key, "Composite failures use their stable B04 identity");
+  assert.deepEqual(h.calls.saved.map(frame => frame.channel), ["infrared", "visible"]);
+});
+
+test("cloud decoder synchronization, provenance, renderer and PNG content type are enforced before upload", async () => {
+  for (const mode of ["missing_observation", "wrong_key", "cross_slot_time", "unsynchronized", "wrong_aggregate_time", "wrong_version", "wrong_content_type"]) {
+    const objects = ["B04", "B07", "B13"].map(band => objectBand(band));
+    const h = harness({ objects, microdecode(inputs, opts) {
+      const result = cloudResult(inputs, opts);
+      if (mode === "missing_observation") result.sourceObservations.pop();
+      if (mode === "wrong_key") result.sourceObservations[0].key = inputs[1].key;
+      if (mode === "cross_slot_time") result.sourceObservations[0].observedAt = opts.nominalTimeUtc + 160_000;
+      if (mode === "unsynchronized") { result.sourceObservations[0].observedAt = opts.nominalTimeUtc + 120_000; result.observedAt = result.sourceObservations[0].observedAt; }
+      if (mode === "wrong_aggregate_time") result.observedAt -= 500;
+      if (mode === "wrong_version") result.version = VERSION;
+      if (mode === "wrong_content_type") result.contentType = "image/jpeg";
+      return result;
+    } });
+    await h.run();
+    assert.equal(h.calls.saved.some(frame => frame.channel === "cloudAnalysis"), false, mode);
+    assert.equal(h.calls.failures.length, 1, mode);
+    assert.equal(h.calls.saved.length, 1, "Valid single-band IR still succeeds");
+  }
+});
+
+test("cloud daylight rejection retains full captured-source provenance without image bytes", async () => {
+  const h = harness({ objects: ["B04", "B07", "B13"].map(band => objectBand(band)), microdecode(inputs, opts) {
+    const result = cloudResult(inputs, opts);
+    return { ...result, status: "unavailable", reason: "Day Microphysics requires adequate daylight.", imageBytes: undefined };
+  } });
+  await h.run();
+  const cloud = h.calls.saved.find(frame => frame.channel === "cloudAnalysis");
+  assert.equal(cloud.status, "unavailable");
+  assert.equal(cloud.storageId, undefined);
+  assert.equal(cloud.sourceObjects.length, 3);
+  assert.equal(h.calls.stored.length, 1, "Only the individual IR image is uploaded");
+});
+
+test("malformed partial pending bundles fail before any external object request", async () => {
+  const sources = ["B04", "B13"].map(band => {
+    const row = objectBand(band);
+    return { key: row.key, band, resolution: band === "B04" ? "R10" : "R20",
+      nominalTimeUtc: row.nominalTimeUtc, sourceSize: row.sourceSize, sourceLastModifiedAt: row.sourceLastModifiedAt };
+  });
+  const pending = [{ key: sources[0].key, channel: "cloudAnalysis", nominalTimeUtc: sources[0].nominalTimeUtc,
+    sourceSize: 200, sourceLastModifiedAt: sources[0].sourceLastModifiedAt, sources }];
+  const h = harness({ pending }); await h.run();
+  assert.equal(h.calls.fetch.length, 0);
+  assert.equal(h.calls.microDecoded.length, 0);
+  assert.equal(h.calls.stored.length, 0);
+  assert.equal(h.calls.failures.length, 1);
+});
+
+const realManifest = new URL("../tmp/seoul-microphysics/source-files.json", import.meta.url);
+test("saved real three-band bytes pass the worker contract with complete measured acquisition provenance", {
+  skip: !existsSync(realManifest),
+}, async () => {
+  const manifest = JSON.parse(readFileSync(realManifest, "utf8"));
+  const nominalTimeUtc = Date.parse("2026-10-30T01:57:30Z");
+  // HTTP/observer clocks below are synthetic transport fixtures. The raw HSD
+  // bytes and their acquisition times are real retained evidence; no network.
+  const objects = manifest.map(entry => {
+    const bytes = readFileSync(new URL(`../tmp/seoul-microphysics/${entry.key.split("/").at(-1)}`, import.meta.url));
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), entry.sha256);
+    return { key: entry.key, band: entry.band, resolution: entry.band === "B04" ? "R10" : "R20", nominalTimeUtc,
+      sourceLastModifiedAt: nominalTimeUtc + 6 * MINUTE, sourceSize: bytes.length, bytes };
+  });
+  const sources = objects.map(({ bytes: _bytes, ...entry }) => entry);
+  const pending = [{ key: sources.find(source => source.band === "B04").key, channel: "cloudAnalysis", nominalTimeUtc, sources,
+    sourceSize: sources.reduce((sum, source) => sum + source.sourceSize, 0), sourceLastModifiedAt: nominalTimeUtc + 6 * MINUTE }];
+  const h = harness({ objects, pending, now: nominalTimeUtc + 15 * MINUTE, microdecode: realMicrophysicsDecoder });
+  await h.run();
+  assert.equal(h.calls.failures.length, 0);
+  assert.equal(h.calls.saved.length, 1);
+  const frame = h.calls.saved[0];
+  assert.equal(frame.channel, "cloudAnalysis");
+  assert.equal(frame.rendererVersion, CLOUD_VERSION);
+  assert.equal(frame.validFraction, 1);
+  assert.equal(frame.obsTimeUtc, 1793325500710);
+  assert.equal(Math.max(...frame.sourceObjects.map(source => source.observedAt)) - Math.min(...frame.sourceObjects.map(source => source.observedAt)), 1038);
+  for (const source of frame.sourceObjects) assert.equal(source.sourceSha256, manifest.find(entry => entry.key === source.key).sha256);
+  assert.ok(h.calls.stored[0] > 1000);
 });

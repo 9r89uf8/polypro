@@ -64,7 +64,7 @@ collection does not restore historical rows deleted with the old database.
 
 The live page also includes an [RKSI satellite image loop](./seoul-satellite-loop.md)
 below the temperature chart. It retains the last hour of available Himawari
-visible and infrared images, centers every frame on the airport, and offers
+visible, infrared and daytime cloud-analysis images, centers every frame on the airport, and offers
 play/pause, frame scrubbing, speed and 20/50/100 km zoom controls. The default
 view is 50 km across. Frame times use KST with AM/PM; missing frames, delayed
 imagery and daytime-only visible coverage are explicit. The live image loop
@@ -74,6 +74,18 @@ The same source brightness keeps the same displayed shade throughout a loop;
 there is no separate automatic contrast adjustment for individual frames.
 Playback switches to the new rendering version as it becomes available and
 does not alternate legacy and enhanced frames.
+
+The **Cloud analysis · Day** tab uses the fixed JMA Day Microphysics RGB
+warm-season settings, with its named recipe and plain-language color legend
+visible alongside the player. It combines same-slot B04, B07 and B13 source
+objects, preserving the same last-hour playback, zoom and KST AM/PM clocks.
+Colors help interpret cloud phase, relative opacity and temperature; they are
+not automatic cloud labels or measurements of cloud thickness. Upper clouds
+can hide lower layers. Low sunlight, missing bands and rejected composites
+produce an explicit unavailable state. Existing visible and infrared modes
+remain available independently, including infrared at night. The composite
+has roughly 2 km nominal source sampling at nadir, coarser near RKSI; zoom
+does not add cloud detail. See the [scientific recipe and limitations](./seoul-satellite-loop.md#daytime-cloud-analysis).
 
 The streamlined implementation contains six information areas. This section
 is the source contract for the current UI; historical panel descriptions at

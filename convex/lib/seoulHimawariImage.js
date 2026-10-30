@@ -24,6 +24,12 @@ const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const finite = value => typeof value === "number" && Number.isFinite(value);
 const requireValue = (condition, message) => { if (!condition) throw new Error(`Himawari: ${message}`); };
 const mjdToMs = value => MJD_EPOCH_MS + value * DAY_MS;
+const BAND_PROFILES = Object.freeze({
+  visible: { band: 3, resolution: "05", columns: 6000, lines: 4800, validBits: 11, wavelength: [0.5, 0.8] },
+  B04: { band: 4, resolution: "10", columns: 3000, lines: 2400, validBits: 11, wavelength: [0.8, 0.9] },
+  B07: { band: 7, resolution: "20", columns: 1500, lines: 1200, validBits: 14, wavelength: [3.5, 4.1] },
+  infrared: { band: 13, resolution: "20", columns: 1500, lines: 1200, validBits: 12, wavelength: [10, 11] },
+});
 
 function asBuffer(value) {
   if (Buffer.isBuffer(value)) return value;
@@ -86,9 +92,10 @@ export function decompressHimawariBzip(bytes, maxExpandedBytes = MAX_HIMAWARI_EX
 
 function identity({ key, nominalTimeUtc, channel } = {}) {
   const canonical = channel === "B03" ? "visible" : channel === "B13" ? "infrared" : channel;
-  requireValue(canonical === "visible" || canonical === "infrared", "unsupported channel");
+  const profile = BAND_PROFILES[canonical];
+  requireValue(profile, "unsupported channel");
   requireValue(typeof key === "string" && key.length <= 250, "missing object key");
-  const match = /^AHI-L1b-Japan\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{2})(\d{2})\/HS_H09_(\d{8})_(\d{4})_(B03|B13)_JP(0[1-4])_R(05|20)_S0101\.DAT\.bz2$/.exec(key);
+  const match = /^AHI-L1b-Japan\/(\d{4})\/(\d{2})\/(\d{2})\/(\d{2})(\d{2})\/HS_H09_(\d{8})_(\d{4})_(B03|B04|B07|B13)_JP(0[1-4])_R(05|10|20)_S0101\.DAT\.bz2$/.exec(key);
   requireValue(match, "unsupported object key");
   const [, year, month, day, hour, minute, fileDay, fileTime, bandName, part, resolution] = match;
   const timeline = Date.UTC(+year, +month - 1, +day, +hour, +minute);
@@ -98,13 +105,14 @@ function identity({ key, nominalTimeUtc, channel } = {}) {
     date.getUTCHours() === +hour && date.getUTCMinutes() === +minute && +minute % 10 === 0, "invalid object calendar/timeline");
   requireValue(Number.isInteger(nominalTimeUtc) && nominalTimeUtc === timeline + (+part - 1) * 150_000,
     "object key does not match nominal slot");
-  requireValue(bandName === (canonical === "visible" ? "B03" : "B13") &&
-    resolution === (canonical === "visible" ? "05" : "20"), "object channel/resolution mismatch");
-  return { key, nominalTimeUtc, channel: canonical, band: canonical === "visible" ? 3 : 13, area: `JP${part}` };
+  requireValue(bandName === `B${String(profile.band).padStart(2, "0")}` &&
+    resolution === profile.resolution, "object channel/resolution mismatch");
+  return { key, nominalTimeUtc, channel: canonical, band: profile.band, area: `JP${part}` };
 }
 
 export function parseHimawariHsd(bytes, options) {
   const expected = identity(options);
+  const profile = BAND_PROFILES[expected.channel];
   bytes = asBuffer(bytes);
   requireValue(bytes.length >= 114 && bytes.length <= MAX_HIMAWARI_EXPANDED_BYTES, "expanded HSD size is outside bounds");
   requireValue(bytes[5] === 0 || bytes[5] === 1, "invalid HSD byte order");
@@ -149,7 +157,7 @@ export function parseHimawariHsd(bytes, options) {
     "embedded observation does not match nominal slot");
   const columns = word(2, 5), lines = word(2, 7);
   requireValue(word(2, 3) === 16 && bytes[at(2, 9, 1)] === 0, "unsupported HSD pixel encoding");
-  requireValue(columns === (expected.band === 3 ? 6000 : 1500) && lines === (expected.band === 3 ? 4800 : 1200) &&
+  requireValue(columns === profile.columns && lines === profile.lines &&
     dataLength === columns * lines * 2, "unsupported HSD shape or data length");
   requireValue(bytes[at(7, 3, 1)] === 1 && bytes[at(7, 4, 1)] === 1 && word(7, 5) === 1,
     "only complete S0101 segments are supported");
@@ -181,23 +189,23 @@ export function parseHimawariHsd(bytes, options) {
   requireValue(word(5, 3) === expected.band, "embedded band mismatch");
   const calibration = { wavelengthMicrometers: double(5, 5), validBits: word(5, 13), errorCount: word(5, 15),
     outsideScanCount: word(5, 17), gain: double(5, 19), offset: double(5, 27) };
-  requireValue(Object.values(calibration).every(finite) && calibration.validBits === (expected.band === 3 ? 11 : 12) &&
+  requireValue(Object.values(calibration).every(finite) && calibration.validBits === profile.validBits &&
     calibration.errorCount !== calibration.outsideScanCount, "invalid calibration/count metadata");
-  if (expected.band === 3) {
+  if (expected.band === 3 || expected.band === 4) {
     Object.assign(calibration, { albedoCoefficient: double(5, 35), updatedAtMjd: double(5, 43),
       updatedGain: double(5, 51), updatedOffset: double(5, 59) });
-    requireValue(Object.values(calibration).every(finite) && calibration.wavelengthMicrometers >= 0.5 &&
-      calibration.wavelengthMicrometers <= 0.8 && calibration.updatedGain > 0 && calibration.albedoCoefficient > 0 &&
-      calibration.updatedAtMjd <= startMjd, "invalid updated B03 calibration");
+    requireValue(Object.values(calibration).every(finite) && calibration.wavelengthMicrometers >= profile.wavelength[0] &&
+      calibration.wavelengthMicrometers <= profile.wavelength[1] && calibration.updatedGain > 0 && calibration.albedoCoefficient > 0 &&
+      calibration.updatedAtMjd <= startMjd, `invalid updated B0${expected.band} calibration`);
   } else {
     for (const [i, name] of ["c0", "c1", "c2", "C0", "C1", "C2", "speedOfLight", "planckConstant", "boltzmannConstant"].entries()) {
       calibration[name] = double(5, 35 + i * 8);
     }
-    requireValue(Object.values(calibration).every(finite) && calibration.wavelengthMicrometers >= 10 &&
-      calibration.wavelengthMicrometers <= 11 && calibration.gain < 0 && calibration.c1 > 0 &&
+    requireValue(Object.values(calibration).every(finite) && calibration.wavelengthMicrometers >= profile.wavelength[0] &&
+      calibration.wavelengthMicrometers <= profile.wavelength[1] && calibration.gain < 0 && calibration.c1 > 0 &&
       calibration.speedOfLight > 2.9e8 && calibration.speedOfLight < 3.1e8 &&
       calibration.planckConstant > 6e-34 && calibration.planckConstant < 7e-34 &&
-      calibration.boltzmannConstant > 1e-23 && calibration.boltzmannConstant < 2e-23, "invalid B13 calibration");
+      calibration.boltzmannConstant > 1e-23 && calibration.boltzmannConstant < 2e-23, `invalid B${String(expected.band).padStart(2, "0")} calibration`);
   }
   return { ...expected, bytes, little, headerLength, columns, lines, projection, calibration, lineTimes,
     observationStartUtc: Math.round(startTime), observationEndUtc: Math.round(endTime), fileCreationUtc: Math.round(creationTime) };
@@ -280,7 +288,7 @@ function sampleNative(hsd, row, column) {
   const count = hsd.little ? hsd.bytes.readUInt16LE(offset) : hsd.bytes.readUInt16BE(offset), c = hsd.calibration;
   if (count === c.errorCount || count === c.outsideScanCount || count >= 2 ** c.validBits) return null;
   const timing = himawariLineTime(hsd, row);
-  if (hsd.channel === "infrared") return { count, value: himawariInfraredTemperature(count, c), time: timing.time };
+  if (hsd.band === 7 || hsd.band === 13) return { count, value: himawariInfraredTemperature(count, c), time: timing.time };
   const location = himawariNativeCenter(hsd.projection, row, column);
   if (!location) return null;
   const solar = himawariSolarGeometry(timing.time, location.latitude, location.longitude, hsd.projection);
@@ -323,6 +331,7 @@ export function encodeHimawariPng(rgba) {
 }
 
 export function renderHimawariRaster(hsd) {
+  requireValue(hsd.channel === "visible" || hsd.channel === "infrared", "grayscale renderer supports only B03/B13");
   const width = HIMAWARI_IMAGE_SIZE, spanKm = HIMAWARI_IMAGE_SPAN_KM;
   const kmPerLongitudeDegree = 111.32 * Math.cos(radians(RKSI.latitude));
   const centerPosition = himawariNativePosition(hsd.projection, RKSI.latitude, RKSI.longitude);
@@ -384,7 +393,8 @@ export function renderHimawariRaster(hsd) {
 }
 
 export function decodeHimawariImage(compressedBytes, options) {
-  identity(options); // Reject mismatched keys before any expansion/allocation.
+  const expected = identity(options); // Reject mismatched keys before any expansion/allocation.
+  requireValue(expected.channel === "visible" || expected.channel === "infrared", "grayscale renderer supports only B03/B13");
   const hsd = parseHimawariHsd(decompressHimawariBzip(compressedBytes), options);
   const { rgba, ...result } = renderHimawariRaster(hsd);
   if (result.status !== "ok") return result;

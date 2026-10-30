@@ -48,6 +48,9 @@ expired image blobs and their database rows.
   190–300 K brightness-temperature scale makes colder features lighter.
   This mode works in daylight and at night. Brightness temperature is not
   airport air temperature or a measured cloud-cover percentage.
+- **Cloud analysis · Day:** a three-band JMA Day Microphysics RGB composite
+  with a named, fixed recipe and cloud-interpretation legend. See below for
+  calibration, source resolution and interpretation limits.
 
 Images cover a fixed **100 × 100 km** ground-coordinate square around RKSI,
 with north at the top. Nearest-neighbor sampling preserves the source cells;
@@ -72,7 +75,8 @@ The display is intended to inspect formations and movement.
 The shared Convex cron queues a refresh every minute, independently of open
 browser tabs. Himawari Japan-area observations are nominally **2.5 minutes**
 apart. The collector discovers actual NOAA objects and captures each
-available supported visible/infrared frame in the trailing hour; it does not
+available supported visible/infrared frame and complete cloud-analysis bundle
+in the trailing hour; it does not
 invent missing slots or sample every other image.
 
 The collector has one station-wide lease and bounded batches. Page-entry and
@@ -81,7 +85,7 @@ the cron. Continuation work keeps the same run identity, checks enablement
 again, and stops when the retained window is filled or no eligible data is
 available. A failed object is recorded without blocking the remaining images;
 failed keys are retried on later refreshes within the retained window. Failure
-records are bounded to 50 keys and remain visible in the player. A failed
+records are bounded to 75 keys and remain visible in the player. A failed
 listing stops that run rather than accepting an incomplete discovery result.
 
 Only airport PNG derivatives and source/timing metadata are retained in
@@ -143,6 +147,84 @@ bright-cloud contrast; it does not improve contrast equally in every scene.
 No per-frame histogram,
 local sharpening, synthetic detail or changing contrast setting is applied.
 Infrared retains its existing fixed 190–300 K scale and also uses PNG.
+
+## Daytime cloud analysis
+
+Renderer `rksi-himawari-microphysics-v1` implements the documented **JMA Day
+Microphysics RGB, warm-season settings**. This is a fixed display recipe,
+not a claim about the season or an automatic classifier. It does not switch
+palettes during playback. The three required source objects are B04/R10
+(0.86 µm), B07/R20 (3.9 µm) and B13/R20 (10.4 µm), from the same Himawari-9
+Japan-area nominal slot and JP segment. No partial or cross-slot composite is
+substituted. The approximate 2 km thermal-channel sampling at nadir is coarser
+near RKSI; the 256 × 256 output and zoom controls add no source detail.
+
+B04 uses its embedded updated reflectance calibration. B07's reflected
+solar component is separated from thermal emission using B13 temperature;
+B13 supplies the temperature channel. Each band is navigated onto the same
+100 km airport-centered ground grid. Colors therefore support interpretation
+of water versus ice, relative opacity, particle properties and temperature.
+They are not exact cloud thickness, cloud-cover percentage or proof of direct
+sunlight at the runway. Ground reflectance, snow, glint, multilayer clouds
+and parallax can make colors ambiguous; higher clouds can hide lower layers.
+The color guide describes possible appearances rather than labeling pixels.
+
+The fixed display stretches are red B04 reflectance 0–1.02 with gamma 0.95,
+green B07 reflected fraction 0.02–0.82 with gamma 2.6, and blue B13 temperature
+203.5–303.2 K with gamma 1. The exponent is `1/gamma`; warmer temperatures
+produce more blue. B04 is corrected for solar angle and Earth–Sun distance.
+The green-channel calculation solves
+`rho7 = (L7 - B7(T13)) / (F7 * cos(zenith) / (pi * distanceAU²) - B7(T13))`.
+The B07 inverse Planck coefficients come from each HSD header. The H09-specific
+band-mean solar irradiance at one AU is 10.291785461024347 W/m²/µm, derived by
+trapezoidal integration of the JMA H09 spectral response with the ASTM E-490
+spectrum. Both reference-file hashes are pinned in the decoder. It follows
+the [Pyspectral reflected-component method](https://github.com/pytroll/pyspectral/blob/main/pyspectral/near_infrared_reflectance.py)
+without importing a SEVIRI-specific CO2 correction. The thermal-window proxy
+is approximate, particularly for thin or multilayer cloud; this is not a
+retrieval of physical cloud properties.
+
+The raster samples native B07 cells, mapping B04 and B13 geographically to
+those cell centers. Invalid samples are a gray checkerboard so they cannot
+be mistaken for the purple colors in the interpretation guide. In addition
+to the daylight check, solar glint below 25°, invalid counts, temperatures
+outside 150–360 K, excessive per-cell band timing spread, or an unstable
+thermal-separation denominator are rejected. A denominator below
+`0.005 / 0.18614405289538785` in spectral radiance units is unstable.
+
+The composite requires solar elevation of at least 10° for usable pixels,
+rejects unsuitable samples, and is unavailable if more than 10% of the frame
+is invalid. Acquisition times come from each band's embedded row timing,
+with a maximum 60-second spread. The displayed observation time is the latest
+of those acquisitions; the source bundle and individual clocks are retained.
+At night or with missing/rejected bands the player states why cloud analysis
+is unavailable, while the independent visible and infrared channels keep
+their own availability. No unrelated imagery is relabeled as cloud analysis.
+
+The existing exact-`true` NOAA operational switch covers discovery, external
+fetches, rendering, frame saves and query visibility for all three modes.
+No new service, credentials or provider approval is introduced. Collector
+continuations re-discover current objects at least once per minute during
+backfill, prioritize the newest eligible slots and preserve existing B03/B13
+frames. Source provenance includes all three keys, byte lengths, hashes and
+source timestamps. Missing-band slots are recorded separately from successful
+bundles, and no more than four complete frame candidates are processed per
+worker action. Retention and orphan cleanup also cover the new PNG profile.
+
+The scientific recipe is documented in the
+[JMA Day Microphysics quick guide](https://www.jma.go.jp/jma/jma-eng/satellite/VLab/QG/RGB_QG_DayMicrophysics_en.pdf).
+
+Validation includes the strict new-band parser, independent full-spectral-
+response thermal calculations, synthetic thermal/solar mixtures, low-sun
+and invalid-pixel rejection, bundle identity/timing, worker gate and retention,
+and real three-band files through the worker. Two retained scenes (October 29
+01:00 UTC and October 30 01:57:30 UTC nominal slots) both yielded fully valid
+rasters and matched independent Python/SRF calculations at the airport to
+within 0.000002 in B07 reflected fraction, with identical rendered RGB values.
+Their B07 source cells are approximately 2.18 × 2.94 km at RKSI. These checks
+verify decoding and rendering, not the accuracy of a cloud classification.
+The actual component was also checked at desktop, 390 px and 320 px widths,
+including RGB playback, the visible legend, missing B07 and nighttime states.
 
 The collector upgrades legacy frames from their original source objects.
 An upgraded row replaces its prior image only after successful validation;

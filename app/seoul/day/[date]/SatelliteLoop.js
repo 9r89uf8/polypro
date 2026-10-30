@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { createLoopImagePool, formatLoopDate, formatLoopTime, isLiveLoopDate,
+import { cloudAnalysisGuide, createLoopImagePool, formatLoopDate, formatLoopTime, isLiveLoopDate, isLoopNight,
   LOOP_WINDOW_MS, missingLoopSlots, nextLoopFrame, recentLoopFrames, resolveLoopDisplay, STALE_AFTER_MS } from "./satelliteLoopState";
 import styles from "./satelliteLoop.module.css";
 
@@ -58,9 +58,12 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
   const playbackState = useRef({ loaded: [], displayedKey: null });
   const visibleFrames = useMemo(() => recentLoopFrames(data, "visible", now, { date, isToday: isLive }), [data, now, date, isLive]);
   const infraredFrames = useMemo(() => recentLoopFrames(data, "infrared", now, { date, isToday: isLive }), [data, now, date, isLive]);
-  const frames = channel === "visible" ? visibleFrames : infraredFrames;
+  const cloudAnalysisFrames = useMemo(() => recentLoopFrames(data, "cloudAnalysis", now, { date, isToday: isLive }), [data, now, date, isLive]);
+  const isCloudAnalysis = channel === "cloudAnalysis";
+  const frames = channel === "visible" ? visibleFrames : isCloudAnalysis ? cloudAnalysisFrames : infraredFrames;
   const selection = useMemo(() => resolveLoopDisplay(frames, imageStatus, selectedKey, heldKey), [frames, imageStatus, selectedKey, heldKey]);
   const { desired, displayed, loaded } = selection;
+  const analysisGuide = isCloudAnalysis ? cloudAnalysisGuide(displayed) : null;
   const channelState = data?.channels?.[channel];
   const latest = frames.at(-1);
   const staleAfter = Number.isFinite(data?.staleAfterMs) ? data.staleAfterMs : STALE_AFTER_MS;
@@ -73,7 +76,7 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
   const missingCount = missingLoopSlots(frames);
   const desiredIndex = desired ? frames.findIndex((frame) => frame.key === desired.key) : 0;
   const displayedIndex = displayed ? loaded.findIndex((frame) => frame.key === displayed.key) : -1;
-  const night = channel === "visible" && /night|dark|low.sun|sunlight|sun.below|solar.elevation/i.test(`${channelState?.status ?? ""} ${channelState?.unavailableReason ?? ""}`);
+  const night = isLoopNight(channel, channelState);
 
   useEffect(() => {
     mounted.current = true;
@@ -188,8 +191,13 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
     emptyTitle = "Satellite loop is disabled";
     emptyDetail = "No satellite collection is running for this view.";
   } else if (night && !frames.length) {
-    emptyTitle = "Visible imagery needs daylight";
+    emptyTitle = isCloudAnalysis ? "Cloud analysis needs daylight" : "Visible imagery needs daylight";
     emptyDetail = "Choose infrared to view the airport at night.";
+  } else if (isCloudAnalysis && !frames.length && (channelState?.unavailableReason || sourceFailureCount)) {
+    emptyTitle = "Cloud analysis is unavailable";
+    emptyDetail = typeof channelState?.unavailableReason === "string" && channelState.unavailableReason.trim()
+      ? channelState.unavailableReason
+      : "This view needs a complete, matching set of daylight satellite bands. Available observations appear as they are collected.";
   } else if (frames.length && failedCount === frames.length) {
     emptyTitle = "Images could not load";
     emptyDetail = "Refresh to retry. Failed images remain marked as gaps.";
@@ -211,15 +219,17 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
       <div className={styles.segmented} role="group" aria-label="Satellite channel">
         <button type="button" aria-pressed={channel === "visible"} onClick={() => changeChannel("visible")}>Visible</button>
         <button type="button" aria-pressed={channel === "infrared"} onClick={() => changeChannel("infrared")}>Infrared <span>24h</span></button>
+        <button type="button" aria-pressed={isCloudAnalysis} onClick={() => changeChannel("cloudAnalysis")}>Cloud analysis <span>Day</span></button>
       </div>
       <div className={styles.zoom} role="group" aria-label="Satellite view width">
         <span>Across</span>{[20, 50, 100].map((value) => <button type="button" key={value} aria-pressed={zoom === value} aria-label={`View ${value} kilometers across`} onClick={() => setZoom(value)}>{value} km</button>)}
       </div>
     </div>
     <div className={styles.body}>
+      <div className={styles.imagePanel}>
       <div className={styles.viewport} aria-busy={!displayed && frames.length > failedCount}>
         {loaded.map((frame) => <img key={frame.key} className={styles.image} src={frame.url}
-          alt={frame.key === displayed?.key ? `Himawari-9 ${channel} image centered on RKSI, observed ${formatLoopTime(frame.time)} KST on ${formatLoopDate(frame.time)}` : ""}
+          alt={frame.key === displayed?.key ? `Himawari-9 ${isCloudAnalysis ? "daytime cloud-analysis RGB" : channel} image centered on RKSI, observed ${formatLoopTime(frame.time)} KST on ${formatLoopDate(frame.time)}` : ""}
           aria-hidden={frame.key !== displayed?.key} draggable="false"
           style={{ width: `${10000 / zoom}%`, height: `${10000 / zoom}%`, opacity: frame.key === displayed?.key ? 1 : 0 }}
           onError={() => pool.current?.markFailed(frame.key)} />)}
@@ -229,6 +239,18 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
           <div className={styles.scale}><span>{zoom / 5} km</span><i /></div>
           <span className={styles.viewLabel}>{zoom} × {zoom} km</span>
         </> : <div className={styles.empty} role="status"><span className={styles.emptyIcon} aria-hidden="true">◎</span><strong>{emptyTitle}</strong><p>{emptyDetail}</p></div>}
+      </div>
+      {isCloudAnalysis ? <section className={styles.analysisGuide} aria-labelledby={`${id}-guide`}>
+        <div className={styles.guideHeading}><h3 id={`${id}-guide`}>Cloud analysis color guide</h3><span>Daytime only</span></div>
+        {analysisGuide ? <>
+          <p className={styles.recipe}>{analysisGuide.recipeLabel}</p>
+          <ul className={styles.legend}>{analysisGuide.legend.map((entry) => <li key={`${entry.color}:${entry.label}`}>
+            <i aria-hidden="true" style={{ backgroundColor: entry.color }} /><span>{entry.label}</span>
+          </li>)}</ul>
+        </> : <p className={styles.guideNote}>The color guide appears with a complete analysis image.</p>}
+        <p className={styles.guideNote}>Colors help interpret cloud phase, relative opacity and temperature; they are not automatic cloud labels. Upper cloud can hide lower layers.</p>
+        <p className={styles.resolutionNote}>Coarser than Visible: nominal 2 km source bands, with larger footprints over RKSI. Zoom adds no spatial detail.</p>
+      </section> : null}
       </div>
       <div className={styles.controls}>
         <span className={`${styles.status} ${stale ? styles.delayed : ""}`}><i />{statusLabel}</span>
@@ -254,10 +276,12 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
         {selection.pending && displayed ? <p className={styles.notice} role="status">Loading the selected image. The displayed observation time stays with the image.</p> : null}
         {selection.failed ? <p className={styles.notice} role="status">Selected image failed to load.{displayed ? " Showing another available image." : " Try refresh."}</p> : null}
         {missingCount || failedCount ? <p className={styles.notice}>{missingCount ? `${missingCount} missing 2½-minute ${missingCount === 1 ? "slot" : "slots"} between stored images.` : ""}{failedCount ? ` ${failedCount} ${failedCount === 1 ? "image" : "images"} failed to load; playback skips these gaps.` : ""}</p> : null}
-        {sourceFailureCount ? <p className={styles.notice}>{sourceFailureCount} satellite {sourceFailureCount === 1 ? "file could" : "files could"} not be collected.{loaded.length >= 2 ? " Available images remain playable." : " Other available images can still be viewed."}</p> : null}
+        {sourceFailureCount ? <p className={styles.notice}>{isCloudAnalysis
+          ? `Cloud analysis is unavailable for ${sourceFailureCount} ${sourceFailureCount === 1 ? "observation" : "observations"}.`
+          : `${sourceFailureCount} satellite ${sourceFailureCount === 1 ? "file could" : "files could"} not be collected.`}{loaded.length >= 2 ? " Available images remain playable." : " Other available images can still be viewed."}</p> : null}
         {stale ? <p className={styles.notice}>Newest observation is {Math.floor((now - latest.time) / 60000)} minutes old. Images older than one hour disappear automatically.</p> : null}
         {frames.length && channelState?.unavailableReason ? <p className={styles.notice}>{channelState.unavailableReason}</p>
-          : night && frames.length ? <p className={styles.notice}>Visible images require daylight. Infrared also works at night.</p> : null}
+          : night && frames.length ? <p className={styles.notice}>{isCloudAnalysis ? "Cloud analysis requires" : "Visible images require"} daylight. Infrared also works at night.</p> : null}
         {channel === "visible" && displayed && Number.isFinite(displayed.solarElevationDeg) && displayed.solarElevationDeg < 20
           ? <p className={styles.notice}>Low sun affects visible brightness ({Math.round(displayed.solarElevationDeg)}° elevation).</p> : null}
         <p className={styles.timingNote}>Frames play in time order with a pause at the end. Equal display steps do not represent elapsed time.</p>
@@ -265,7 +289,7 @@ function SatellitePlayer({ data, date, now, isLive, onRefresh }) {
       </div>
     </div>
     <footer className={styles.footer}>
-      <span>{channel === "visible" ? (displayed?.display?.toneCurve ? "Enhanced visible contrast" : "Visible brightness") : "Infrared brightness temperature"} · not a cloud mask · no cloud-height correction</span>
+      <span>{isCloudAnalysis ? "Daytime RGB interpretation" : channel === "visible" ? (displayed?.display?.toneCurve ? "Enhanced visible contrast" : "Visible brightness") : "Infrared brightness temperature"} · not a cloud mask · no cloud-height correction</span>
       <a href={SOURCE_URL} target="_blank" rel="noreferrer">JMA / NOAA source ↗</a>
     </footer>
   </section>;

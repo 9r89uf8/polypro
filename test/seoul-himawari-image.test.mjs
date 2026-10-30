@@ -22,17 +22,24 @@ const PROJECTION = { subLon: 140.7, cfac: 81865099, lfac: 81865099, coff: 4300.5
 const bzip = value => Buffer.from(value, "base64");
 const ABC = bzip("QlpoOTFBWSZTWWSMu3MAAAABADgAIAAhmBmEYXckU4UJBkjLtzA=");
 const DEF = bzip("QlpoOTFBWSZTWUI8sPkAAAABAAcAIAAhmBmEYXckU4UJBCPLD5A=");
+const TEST_BANDS = {
+  visible: { band: "B03", resolution: "05", scale: 4, bits: 11, wavelength: .63972 },
+  B04: { band: "B04", resolution: "10", scale: 2, bits: 11, wavelength: .85668 },
+  B07: { band: "B07", resolution: "20", scale: 1, bits: 14, wavelength: 3.8289 },
+  infrared: { band: "B13", resolution: "20", scale: 1, bits: 12, wavelength: 10.4074 },
+};
 
 function key(channel = "infrared", nominal = NOMINAL) {
   const stamp = new Date(nominal).toISOString().replace(/[-:T]/g, "").slice(0, 12);
-  const band = channel === "visible" ? "B03" : "B13", resolution = channel === "visible" ? "05" : "20";
+  const { band, resolution } = TEST_BANDS[channel];
   return `AHI-L1b-Japan/${stamp.slice(0, 4)}/${stamp.slice(4, 6)}/${stamp.slice(6, 8)}/${stamp.slice(8)}/HS_H09_${stamp.slice(0, 8)}_${stamp.slice(8)}_${band}_JP01_R${resolution}_S0101.DAT.bz2`;
 }
 
 function fixture({ channel = "infrared", nominal = NOMINAL, bigEndian = false, pixel } = {}) {
   const lengths = [282, 50, 127, 139, 147, 3, 7, 41, 25, 7, 3];
   const header = lengths.reduce((a, b) => a + b, 0);
-  const columns = channel === "visible" ? 6000 : 1500, lines = channel === "visible" ? 4800 : 1200;
+  const profile = TEST_BANDS[channel], reflective = ["visible", "B04"].includes(channel);
+  const columns = 1500 * profile.scale, lines = 1200 * profile.scale;
   const bytes = Buffer.alloc(header + columns * lines * 2), blocks = {};
   const u16 = (position, value) => bigEndian ? bytes.writeUInt16BE(value, position) : bytes.writeUInt16LE(value, position);
   const u32 = (position, value) => bigEndian ? bytes.writeUInt32BE(value, position) : bytes.writeUInt32LE(value, position);
@@ -50,14 +57,14 @@ function fixture({ channel = "infrared", nominal = NOMINAL, bigEndian = false, p
   u32(70, header); u32(74, columns * lines * 2); bytes[80] = 77; bytes[81] = 1;
   let p = blocks[2]; u16(p + 3, 16); u16(p + 5, columns); u16(p + 7, lines); bytes[p + 9] = 0;
   p = blocks[3]; f64(p + 3, 140.7);
-  u32(p + 11, channel === "visible" ? 81865099 : 20466275); u32(p + 15, channel === "visible" ? 81865099 : 20466275);
-  f32(p + 19, channel === "visible" ? 4300.5 : 1075.5); f32(p + 23, channel === "visible" ? 9200.5 : 2300.5);
+  u32(p + 11, Math.round(81865099 * profile.scale / 4)); u32(p + 15, Math.round(81865099 * profile.scale / 4));
+  f32(p + 19, 1075 * profile.scale + .5); f32(p + 23, 2300 * profile.scale + .5);
   f64(p + 27, 42164); f64(p + 35, 6378.137); f64(p + 43, 6356.7523);
-  p = blocks[5]; u16(p + 3, channel === "visible" ? 3 : 13); f64(p + 5, channel === "visible" ? .63972 : IR_CALIBRATION.wavelengthMicrometers);
-  u16(p + 13, channel === "visible" ? 11 : 12); u16(p + 15, 65535); u16(p + 17, 65534);
-  f64(p + 19, channel === "visible" ? .3051037058823529 : IR_CALIBRATION.gain);
-  f64(p + 27, channel === "visible" ? -6.102074117647058 : IR_CALIBRATION.offset);
-  if (channel === "visible") {
+  p = blocks[5]; u16(p + 3, Number(profile.band.slice(1))); f64(p + 5, profile.wavelength);
+  u16(p + 13, profile.bits); u16(p + 15, 65535); u16(p + 17, 65534);
+  f64(p + 19, reflective ? .3051037058823529 : IR_CALIBRATION.gain);
+  f64(p + 27, reflective ? -6.102074117647058 : IR_CALIBRATION.offset);
+  if (reflective) {
     f64(p + 35, .00192798475658132); f64(p + 43, start - 1); f64(p + 51, .31089897); f64(p + 59, -6.21797943);
   } else {
     for (const [i, name] of ["c0", "c1", "c2", "C0", "C1", "C2", "speedOfLight", "planckConstant", "boltzmannConstant"].entries()) f64(p + 35 + i * 8, IR_CALIBRATION[name]);
@@ -69,7 +76,7 @@ function fixture({ channel = "infrared", nominal = NOMINAL, bigEndian = false, p
   if (pixel) {
     for (let r = 0; r < lines; r++) for (let c = 0; c < columns; c++) u16(header + 2 * (r * columns + c), pixel(r, c));
   } else {
-    const value = channel === "visible" ? 600 : 2806, pattern = Buffer.alloc(2);
+    const value = reflective ? 600 : 2806, pattern = Buffer.alloc(2);
     if (bigEndian) pattern.writeUInt16BE(value); else pattern.writeUInt16LE(value);
     bytes.fill(pattern, header);
   }
@@ -109,6 +116,27 @@ test("strict header parser reads both endian orders with independent native IR c
     assert.ok(Math.abs(sample.value - 258.573113661165) < 1e-9);
   }
   assert.equal(himawariInfraredTemperature(4095, IR_CALIBRATION), null);
+});
+
+test("B04/B07 parser enforces each band shape, bits, wavelength and exact key before calibration", () => {
+  for (const channel of ["B04", "B07"]) for (const bigEndian of [false, true]) {
+    const f = fixture({ channel, bigEndian }), h = parseHimawariHsd(f.bytes, f.options);
+    assert.equal(h.channel, channel);
+    assert.equal(h.columns, channel === "B04" ? 3000 : 1500);
+    assert.equal(h.calibration.validBits, channel === "B04" ? 11 : 14);
+    assert.ok(Number.isFinite(sampleHimawariPoint(h, 37.4602, 126.4407).value));
+    assert.throws(() => renderHimawariRaster(h), /only B03\/B13/);
+    assert.throws(() => decodeHimawariImage(Buffer.alloc(0), f.options), /only B03\/B13/);
+    assert.throws(() => parseHimawariHsd(f.bytes, { ...f.options, key: f.options.key.replace(channel, "B13") }));
+    f.u16(f.blocks[5] + 13, 12);
+    assert.throws(() => parseHimawariHsd(f.bytes, f.options), /calibration/);
+  }
+  const visible = fixture({ channel: "B04" });
+  visible.f64(visible.blocks[5] + 5, .63972);
+  assert.throws(() => parseHimawariHsd(visible.bytes, visible.options), /B04 calibration/);
+  const thermal = fixture({ channel: "B07" });
+  thermal.f64(thermal.blocks[5] + 5, 10.4);
+  assert.throws(() => parseHimawariHsd(thermal.bytes, thermal.options), /B07 calibration/);
 });
 
 test("identity, segmentation, flags, navigation, calibration and line timing fail closed", () => {
