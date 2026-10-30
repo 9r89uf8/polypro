@@ -8,10 +8,13 @@ model, market display or any trading decision.
 
 ## Status
 
-Built and tested with **synthetic fixtures only**. Nothing is activated:
-`KHOA_GOCI2_ACCESS_APPROVED` is absent on every deployment, and this code has
-made no request to NOSC. The code has not been deployed yet. Real NOSC
-response formats are unverified (see [Before activation](#before-activation)).
+Built and tested with **synthetic fixtures only**, then deployed on October 30,
+2026 (October 31 KST) **with the approval flag absent**: commit `9de6b28` on
+Convex `striped-chipmunk-763` and in Vercel production. Nothing is activated:
+`KHOA_GOCI2_ACCESS_APPROVED` is absent, and this code has made no request to
+NOSC. Real NOSC response formats are unverified (see
+[Before activation](#before-activation)); the disabled production state is
+verified (see [Release verification](#release-verification)).
 
 ## Why GOCI-II
 
@@ -229,7 +232,31 @@ KST AM/PM observation times. Past and future date pages do not query it.
   the Himawari loop keeps working.
 - **Not verified:** real NOSC catalog, DAS/DDS and `.dods` formats; the
   attribute names for times, scaling, units and F0; real image appearance,
-  PNG size and timing; deployment and the production disabled state.
+  PNG size and timing.
+
+## Release verification
+
+Deployed on October 30, 2026 at about 18:50 CDT (October 31, 08:50 KST),
+from commit `9de6b28`, with `KHOA_GOCI2_ACCESS_APPROVED` absent:
+
+- **Before deploying.** The live Himawari loop still reported renderer
+  `rksi-himawari-image-v2`, so no newer uncommitted Himawari work was live to
+  be overwritten. The deployed function list matched this commit except for
+  the twelve new `seoulGoci2` functions.
+- **Convex (`striped-chipmunk-763`).** A dry run validated the schema,
+  deleted no index and added only the four GOCI-II indexes; the apply step
+  matched it. Afterwards `convex env get KHOA_GOCI2_ACCESS_APPROVED`
+  reported not found; `seoulGoci2:getLatest` returned `approved: false`,
+  `approval_required`, no frames and no collector; `seoulGoci2:requestRefresh`
+  returned `approval_required` without queuing; both GOCI-II tables were
+  empty. The `seoul_goci2_rksi_every_5_min` cron ran at 18:55:20 CDT without
+  starting a worker or writing a row. The Himawari loop was unchanged
+  (renderer v2, frames still served).
+- **Vercel.** Production was rebuilt from `main` at `9de6b28`. On
+  `polypro-alpha.vercel.app/seoul/day/2026-10-31` the card showed "GOCI-II
+  approval required" with no image and Refresh disabled, beside the working
+  Himawari loop: side by side at 1440 px, stacked at 1024 px, with no console
+  errors.
 
 ## Before activation
 
@@ -239,12 +266,13 @@ KST AM/PM observation times. Past and future date pages do not query it.
    paths, the observation time attributes, `scale_factor`, `units`,
    `_FillValue`, any F0 attribute and the catalog element names. Update the
    parser and fixture if they differ.
-2. Deploy the Convex code, schema and crons with the flag absent, before the
-   frontend. If the frontend ships first, the missing query fails and an
-   error boundary limits the damage to this card ("GOCI-II status could not
-   load"). Verify that `seoulGoci2:getLatest` returns `approval_required`
-   with no frames and that `seoulGoci2:requestRefresh` returns
-   `approval_required` without queuing.
+2. Done on October 30, 2026 (see [Release verification](#release-verification)).
+   For any later redeploy, deploy the Convex code, schema and crons with the
+   flag absent, before the frontend. If the frontend ships first, the missing
+   query fails and an error boundary limits the damage to this card
+   ("GOCI-II status could not load"). Verify that `seoulGoci2:getLatest`
+   returns `approval_required` with no frames and that
+   `seoulGoci2:requestRefresh` returns `approval_required` without queuing.
 3. Set the flag only after the user confirms KHOA/NOSC approval of the scope
    above, then watch the first runs (collector status, failures, PNG size
    and appearance).
