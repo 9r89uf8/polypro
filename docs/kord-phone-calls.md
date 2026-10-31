@@ -2,6 +2,12 @@
 
 This document covers the KORD phone-call temperature workflow shown on `/kord/today`.
 
+The October 31 Seoul nowcast change adds the independent
+`seoul_temperature_nowcast_scoring` (every minute) and
+`seoul_temperature_nowcast_retention` (hourly) entries in `convex/crons.js`.
+They process stored RKSI AMOS data only and do not alter KORD phone calls,
+limits, credentials or schedules. See [Seoul nowcast](./seoul-temperature-nowcast.md).
+
 ## Purpose
 
 - Place automated outbound calls to KORD ATIS, record audio, transcribe it, and extract temperature.

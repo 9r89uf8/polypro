@@ -370,6 +370,22 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
+// Local AMOS nowcast scoring continues when no dashboard is open and marks
+// missing exact-minute targets after the bounded receipt window.
+crons.cron(
+  "seoul_temperature_nowcast_scoring",
+  "* * * * *",
+  internal.seoulNowcast.scorePending,
+  {},
+);
+
+crons.cron(
+  "seoul_temperature_nowcast_retention",
+  "13 * * * *",
+  internal.seoulNowcast.pruneExpired,
+  {},
+);
+
 // Retains a cadence-tagged five-minute snapshot of every AMOS display row for
 // auditing and fallback; the live chart prefers the one-minute 15L series.
 crons.cron(

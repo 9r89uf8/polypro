@@ -1,5 +1,21 @@
 # Seoul RKSI live-temperature page
 
+## Minute-temperature nowcast — October 31, 2026
+
+The day page now includes an experimental 15L AMOS temperature card with
+explicit KST targets approximately 10, 15 and 20 minutes after issuance.
+It subscribes to `seoulNowcast:getDashboard` for the selected issuance date.
+Damped trend and persistence are shown with the actual source/issue clocks,
+an explicit persistence fallback when history is insufficient, and
+“No calibrated prediction range yet.” The existing 15-second clock expires live
+status when issue or observation age exceeds two minutes; historical values
+remain labeled as saved/archived. Refresh does not reissue forecasts.
+Details show recent exact-minute outcomes and 30-day recorded MAE, comparing
+trend and persistence on the same paired cases and exposing actual day counts.
+Cross-midnight target dates stay explicit. This card is separate from official
+METAR and daily-high values. See the [nowcast specification](./seoul-temperature-nowcast.md)
+for input versioning, scoring and retention.
+
 This document describes the streamlined RKSI dashboard: Seoul time, KMA
 forecast maximum, captured high revisions and peak times, the official
 routine-METAR maximum, observed cloud cover and its trend, the daily

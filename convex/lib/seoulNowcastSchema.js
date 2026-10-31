@@ -1,0 +1,76 @@
+import { defineTable } from "convex/server";
+import { v } from "convex/values";
+
+const nullableNumber = v.union(v.number(), v.null());
+const nullableString = v.union(v.string(), v.null());
+export const nowcastPrediction = v.object({
+  horizonMinutes: v.number(), targetTimeUtc: v.number(),
+  observationLeadMinutes: v.number(), actualLeadMinutes: v.number(),
+  persistenceC: v.number(), dampedTrendC: nullableNumber,
+});
+
+export const seoulNowcastTables = {
+  // Append-only, normalized source payload versions. receivedAt is the first
+  // database capture of THIS version, never a reconstructed HTTP receipt.
+  seoulNowcastObservationVersions: defineTable({
+    stationIcao: v.literal("RKSI"), rwyNo: v.string(), rwyDir: v.string(),
+    collectionCadence: v.literal("one_minute"), obsTimeUtc: v.number(),
+    receivedAt: v.number(), sourceFirstSeenAt: v.optional(v.number()),
+    temperatureValid: v.boolean(),
+    obsTimeLocal: v.optional(v.string()), source: v.optional(v.string()),
+    rwyUse: v.optional(v.string()), rwyMain: v.optional(v.string()),
+    tempC: v.optional(v.number()), dewpointC: v.optional(v.number()),
+    qnhHpa: v.optional(v.number()), windDirAvg: v.optional(v.number()),
+    windDirMin: v.optional(v.number()), windDirMax: v.optional(v.number()),
+    windSpeedAvg: v.optional(v.number()), windSpeedMin: v.optional(v.number()),
+    windSpeedMax: v.optional(v.number()), crosswind: v.optional(v.string()),
+    headtail: v.optional(v.string()), morMeters: v.optional(v.number()),
+    rvrMeters: v.optional(v.string()), precipMm: v.optional(v.number()),
+  })
+    .index("by_station_site_time", ["stationIcao", "rwyDir", "obsTimeUtc", "receivedAt"])
+    .index("by_target_valid", ["stationIcao", "rwyDir", "obsTimeUtc", "temperatureValid", "receivedAt"])
+    .index("by_received", ["receivedAt"]),
+
+  // These records are never patched. Scoring is kept in a separate table.
+  seoulNowcastForecasts: defineTable({
+    stationIcao: v.literal("RKSI"), date: v.string(),
+    triggerObsTimeUtc: v.number(), modelVersion: v.string(), issuedAt: v.number(),
+    qualityStatus: v.union(v.literal("ready"), v.literal("persistence_only"), v.literal("unavailable")),
+    reasonCode: nullableString, reason: nullableString,
+    intervalStatus: v.literal("insufficient_calibration"),
+    latestObservationTimeUtc: nullableNumber, latestObservationReceivedAt: nullableNumber,
+    observationAgeMinutes: nullableNumber,
+    inputVersionIds: v.array(v.id("seoulNowcastObservationVersions")),
+    features: v.any(), predictions: v.array(nowcastPrediction),
+  })
+    .index("by_trigger_model", ["stationIcao", "triggerObsTimeUtc", "modelVersion"])
+    .index("by_station_date_issued", ["stationIcao", "date", "issuedAt"])
+    .index("by_issued", ["issuedAt"]),
+
+  seoulNowcastOutcomes: defineTable({
+    forecastId: v.id("seoulNowcastForecasts"), stationIcao: v.literal("RKSI"),
+    date: v.string(), modelVersion: v.string(), issuedAt: v.number(),
+    horizonMinutes: v.number(), targetTimeUtc: v.number(),
+    persistenceC: v.number(), dampedTrendC: nullableNumber,
+    status: v.union(v.literal("pending"), v.literal("scored"), v.literal("missing")),
+    scoringVersion: v.string(), actualC: v.optional(v.number()),
+    observationVersionId: v.optional(v.id("seoulNowcastObservationVersions")),
+    targetReceivedAt: v.optional(v.number()), scoredAt: v.optional(v.number()),
+    persistenceErrorC: v.optional(v.number()), dampedErrorC: v.optional(v.number()),
+  })
+    .index("by_station_status_target", ["stationIcao", "status", "targetTimeUtc"])
+    .index("by_station_date_status_target", ["stationIcao", "date", "status", "targetTimeUtc"])
+    .index("by_forecast", ["forecastId"])
+    .index("by_issued", ["issuedAt"]),
+
+  seoulNowcastDailyScores: defineTable({
+    stationIcao: v.literal("RKSI"), modelVersion: v.string(), date: v.string(),
+    horizonMinutes: v.number(), dayStartUtc: v.number(),
+    issuedCount: v.number(), scoredCount: v.number(), missingCount: v.number(),
+    pairedCount: v.number(), persistenceAbsErrorSum: v.number(),
+    pairedPersistenceAbsErrorSum: v.number(), dampedAbsErrorSum: v.number(),
+    persistenceErrorSum: v.number(), dampedErrorSum: v.number(),
+  })
+    .index("by_station_model_date_horizon", ["stationIcao", "modelVersion", "date", "horizonMinutes"])
+    .index("by_day", ["dayStartUtc"]),
+};

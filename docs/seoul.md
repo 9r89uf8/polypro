@@ -1,5 +1,18 @@
 # RKSI: fastest current-temperature source
 
+## Short-horizon temperature nowcast — October 31, 2026
+
+The [15L minute-temperature nowcast](./seoul-temperature-nowcast.md) adds
+persistence and damped-trend estimates for explicit 10/15/20-minute targets.
+The one-minute ingest saves immutable normalized input versions and queues
+one forecast per newly captured 15L minute. Separate minute scoring and hourly
+retention jobs preserve issued predictions, count exact-target outcomes, and
+compare both methods on paired cases. These estimates are experimental, have
+no calibrated uncertainty, and do not predict official METAR or settlement.
+No new external feed, credential or approval flag is introduced. The linked
+specification records availability clocks, first-valid-target scoring,
+30/32/365-day retention and all new entry points.
+
 Last researched: **2026-10-29 KST**.
 
 The latest [source and satellite investigation](./seoul-edge-research-2026-10-29.md)
