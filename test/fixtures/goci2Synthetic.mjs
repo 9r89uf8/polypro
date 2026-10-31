@@ -59,33 +59,46 @@ export function fixtureCount(row, column, band, { slot = "S007", time = (FIXTURE
   return Math.max(0, Math.round(radiance / SCALE));
 }
 
+// The DDS, DAS and .dods layouts below mirror NOSC's real Hyrax responses for
+// S007 at 23:16:30 UTC on 2026-10-30 (structure, names and types only; the
+// values are synthetic): unnamed dimensions, extra 1-D size variables, an
+// HDF5_ROOT_GROUP listing, flattened group paths and an H5_GLOBAL container.
 export function fixtureDds(slot = "S007", { omit } = {}) {
-  const dims = `[number_of_lines = ${FIXTURE_ROWS}][pixels_per_line = ${FIXTURE_COLUMNS}]`;
-  return ["Dataset {",
+  const dims = `[${FIXTURE_ROWS}][${FIXTURE_COLUMNS}]`;
+  return ["Dataset {", ...BANDS.filter(band => band !== omit).map(band => `    UInt32 /geophysical_data/L_TOA_${band}${dims};`),
+    `    Float32 /number_of_columns[${FIXTURE_COLUMNS}];`,
     `    Float32 /navigation_data/latitude${dims};`, `    Float32 /navigation_data/longitude${dims};`,
-    ...BANDS.filter(band => band !== omit).map(band => `    UInt32 /geophysical_data/L_TOA_${band}${dims};`),
-    `} ${fixtureFile(slot)};`, ""].join("\n");
+    `    Float32 /number_of_lines[${FIXTURE_ROWS}];`, `} ${fixtureFile(slot)};`, ""].join("\n");
 }
 export function fixtureDas({ start = "20261030_022716", end = "20261030_022820", units = "W m-2 um-1 sr-1", f0Attribute, nested = false } = {}) {
-  const band = value => [`        String long_name "Top of Atmosphere radiance at ${value} nm";`, `        String units "${units}";`,
-    `        UInt32 _FillValue ${FILL_COUNT};`, "        Float32 scale_factor 1.0E-6;", "        Float32 add_offset 0.0;",
+  const band = value => [`        String HDF5_OBJ_FULLPATH "/geophysical_data/L_TOA_${value}";`, "        Int32 _Netcdf4Coordinates 0, 1;",
+    `        UInt32 _FillValue ${FILL_COUNT};`, `        String long_name "TOA radiance at ${value} nm";`, `        String units "${units}";`,
+    "        Int32 valid_min 0;", "        Int32 valid_max 1000000000;", '        String references "";',
+    "        Float32 scale_factor 9.999999975e-07;", "        Float32 add_offset 0.;",
     ...(f0Attribute && F0[value] ? [`        Float32 ${f0Attribute.name} ${f0Attribute.scale ? F0[value] * f0Attribute.scale : F0[value]};`] : [])];
-  const navigation = name => [`        String long_name "${name}";`, `        String units "degrees_${name === "latitude" ? "north" : "east"}";`,
-    `        Float32 _FillValue ${FILL_FLOAT}.0;`];
+  const navigation = name => [`        String HDF5_OBJ_FULLPATH "/navigation_data/${name}";`, `        Float32 _FillValue ${FILL_FLOAT}.;`,
+    `        String units "degree_${name === "latitude" ? "north" : "east"}";`, `        Float32 valid_min ${name === "latitude" ? -90 : -180}.;`,
+    `        Float32 valid_max ${name === "latitude" ? 90 : 180}.;`, "        Float32 scale_factor 1.;", "        Float32 add_offset 0.;"];
+  const global = [`    ${nested ? "NC_GLOBAL" : "H5_GLOBAL"} {`, '        String title "SYNTHETIC GOCI-II L1B test fixture";',
+    '        String history "BAND_CNT = 12\nOUTPUT = synthetic\n";', '        String license "";', '        String publisher_name "KHOA-NOSC";',
+    '        String observation_mode "RLA";', `        String observation_start_time "${start}";`, `        String observation_end_time "${end}";`,
+    "        Float32 sub_longitude 128.1999969;", "        Float32 earth_ellipsoid_center 0., 0., 0.;", "    }"];
   const containers = nested
     ? ["    navigation_data {", "      latitude {", ...navigation("latitude"), "      }", "      longitude {", ...navigation("longitude"), "      }", "    }",
       "    geophysical_data {", ...BANDS.flatMap(value => [`      L_TOA_${value} {`, ...band(value), "      }"]), "    }"]
-    : [`    /navigation_data/latitude {`, ...navigation("latitude"), "    }", `    /navigation_data/longitude {`, ...navigation("longitude"), "    }",
-      ...BANDS.flatMap(value => [`    /geophysical_data/L_TOA_${value} {`, ...band(value), "    }"])];
-  return ["Attributes {", ...containers, "    NC_GLOBAL {", '        String title "SYNTHETIC GOCI-II L1B test fixture";',
-    `        String observation_start_time "${start}";`, `        String observation_end_time "${end}";`,
-    '        String license "";', '        String publisher_name "KHOA-NOSC";', "    }", "}", ""].join("\n");
+    : ["    HDF5_ROOT_GROUP {", "        geophysical_data {", `            String Dataset ${BANDS.map(value => `"L_TOA_${value}"`).join(", ")};`, "        }",
+      '        navigation_data {', '            String Dataset "latitude", "longitude";', "        }", "    }",
+      "    /geophysical_data/ {", '        String HDF5_OBJ_FULLPATH "/geophysical_data/";', "    }",
+      ...BANDS.flatMap(value => [`    /geophysical_data/L_TOA_${value} {`, ...band(value), "    }"]),
+      "    /navigation_data/ {", '        String HDF5_OBJ_FULLPATH "/navigation_data/";', "    }",
+      "    /navigation_data/latitude {", ...navigation("latitude"), "    }", "    /navigation_data/longitude {", ...navigation("longitude"), "    }"];
+  return ["Attributes {", ...(nested ? [] : global), ...containers, ...(nested ? global : []), "}", ""].join("\n");
 }
 
 export function fixtureDods(hyperslab, { slot = "S007", fill, corrupt } = {}) {
   const { variable, rows, columns, shape } = hyperslab, [rowCount, columnCount] = shape;
   const float = variable.startsWith("/navigation_data/"), band = Number(variable.match(/L_TOA_(\d+)$/)?.[1]);
-  const header = Buffer.from(`Dataset {\n    ${float ? "Float32" : "UInt32"} ${variable}[number_of_lines = ${rowCount}][pixels_per_line = ${columnCount}];\n} ${fixtureFile(slot)};\nData:\n`, "latin1");
+  const header = Buffer.from(`Dataset {\n    ${float ? "Float32" : "UInt32"} ${variable}[${rowCount}][${columnCount}];\n} ${fixtureFile(slot)};\nData:\n`, "latin1");
   const body = Buffer.alloc(8 + 4 * rowCount * columnCount);
   body.writeUInt32BE(rowCount * columnCount, 0); body.writeUInt32BE(rowCount * columnCount, 4);
   for (let i = 0; i < rowCount; i++) for (let j = 0; j < columnCount; j++) {

@@ -8,13 +8,12 @@ model, market display or any trading decision.
 
 ## Status
 
-Built and tested with **synthetic fixtures only**, then deployed on October 30,
-2026 (October 31 KST) **with the approval flag absent**: commit `9de6b28` on
-Convex `striped-chipmunk-763` and in Vercel production. Nothing is activated:
-`KHOA_GOCI2_ACCESS_APPROVED` is absent, and this code has made no request to
-NOSC. Real NOSC response formats are unverified (see
-[Before activation](#before-activation)); the disabled production state is
-verified (see [Release verification](#release-verification)).
+**Active.** The code was deployed on October 30, 2026 (October 31 KST) with
+the approval flag absent, and the disabled state was verified (see
+[Release verification](#release-verification)). The user then set
+`KHOA_GOCI2_ACCESS_APPROVED=true` on `striped-chipmunk-763`. The first live
+run exposed a slot-search bug, fixed after the real NOSC formats were checked
+(see [Activation and first live run](#activation-and-first-live-run)).
 
 ## Why GOCI-II
 
@@ -117,9 +116,13 @@ shown or relabelled as GOCI-II. Refresh and zoom are disabled.
 2. **Slot selection.** The directory catalog lists `…_LA_Snnn.nc` files. The
    last verified slot (`lastSlot`) is tried first. On the first run, or if
    that slot no longer contains the airport square, other published slots are
-   probed with a 3 × 3 latitude/longitude sample. Without a remembered slot
-   the worker waits until a directory is 30 minutes old; with one, it waits up
-   to 45 minutes for that slot before searching.
+   probed in ascending order with a 3 × 3 latitude/longitude sample. A slot
+   far from RKSI or with unusable navigation is skipped with a reason, and
+   the reasons are reported if no slot fits. On the live server the first
+   search probes S000–S006 before S007 (about 25 small requests, once); the
+   saved `lastSlot` then avoids the search. Without a remembered slot the
+   worker waits until a directory is 30 minutes old; with one, it waits up to
+   45 minutes for that slot before searching.
 3. **Locate.** The slot's DDS gives the grid shape and types. A 72 × 72
    strided latitude/longitude sample locates RKSI; an affine fit around it
    maps the 100 km square plus margin to a native window (about 311 × 433
@@ -230,9 +233,11 @@ KST AM/PM observation times. Past and future date pages do not query it.
   collecting, unavailable and past-date states render without console errors
   or page overflow. A failing query shows the card's own error state while
   the Himawari loop keeps working.
-- **Not verified:** real NOSC catalog, DAS/DDS and `.dods` formats; the
-  attribute names for times, scaling, units and F0; real image appearance,
-  PNG size and timing.
+- **Not yet verified:** a full day of hourly runs, cloudy scenes, image
+  appearance at higher sun, and ocean-colour band saturation on bright cloud.
+  None occurred in the first real scene; its maximum 660 nm radiance was 80.6.
+  The real formats were checked on October 31 (see
+  [Activation and first live run](#activation-and-first-live-run)).
 
 ## Release verification
 
@@ -258,13 +263,57 @@ from commit `9de6b28`, with `KHOA_GOCI2_ACCESS_APPROVED` absent:
   Himawari loop: side by side at 1440 px, stacked at 1024 px, with no console
   errors.
 
+## Activation and first live run
+
+The user set `KHOA_GOCI2_ACCESS_APPROVED=true` on `striped-chipmunk-763` on the
+evening of October 30 CDT (morning of October 31 KST).
+
+- **Failure.** The first live run, at 01:15 UTC on October 31 (10:15 KST),
+  failed directory `GK2_GC2_L1B_20261030_231630` with "no valid navigation in
+  sample". With no remembered slot, the search probed slots in ascending
+  order. S000 lies at about 23.7–31.4° N, 135.9–144.4° E, so none of its probe
+  points fell inside the sanity window around RKSI. The locator threw instead
+  of skipping that slot, which failed the whole directory and started its
+  30-minute back-off.
+- **Real formats**, checked on one S007 file with 17 small allowlisted
+  requests (about 2.8 MB) through the production parsers:
+  - The THREDDS catalogs parse as built. The October 31 UTC day folder did
+    not exist yet at 01:21 UTC (404, handled).
+  - All twelve slot files were listed, published 15–35 minutes after the
+    23:16:30 nominal time (S007 at +25.5 minutes).
+  - The DDS has unnamed `[2780][2780]` dimensions plus 1-D
+    `/number_of_lines` and `/number_of_columns`.
+  - In the DAS, global attributes are in `H5_GLOBAL`, not `NC_GLOBAL`. The
+    clock attributes are `observation_start_time` `20261030_232852` and
+    `observation_end_time` `20261030_233000`. Bands have `units`
+    `W m-2 um-1 sr-1`, `scale_factor` 9.999999975e-07, `add_offset` 0,
+    `_FillValue` 4294967295, and `valid_min` 0 / `valid_max` 1000000000.
+  - Navigation is unscaled Float32 with fill −999. The file also carries
+    `geospatial_*` bounds (S007: 30.67–39.29° N, 121.99–130.41° E).
+  - There is **no per-band F0 attribute**, so the labelled reference F0 is
+    used.
+  - The `.dods` framing and XDR decoding match the parser.
+- **Fix.** The locator now reports a slot that does not surround RKSI as
+  not containing the airport, with a reason, and the search moves on.
+  `H5_GLOBAL` is accepted and scaled navigation arrays are rejected. The
+  synthetic fixture mirrors the real layouts. Regression tests cover far
+  slots listed before S007 and the case where no slot fits.
+- **Real end-to-end render** (local diagnostic, same code, nothing stored):
+  - Window of 309 × 431 pixels; 2.71 MB downloaded, with no fill or
+    out-of-range counts.
+  - Navigation residual 0.004 pixel; native spacing 0.2596 × 0.3605 km;
+    RKSI at row 540.94, column 1449.21.
+  - All cells valid, with the sun at 16° (08:29 KST). PNG of 181 KB.
+  - The scene was cloud-free, with the coastline and islands in place. The
+    low sun leaves the blue haze expected from the approximate Rayleigh
+    removal.
+
 ## Before activation
 
-1. Ask the user before any request to NOSC. With their permission, compare
-   one S007 `.das` and `.dds` and the day and directory `catalog.xml` with
-   the synthetic fixture (`test/fixtures/goci2Synthetic.mjs`): variable
-   paths, the observation time attributes, `scale_factor`, `units`,
-   `_FillValue`, any F0 attribute and the catalog element names. Update the
+1. Done on October 31, 2026 (see
+   [Activation and first live run](#activation-and-first-live-run)). For a
+   future format change, compare one S007 `.das`, `.dds` and catalog with the
+   synthetic fixture (`test/fixtures/goci2Synthetic.mjs`) and update the
    parser and fixture if they differ.
 2. Done on October 30, 2026 (see [Release verification](#release-verification)).
    For any later redeploy, deploy the Convex code, schema and crons with the
@@ -275,7 +324,7 @@ from commit `9de6b28`, with `KHOA_GOCI2_ACCESS_APPROVED` absent:
    `seoulGoci2:requestRefresh` returns `approval_required` without queuing.
 3. Set the flag only after the user confirms KHOA/NOSC approval of the scope
    above, then watch the first runs (collector status, failures, PNG size
-   and appearance).
+   and appearance). The user set it on October 31 KST.
 
 ## References
 

@@ -68,6 +68,26 @@ test("first activation discovers the slot holding RKSI, downloads bounded subset
   assert.equal(view.frames[0].geometry.width, 512);
 });
 
+test("regression: far-away slots listed before S007 are skipped instead of failing the directory", async () => {
+  // Live NOSC on 2026-10-31: S000 (≈24–31° N, 136–144° E) is probed first.
+  const h = createBackendHarness(), server = createFixtureServer({ slots: ["S000", "S005", "S006", "S007"] });
+  const { result } = await collect(h, server);
+  assert.equal(result.status, "idle");
+  assert.equal(h.tables.seoulGoci2Frames[0].slot, "S007");
+  assert.equal(h.status().lastSlot, "S007");
+  assert.equal(server.requests.filter(request => request.kind === "dds").length, 4);
+  assert.equal(server.requests.filter(request => request.kind === "das").length, 1, "metadata is read for the chosen slot only");
+});
+
+test("when no published slot holds the airport view, the recorded failure names each skipped slot", async () => {
+  const h = createBackendHarness(), server = createFixtureServer({ slots: ["S000", "S005", "S006"] });
+  const { result } = await collect(h, server);
+  assert.equal(result.status, "error");
+  assert.match(h.status().sourceFailures[0].error, /No published GOCI-II slot .*S000: .*; S005: .*; S006: RKSI is outside this slot/);
+  assert.equal(server.requests.filter(request => request.kind === "das").length, 0);
+  assert.equal(h.tables.seoulGoci2Frames.length, 0);
+});
+
 test("a remembered slot skips the search; a young directory without it waits without probing", async () => {
   const h = createBackendHarness();
   await h.db.insert("seoulGoci2CollectorStatus", { stationIcao: "RKSI", status: "idle", updatedAt: NOW - 3_600_000, lastSlot: "S007" });

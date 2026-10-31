@@ -1893,7 +1893,11 @@ observation.
   `seoul_goci2_rksi_retention` (hourly at :23) deletes images older than
   24 hours and orphaned blobs, also while access is not approved.
 
-It was built and tested with synthetic fixtures only and is not activated.
-Real NOSC response formats still need one approved comparison before
-activation. The Himawari loop, its switch and all temperature models are
-unchanged.
+It was deployed with the flag absent and then activated by the user on
+October 31, 2026 KST. The first live run showed that a slot far from RKSI
+(S000) failed the slot search instead of being skipped. That was fixed after
+the real NOSC catalog, DDS, DAS and `.dods` formats were compared with the
+parser: global attributes are in `H5_GLOBAL`, and there is no per-band F0, so
+the labelled reference F0 is used. Details are in the
+[GOCI-II contract](./seoul-goci2.md#activation-and-first-live-run). The
+Himawari loop, its switch and all temperature models are unchanged.

@@ -114,6 +114,7 @@ async function chooseSlot(ctx, runId, workerToken, directory, files, claim, now)
   const preferred = files.find(file => file.slot === claim.lastSlot);
   const age = now - directory.nominalTimeUtc;
   if (!preferred && age < (claim.lastSlot ? SLOT_SEARCH_AFTER_MS : FIRST_SEARCH_AFTER_MS)) return null;
+  const skipped = [];
   for (const file of preferred ? [preferred, ...files.filter(item => item !== preferred)] : files) {
     const sourceKey = `${directory.dayPath}/${directory.name}/${file.name}`;
     const ddsResponse = await boundedFetch(ctx, runId, workerToken, goci2MetadataUrl(sourceKey, "dds"), "dds");
@@ -122,14 +123,15 @@ async function chooseSlot(ctx, runId, workerToken, directory, files, claim, now)
     const sources = [{ variable: "dds", constraint: "", bytes: ddsResponse.bytes.length, sha256: digest(ddsResponse.bytes) }];
     if (file !== preferred) {
       const probe = await sampleNavigation(ctx, runId, workerToken, sourceKey, navigation.shape, Math.floor((Math.max(...navigation.shape) - 1) / 2));
-      if (!probe.location.inside) continue;
+      if (!probe.location.inside) { skipped.push(`${file.slot}: ${probe.location.reason}`); continue; }
       sources.push(...probe.sources);
     }
     const coarse = await sampleNavigation(ctx, runId, workerToken, sourceKey, navigation.shape, Math.max(8, Math.ceil(Math.max(...navigation.shape) / 72)));
     const window = goci2Window(coarse.location, navigation.shape[0], navigation.shape[1]);
     if (window) return { file, sourceKey, dds, window, sources: [...sources, ...coarse.sources], receivedAt: Math.max(ddsResponse.receivedAt, coarse.receivedAt) };
+    skipped.push(`${file.slot}: ${coarse.location.reason ?? "the 100 km view crosses the slot edge"}`);
   }
-  throw new Error("No published GOCI-II slot holds the complete 100 km RKSI view.");
+  throw new Error(`No published GOCI-II slot holds the complete 100 km RKSI view (${skipped.slice(-4).join("; ") || "no slot files"}).`);
 }
 
 async function captureDirectory(ctx, runId, workerToken, directory, claim) {

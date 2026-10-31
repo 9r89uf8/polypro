@@ -79,6 +79,10 @@ export function goci2Metadata(das, dds, nominalTimeUtc) {
   requireValue(latitude?.type === "Float32" && longitude?.type === "Float32" && latitude.shape.length === 2
     && latitude.shape.every((size, index) => size === longitude.shape[index] && size >= 100 && size <= 4000),
   "unexpected navigation arrays");
+  for (const variable of [GOCI2_VARIABLES.latitude, GOCI2_VARIABLES.longitude]) {
+    const attributes = dasVariable(das, variable), scale = dasNumber(attributes, "scale_factor"), offset = dasNumber(attributes, "add_offset");
+    requireValue((scale === null || scale === 1) && (offset === null || offset === 0), "scaled navigation arrays are unsupported");
+  }
   const [gridRows, gridColumns] = latitude.shape, bands = {};
   for (const band of GOCI2_BANDS) {
     const variable = GOCI2_VARIABLES[band], declared = dds.variables.get(variable), attributes = dasVariable(das, variable);
@@ -133,33 +137,45 @@ function affine(points) {
     toGrid: (x, y) => [((x - a0) * b2 - a2 * (y - b0)) / determinant, (a1 * (y - b0) - (x - a0) * b1) / determinant] };
 }
 
-/** RKSI's fractional grid position from a strided lat/lon sample. */
+function plausibleNavigation(latitude, longitude, fill) {
+  return finite(latitude) && finite(longitude) && latitude !== fill && longitude !== fill
+    && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180;
+}
+
+/** RKSI's fractional grid position from a strided lat/lon sample. A slot far
+ * from RKSI (NOSC's S000 lies near 24–31° N, 136–144° E) or with unusable
+ * navigation is reported as not containing the airport, so the slot search
+ * moves on instead of failing the whole directory. */
 export function locateGoci2(latitude, longitude, rowIndices, columnIndices, fill) {
-  const columns = columnIndices.length, at = (i, j) => i * columns + j;
+  const columns = columnIndices.length, at = (i, j) => i * columns + j, outside = reason => ({ inside: false, reason });
   requireValue(latitude.length === rowIndices.length * columns && longitude.length === latitude.length, "sample shape mismatch");
   let nearest = null;
   for (let i = 0; i < rowIndices.length; i++) for (let j = 0; j < columns; j++) {
-    if (!validNavigation(latitude[at(i, j)], longitude[at(i, j)], fill)) continue;
+    if (!plausibleNavigation(latitude[at(i, j)], longitude[at(i, j)], fill)) continue;
     const distance = Math.hypot(...goci2LocalKm(latitude[at(i, j)], longitude[at(i, j)]));
     if (!nearest || distance < nearest.distance) nearest = { i, j, distance };
   }
-  requireValue(nearest, "no valid navigation in sample");
+  if (!nearest) return outside("no valid navigation in sample");
   const points = [];
   for (let i = Math.max(0, nearest.i - 2); i <= Math.min(rowIndices.length - 1, nearest.i + 2); i++) {
     for (let j = Math.max(0, nearest.j - 2); j <= Math.min(columns - 1, nearest.j + 2); j++) {
-      if (!validNavigation(latitude[at(i, j)], longitude[at(i, j)], fill)) continue;
+      if (!plausibleNavigation(latitude[at(i, j)], longitude[at(i, j)], fill)) continue;
       const [x, y] = goci2LocalKm(latitude[at(i, j)], longitude[at(i, j)]);
       points.push({ row: rowIndices[i], column: columnIndices[j], x, y });
     }
   }
-  requireValue(points.length >= 6, "too little valid navigation near RKSI");
-  const fit = affine(points), [row, column] = fit.toGrid(0, 0);
+  if (points.length < 6) return outside("too little valid navigation near RKSI");
+  let fit;
+  try { fit = affine(points); } catch { return outside("degenerate grid navigation"); }
+  if (!(fit.rowSpacingKm > 0.1 && fit.rowSpacingKm < 2 && fit.columnSpacingKm > 0.1 && fit.columnSpacingKm < 2)) {
+    return outside("implausible native pixel spacing");
+  }
+  const [row, column] = fit.toGrid(0, 0);
   const strideKm = Math.max((rowIndices[1] - rowIndices[0] || 1) * fit.rowSpacingKm, (columnIndices[1] - columnIndices[0] || 1) * fit.columnSpacingKm);
-  requireValue(fit.rowSpacingKm > 0.1 && fit.rowSpacingKm < 2 && fit.columnSpacingKm > 0.1 && fit.columnSpacingKm < 2,
-    "implausible native pixel spacing");
-  return { row, column, rowSpacingKm: fit.rowSpacingKm, columnSpacingKm: fit.columnSpacingKm, toGrid: fit.toGrid,
-    inside: nearest.distance <= 1.5 * strideKm && row >= rowIndices[0] && row <= rowIndices.at(-1)
-      && column >= columnIndices[0] && column <= columnIndices.at(-1) };
+  const inside = nearest.distance <= 1.5 * strideKm && row >= rowIndices[0] && row <= rowIndices.at(-1)
+    && column >= columnIndices[0] && column <= columnIndices.at(-1);
+  return { row, column, rowSpacingKm: fit.rowSpacingKm, columnSpacingKm: fit.columnSpacingKm, toGrid: fit.toGrid, inside,
+    ...(inside ? {} : { reason: "RKSI is outside this slot" }) };
 }
 
 /** Native window that contains the whole north-up airport square, or null. */

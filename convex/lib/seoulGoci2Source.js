@@ -290,7 +290,8 @@ export function dasVariable(das, path) {
   }
   return node;
 }
-export function dasGlobal(das) { return das.containers.NC_GLOBAL ?? das.containers["/"] ?? null; }
+// NOSC's Hyrax names the global container H5_GLOBAL (checked 2026-10-31).
+export function dasGlobal(das) { return das.containers.NC_GLOBAL ?? das.containers.H5_GLOBAL ?? das.containers["/"] ?? null; }
 export function dasNumber(container, name) {
   const value = container?.attributes?.[name]?.values;
   return Array.isArray(value) && value.length === 1 && typeof value[0] === "number" && Number.isFinite(value[0]) ? value[0] : null;

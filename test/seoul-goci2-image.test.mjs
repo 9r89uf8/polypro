@@ -38,8 +38,9 @@ test("metadata supplies observation clocks, grid, scaling, units and F0 source; 
   assert.equal(meta.observationStartUtc, Date.parse("2026-10-30T02:27:16Z"));
   assert.equal(meta.observedAt, Date.parse("2026-10-30T02:27:48Z"));
   assert.deepEqual([meta.gridRows, meta.gridColumns], [2780, 2780]);
-  assert.deepEqual(meta.bands[660], { variable: "/geophysical_data/L_TOA_660", scaleFactor: 1e-6, addOffset: 0, fillValue: 4294967295,
-    validMin: null, validMax: null, f0: GOCI2_REFERENCE_F0[660], f0Source: "reference" });
+  assert.deepEqual(meta.bands[660], { variable: "/geophysical_data/L_TOA_660", scaleFactor: 9.999999975e-7, addOffset: 0, fillValue: 4294967295,
+    validMin: 0, validMax: 1e9, f0: GOCI2_REFERENCE_F0[660], f0Source: "reference" });
+  assert.equal(metadata(fixtureDas({ nested: true })).observedAt, meta.observedAt, "NC_GLOBAL and H5_GLOBAL both supply the clocks");
   assert.equal(metadata(fixtureDas({ f0Attribute: { name: "F0" } })).bands[443].f0Source, "file:F0");
   assert.equal(metadata(fixtureDas({ f0Attribute: { name: "solar_irradiance", scale: 0.1 } })).bands[555].f0, 1840, "mW cm-2 µm-1 accepted");
   assert.throws(() => metadata(fixtureDas({ f0Attribute: { name: "F0", scale: 1.5 } })), /solar-irradiance/);
@@ -48,7 +49,8 @@ test("metadata supplies observation clocks, grid, scaling, units and F0 source; 
     [fixtureDas({ units: "mW cm-2 um-1 sr-1" }), fixtureDds(), /units/], [fixtureDas({ units: "W m-2 nm-1 sr-1" }), fixtureDds(), /units/],
     [fixtureDas({ start: "20261030_032716", end: "20261030_032820" }), fixtureDds(), /slot directory/],
     [fixtureDas({ end: "20261030_023500" }), fixtureDds(), /observation clock/], [fixtureDas({ start: "bad" }), fixtureDds(), /observation clock/],
-    [fixtureDas(), fixtureDds("S007", { omit: 555 }), /555 nm/], [fixtureDas().replaceAll("1.0E-6", "0.0"), fixtureDds(), /scaling/],
+    [fixtureDas(), fixtureDds("S007", { omit: 555 }), /555 nm/], [fixtureDas().replaceAll("9.999999975e-07", "0.0"), fixtureDds(), /scaling/],
+    [fixtureDas().replace("Float32 scale_factor 1.;", "Float32 scale_factor 0.01;"), fixtureDds(), /scaled navigation/],
   ]) assert.throws(() => metadata(das, dds), pattern);
 });
 
@@ -62,6 +64,18 @@ test("strided navigation locates RKSI at the measured S007 position and bounds a
   const elsewhere = coarseLocation("S006");
   assert.equal(elsewhere.inside, false, "a slot that does not contain RKSI is never extrapolated");
   assert.equal(goci2Window(elsewhere, 2780, 2780), null);
+  // Regression (2026-10-31): NOSC's S000 lies about 24–31° N, 136–144° E, and
+  // the first live search threw "no valid navigation in sample" on it instead
+  // of moving on to S007.
+  for (const slot of ["S000", "S005"]) {
+    const range = { start: 0, stride: 1389, stop: 2779 }, axis = [0, 1389, 2778];
+    const probe = locateGoci2(download("/navigation_data/latitude", "Float32", range, range, { slot }),
+      download("/navigation_data/longitude", "Float32", range, range, { slot }), axis, axis, -999);
+    assert.equal(probe.inside, false, slot);
+    assert.match(probe.reason, /outside this slot|navigation/, slot);
+  }
+  const nothing = locateGoci2(new Float32Array(9).fill(-999), new Float32Array(9).fill(-999), [0, 1389, 2778], [0, 1389, 2778], -999);
+  assert.deepEqual(nothing, { inside: false, reason: "no valid navigation in sample" });
   assert.equal(goci2Window({ ...location, toGrid: (x, y) => location.toGrid(x, y).map((value, axis) => axis ? value + 1300 : value) }, 2780, 2780), null,
     "a square clipped by the slot edge is rejected rather than partly rendered");
 });

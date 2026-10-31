@@ -42,14 +42,18 @@ test("THREDDS catalogs yield slot directories and LA slot files with provenance 
 
 test("DDS and DAS parsers read Hyrax group paths, flat or nested, and reject malformed text", () => {
   const dds = parseDapDds(fixtureDds());
-  assert.deepEqual(dds.variables.get("/navigation_data/latitude"), { type: "Float32", shape: [2780, 2780], dimensions: ["number_of_lines", "pixels_per_line"] });
+  assert.deepEqual(dds.variables.get("/navigation_data/latitude"), { type: "Float32", shape: [2780, 2780], dimensions: [null, null] });
   assert.equal(dds.variables.get("/geophysical_data/L_TOA_660").type, "UInt32");
+  assert.deepEqual(dds.variables.get("/number_of_lines").shape, [2780], "NOSC's 1-D size variables are tolerated");
   assert.throws(() => parseDapDds("Error {\n code = 404;\n};"), /dataset/);
   assert.throws(() => parseDapDds(fixtureDds().replace(/\} GK2[^\n]*\n$/, "")), /truncated/);
   for (const nested of [false, true]) {
     const das = parseDapDas(fixtureDas({ nested }));
     const band = dasVariable(das, "/geophysical_data/L_TOA_660");
-    assert.equal(dasNumber(band, "scale_factor"), 1e-6);
+    assert.ok(nested ? das.containers.NC_GLOBAL : das.containers.H5_GLOBAL, "NOSC names its global container H5_GLOBAL");
+    assert.match(dasString(dasGlobal(das), "history"), /BAND_CNT = 12\nOUTPUT/, "multi-line quoted strings survive");
+    assert.equal(dasNumber(band, "scale_factor"), 9.999999975e-7);
+    assert.equal(dasNumber(band, "valid_max"), 1e9);
     assert.equal(dasNumber(band, "_FillValue"), 4294967295);
     assert.equal(dasString(band, "units"), "W m-2 um-1 sr-1");
     assert.equal(dasNumber(dasVariable(das, "/navigation_data/latitude"), "_FillValue"), -999);
