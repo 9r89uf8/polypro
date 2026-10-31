@@ -25,6 +25,19 @@ Cross-midnight target dates stay explicit. This card is separate from official
 METAR and daily-high values. See the [nowcast specification](./seoul-temperature-nowcast.md)
 for input versioning, scoring and retention.
 
+## Analog peak timing card — November 1, 2026 KST
+
+Below the nowcast, an experimental card subscribes to
+`seoulAnalogPeak:getDashboard` for the selected date. Before the 9:00 AM routine
+METAR it shows the seasonal peak window and typical high. After the 9:00 AM and
+12:00 PM checkpoints it shows the peak time and range from the 30 most similar
+days, the chance the high is still ahead and the likely high, each beside the
+season figure, plus the matched conditions, the closest days and when similar
+days last held their high. Past dates show the saved forecast and, once scored
+after midnight, the actual high and peak-time errors; details list 30-day
+results. Times are KST, rounded to the reports' half hour. See the
+[analog peak specification](./seoul-analog-peak.md).
+
 This document describes the streamlined RKSI dashboard: Seoul time, KMA
 forecast maximum, captured high revisions and peak times, the official
 routine-METAR maximum, observed cloud cover and its trend, the daily

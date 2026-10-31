@@ -7,6 +7,10 @@ The October 31 Seoul nowcast change adds the independent
 `seoul_temperature_nowcast_retention` (hourly) entries in `convex/crons.js`.
 They process stored RKSI AMOS data only and do not alter KORD phone calls,
 limits, credentials or schedules. See [Seoul nowcast](./seoul-temperature-nowcast.md).
+The November 1 Seoul analog peak change adds `seoul_analog_peak_checkpoints`
+(every five minutes at 00 and 03 UTC) and `seoul_analog_peak_scoring` (15:20
+UTC). They read stored RKSI routine METARs only and likewise leave KORD
+unchanged. See [Seoul analog peak](./seoul-analog-peak.md).
 
 ## Purpose
 

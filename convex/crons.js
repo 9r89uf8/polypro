@@ -386,6 +386,23 @@ crons.cron(
   {},
 );
 
+// Analog peak timing from stored routine METARs: every five minutes through
+// the 09:00 and 12:00 KST hours (00 and 03 UTC) until the checkpoint report
+// arrives, then scoring of completed days at 00:20 KST.
+crons.cron(
+  "seoul_analog_peak_checkpoints",
+  "*/5 0,3 * * *",
+  internal.seoulAnalogPeak.issueScheduledCheckpoint,
+  {},
+);
+
+crons.cron(
+  "seoul_analog_peak_scoring",
+  "20 15 * * *",
+  internal.seoulAnalogPeak.scoreCompletedDays,
+  {},
+);
+
 // Retains a cadence-tagged five-minute snapshot of every AMOS display row for
 // auditing and fallback; the live chart prefers the one-minute 15L series.
 crons.cron(

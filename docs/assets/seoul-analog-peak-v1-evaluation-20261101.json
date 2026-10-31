@@ -1,0 +1,207 @@
+{
+  "generatedAt": "2026-10-31T19:06:09.577Z",
+  "modelVersion": "rksi-analog-peak-v1",
+  "libraryVersion": "rksi-iem-analog-library-v1",
+  "method": "Every library day with checkpoint features is a target; analogs come only from days at least 183 days away. Season = all same-window days without conditioning.",
+  "sources": {
+    "scriptSha256": "c3163465ae918f2631e9f6de76748c5249ade0b73714281e1e1808cf0bbf30e4",
+    "modelSha256": "e04971258f060171a5adf16c16c4b5d30d9ec7295f7911e1047c9fc50f1f986a",
+    "librarySha256": "00aa74756bf4dd6c6d12265338c0c6d787a4b23236ce69a7d86f9f963a2344b7"
+  },
+  "results": {
+    "09:00": {
+      "all": {
+        "days": 3923,
+        "analog": {
+          "peakMaeMinutes": 125.7,
+          "interval10to90Coverage": 0.813,
+          "intervalWidthMinutes": 354.4,
+          "brierPeakAhead": 0.0619,
+          "maxMaeC": 1.166,
+          "maxExactShare": 0.282
+        },
+        "season": {
+          "peakMaeMinutes": 133.7,
+          "interval10to90Coverage": 0.85,
+          "intervalWidthMinutes": 446.2,
+          "brierPeakAhead": 0.082,
+          "maxMaeC": 1.393,
+          "maxExactShare": 0.234
+        }
+      },
+      "winter": {
+        "days": 953,
+        "analog": {
+          "peakMaeMinutes": 168.2,
+          "interval10to90Coverage": 0.832,
+          "intervalWidthMinutes": 481.1,
+          "brierPeakAhead": 0.0873,
+          "maxMaeC": 1.162,
+          "maxExactShare": 0.29
+        },
+        "season": {
+          "peakMaeMinutes": 192.8,
+          "interval10to90Coverage": 0.881,
+          "intervalWidthMinutes": 815.8,
+          "brierPeakAhead": 0.1293,
+          "maxMaeC": 1.511,
+          "maxExactShare": 0.226
+        }
+      },
+      "spring": {
+        "days": 1004,
+        "analog": {
+          "peakMaeMinutes": 102.5,
+          "interval10to90Coverage": 0.798,
+          "intervalWidthMinutes": 274.4,
+          "brierPeakAhead": 0.0493,
+          "maxMaeC": 1.325,
+          "maxExactShare": 0.254
+        },
+        "season": {
+          "peakMaeMinutes": 101.8,
+          "interval10to90Coverage": 0.838,
+          "intervalWidthMinutes": 250.1,
+          "brierPeakAhead": 0.06,
+          "maxMaeC": 1.523,
+          "maxExactShare": 0.202
+        }
+      },
+      "summer": {
+        "days": 1007,
+        "analog": {
+          "peakMaeMinutes": 110.5,
+          "interval10to90Coverage": 0.793,
+          "intervalWidthMinutes": 321,
+          "brierPeakAhead": 0.0493,
+          "maxMaeC": 1.054,
+          "maxExactShare": 0.295
+        },
+        "season": {
+          "peakMaeMinutes": 109.4,
+          "interval10to90Coverage": 0.83,
+          "intervalWidthMinutes": 281,
+          "brierPeakAhead": 0.0548,
+          "maxMaeC": 1.105,
+          "maxExactShare": 0.278
+        }
+      },
+      "autumn": {
+        "days": 959,
+        "analog": {
+          "peakMaeMinutes": 123.7,
+          "interval10to90Coverage": 0.829,
+          "intervalWidthMinutes": 347.3,
+          "brierPeakAhead": 0.063,
+          "maxMaeC": 1.124,
+          "maxExactShare": 0.291
+        },
+        "season": {
+          "peakMaeMinutes": 134,
+          "interval10to90Coverage": 0.853,
+          "intervalWidthMinutes": 457.7,
+          "brierPeakAhead": 0.0867,
+          "maxMaeC": 1.442,
+          "maxExactShare": 0.228
+        }
+      }
+    },
+    "12:00": {
+      "all": {
+        "days": 3923,
+        "analog": {
+          "peakMaeMinutes": 124.9,
+          "interval10to90Coverage": 0.831,
+          "intervalWidthMinutes": 353.7,
+          "brierPeakAhead": 0.1812,
+          "maxMaeC": 0.65,
+          "maxExactShare": 0.468
+        },
+        "season": {
+          "peakMaeMinutes": 133.7,
+          "interval10to90Coverage": 0.85,
+          "intervalWidthMinutes": 446.3,
+          "brierPeakAhead": 0.2072,
+          "maxMaeC": 0.703,
+          "maxExactShare": 0.447
+        }
+      },
+      "winter": {
+        "days": 954,
+        "analog": {
+          "peakMaeMinutes": 173.4,
+          "interval10to90Coverage": 0.863,
+          "intervalWidthMinutes": 491.5,
+          "brierPeakAhead": 0.1518,
+          "maxMaeC": 0.667,
+          "maxExactShare": 0.481
+        },
+        "season": {
+          "peakMaeMinutes": 192.6,
+          "interval10to90Coverage": 0.881,
+          "intervalWidthMinutes": 815.6,
+          "brierPeakAhead": 0.1983,
+          "maxMaeC": 0.831,
+          "maxExactShare": 0.377
+        }
+      },
+      "spring": {
+        "days": 1002,
+        "analog": {
+          "peakMaeMinutes": 100.3,
+          "interval10to90Coverage": 0.815,
+          "intervalWidthMinutes": 261.8,
+          "brierPeakAhead": 0.1997,
+          "maxMaeC": 0.696,
+          "maxExactShare": 0.437
+        },
+        "season": {
+          "peakMaeMinutes": 101.7,
+          "interval10to90Coverage": 0.836,
+          "intervalWidthMinutes": 250,
+          "brierPeakAhead": 0.2104,
+          "maxMaeC": 0.708,
+          "maxExactShare": 0.433
+        }
+      },
+      "summer": {
+        "days": 1008,
+        "analog": {
+          "peakMaeMinutes": 105.4,
+          "interval10to90Coverage": 0.813,
+          "intervalWidthMinutes": 322.1,
+          "brierPeakAhead": 0.2009,
+          "maxMaeC": 0.637,
+          "maxExactShare": 0.468
+        },
+        "season": {
+          "peakMaeMinutes": 109.4,
+          "interval10to90Coverage": 0.83,
+          "intervalWidthMinutes": 280.9,
+          "brierPeakAhead": 0.2168,
+          "maxMaeC": 0.643,
+          "maxExactShare": 0.488
+        }
+      },
+      "autumn": {
+        "days": 959,
+        "analog": {
+          "peakMaeMinutes": 122.8,
+          "interval10to90Coverage": 0.835,
+          "intervalWidthMinutes": 345.9,
+          "brierPeakAhead": 0.1703,
+          "maxMaeC": 0.599,
+          "maxExactShare": 0.486
+        },
+        "season": {
+          "peakMaeMinutes": 134,
+          "interval10to90Coverage": 0.853,
+          "intervalWidthMinutes": 457.7,
+          "brierPeakAhead": 0.2028,
+          "maxMaeC": 0.634,
+          "maxExactShare": 0.488
+        }
+      }
+    }
+  }
+}

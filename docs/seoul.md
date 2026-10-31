@@ -17,6 +17,17 @@ A second test value adds a seasonal time-of-day drift built offline from open
 Iowa Environmental Mesonet RKSI METARs (2016 to October 25, 2026). It beat
 persistence by 4–11% on the stored October 26–31 minutes and is now scored
 live; production makes no IEM request.
+
+## Analog peak timing — November 1, 2026
+
+The [analog peak card](./seoul-analog-peak.md) matches the 09:00 and 12:00 KST
+routine METARs with the 30 most similar days in a library built offline from
+the same IEM archive (3,927 days from 2016). It saves one immutable forecast per
+checkpoint (`seoulAnalogPeakForecasts`) and scores it after KST midnight
+(`seoulAnalogPeakOutcomes`), via the new `seoul_analog_peak_checkpoints` and
+`seoul_analog_peak_scoring` crons. In a look-back test it beat the seasonal
+average on whether the high was still ahead and on the exact high, while
+single peak times stayed about two hours off.
 No new external feed, credential or approval flag is introduced. The linked
 specification records availability clocks, first-valid-target scoring,
 30/32/365-day retention and all new entry points.
