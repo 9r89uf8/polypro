@@ -18,7 +18,7 @@ function AccuracyDetails({ state, date }) {
   const hasPairs = state.metrics.some(row => row.pairedCount > 0);
   return <details className={styles.details}>
     <summary>Methods, accuracy & saved results</summary>
-    <p>A damped trend projects recent warming or cooling, then gradually reduces that rate. The no-change benchmark holds the latest reading constant. This is an experimental statistical estimate, not a trained weather model.</p>
+    <p>The large number holds the latest 15L reading constant (no change). The trend test projects recent warming or cooling, then gradually reduces that rate. It is shown smaller because it has not beaten no change in saved results. This is an experimental statistical estimate, not a trained weather model.</p>
     <h3>Recorded performance{state.metricsWindowDays > 1 ? ` · past ${state.metricsWindowDays} days` : ""}</h3>
     <p>Issued {state.metricsStartDate === date ? `on ${date}` : `${state.metricsStartDate} to ${date}`}, scored against the actual 15L reading at each target minute. Lower mean absolute error (MAE) is better.</p>
     {!hasChecks ? <p className={styles.emptyResults}>No target readings have been scored yet.</p> : <div className={styles.tableScroll} role="region" aria-label="Nowcast accuracy comparison" tabIndex={0}>
@@ -38,11 +38,12 @@ function AccuracyDetails({ state, date }) {
       <div className={styles.tableScroll} role="region" aria-label="Recent nowcast outcomes" tabIndex={0}>
         <table>
           <caption className={styles.srOnly}>Up to four recent forecast issues. All times in KST; a different target date is shown explicitly.</caption>
-          <thead><tr><th scope="col">Issued</th><th scope="col">Target</th><th scope="col">Estimate</th><th scope="col">Actual 15L</th></tr></thead>
+          <thead><tr><th scope="col">Issued</th><th scope="col">Target</th><th scope="col">No change</th><th scope="col">Trend test</th><th scope="col">Actual 15L</th></tr></thead>
           <tbody>{state.recent.flatMap(issue => issue.predictions.filter(row => row.targetTimeUtc).map(row => <tr key={`${issue.issuedAt}-${row.horizonMinutes}`}>
             <td><Timestamp value={issue.issuedAt} date={date} seconds /></td>
             <th scope="row"><Timestamp value={row.targetTimeUtc} date={date} /><span className={styles.tableNote}>{row.horizonMinutes} min target</span></th>
-            <td>{formatNowcastTemperature(row.estimateC)}<span className={styles.tableNote}>{row.method === "damped_trend" ? "Damped trend" : row.method === "persistence" ? "No change" : "Unavailable"}</span></td>
+            <td>{formatNowcastTemperature(row.estimateC)}</td>
+            <td>{formatNowcastTemperature(row.dampedTrendC)}</td>
             <td><Outcome prediction={row} /></td>
           </tr>))}</tbody>
         </table>
@@ -54,14 +55,14 @@ function AccuracyDetails({ state, date }) {
 
 export default function TemperatureNowcast({ dashboard, date, now }) {
   const state = useMemo(() => buildNowcastState(dashboard, date, now), [dashboard, date, now]);
-  const delayed = state.kind === "stale" || state.kind === "unavailable" || state.kind === "persistence_only";
+  const delayed = state.kind === "stale" || state.kind === "unavailable";
   const saved = state.isArchived || state.kind === "stale";
   const title = state.isArchived ? "Saved temperature nowcasts" : state.kind === "stale" ? "Last issued temperature nowcast"
     : state.kind === "future" ? "15L temperature nowcast" : "Temperature in the next 20 minutes";
   return <section className={styles.card} aria-labelledby="nowcast-heading">
     <div className={styles.header}>
       <div><span className={styles.eyebrow}>15L AMOS · EXPERIMENTAL</span><h2 id="nowcast-heading">{title}</h2></div>
-      <span className={`${styles.badge} ${state.kind === "ready" ? styles.fresh : delayed ? styles.delayed : ""}`}>{state.label}</span>
+      <span className={`${styles.badge} ${state.isLive ? styles.fresh : delayed ? styles.delayed : ""}`}>{state.label}</span>
     </div>
     <p className={styles.scope}>Estimates of the 15L sensor reading. Separate from official METAR temperatures and the daily high.</p>
     {state.detail ? <p className={`${styles.status} ${delayed ? styles.statusWarning : ""}`} role="status">{state.detail}</p> : null}
@@ -71,7 +72,8 @@ export default function TemperatureNowcast({ dashboard, date, now }) {
         <div className={styles.value}>{formatNowcastTemperature(row.estimateC)}</div>
         <p className={styles.target}><Timestamp value={row.targetTimeUtc} date={date} /></p>
         {row.actualLeadMinutes !== null ? <span className={styles.lead}>{Number(row.actualLeadMinutes.toFixed(1))} min from issue</span> : null}
-        <span className={styles.method}>{row.method === "damped_trend" ? "Damped trend" : row.method === "persistence" ? "No change · persistence" : "Estimate unavailable"}</span>
+        <span className={styles.method}>{row.method === "persistence" ? "No change · persistence" : "Estimate unavailable"}</span>
+        {row.dampedTrendC !== null ? <span className={styles.trendTest}>Trend test {formatNowcastTemperature(row.dampedTrendC)}</span> : null}
         {row.status !== "pending" ? <p className={styles.outcome}>Actual: <Outcome prediction={row} /></p> : null}
       </article>)}
     </div> : null}

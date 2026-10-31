@@ -5,13 +5,17 @@
 The day page now includes an experimental 15L AMOS temperature card with
 explicit KST targets approximately 10, 15 and 20 minutes after issuance.
 It subscribes to `seoulNowcast:getDashboard` for the selected issuance date.
-Damped trend and persistence are shown with the actual source/issue clocks,
-an explicit persistence fallback when history is insufficient, and
-“No calibrated prediction range yet.” The existing 15-second clock expires live
+Since November 1, 2026 KST each card's large value is the persistence
+(no-change) estimate. The damped trend appears only as a smaller “Trend test”
+line, because a replay of stored minutes found it less accurate than no change.
+Insufficient history shows “Trend test unavailable” with the reason. Actual
+source/issue clocks and “No calibrated prediction range yet.” remain visible.
+The existing 15-second clock expires live
 status when issue or observation age exceeds two minutes; historical values
 remain labeled as saved/archived. Refresh does not reissue forecasts.
-Details show recent exact-minute outcomes and 30-day recorded MAE, comparing
-trend and persistence on the same paired cases and exposing actual day counts.
+Details show recent exact-minute outcomes with no-change and trend-test columns,
+and 30-day recorded MAE comparing both on the same paired cases with actual day
+counts.
 Cross-midnight target dates stay explicit. This card is separate from official
 METAR and daily-high values. See the [nowcast specification](./seoul-temperature-nowcast.md)
 for input versioning, scoring and retention.

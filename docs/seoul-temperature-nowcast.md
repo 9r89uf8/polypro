@@ -3,7 +3,10 @@
 Version one predicts the **15L AMOS temperature reading** at explicit target
 minutes approximately 10, 15 and 20 minutes after issuance. It is independent
 of the daily-high ceiling, official integer METAR and market settlement. It
-makes no claim of measured skill or calibrated uncertainty.
+makes no claim of measured skill or calibrated uncertainty. The dashboard
+headlines the persistence (no-change) estimate; a replay of stored minutes
+found the damped trend less accurate, so it is shown only as a smaller test
+value. See [the display decision](#display-decision-and-stored-minute-replay).
 
 ## Issuance and timing
 
@@ -103,6 +106,9 @@ having a scored target, and current-model
 daily aggregates for the 30 dates ending on the selected date. Targets can
 cross midnight. The frontend prefers the scored issues in its details, so a
 continuous stream of new pending forecasts does not hide actual results.
+Each card's large value is the persistence estimate. The damped trend appears
+as a smaller “Trend test” line, or “Trend test unavailable” when coverage is
+insufficient, and recent results list both beside the actual 15L reading.
 
 The existing 15-second client clock expires live status when either issue or
 source-observation age exceeds two minutes, even if database writes stop.
@@ -134,6 +140,55 @@ The two-day source buffer exceeds the one-hour input lookback. Retained
 forecasts retain their source evidence. Export before expiry for longer
 research; this rolling ledger does not provide an annual training archive.
 
+## Display decision and stored-minute replay
+
+On November 1, 2026 KST the dashboard's large value changed from the damped
+trend to persistence. The trend is still issued, saved and scored on paired
+cases, so the live ledger can show whether it ever earns the headline. The
+model, scoring and stored records did not change.
+
+The decision follows an offline replay of the unchanged `buildNowcast` rule
+over every stored one-minute 15L row from 10:42 KST on October 26 through
+23:32 KST on October 31: 7,910 issues, 7,888 with a trend and 22
+persistence-only. Each issue saw only rows whose stored `firstSeenAt` preceded
+it, and targets followed the first-valid-captured rule. The rule was not tuned
+on these days.
+
+| Target | Paired cases | Persistence MAE | Damped-trend MAE | Trend change |
+| --- | ---: | ---: | ---: | ---: |
+| 10 minutes | 7,824 | 0.242°C | 0.283°C | +17.2% |
+| 15 minutes | 7,815 | 0.294°C | 0.348°C | +18.3% |
+| 20 minutes | 7,809 | 0.342°C | 0.399°C | +16.5% |
+
+- The trend was less accurate on every KST issue date, apart from one
+  20-minute tie on October 27.
+- It helped only during the 06:00–10:00 KST warm-up, with 8–15% lower error,
+  and roughly tied from 14:00 to 18:00. It was 14–16% worse from 10:00 to
+  14:00, 24–29% worse overnight and 31–38% worse from 18:00 to midnight.
+- When the actual change was at least 0.5°C, the trend was still 5–9% worse.
+- Rounded to whole degrees at routine METAR minutes, persistence matched 198,
+  189 and 178 reports, versus 192, 171 and 166 for the trend, out of 263, 263
+  and 262 paired slots.
+
+A 15-minute slope follows short fluctuations and 0.1°C steps, and the
+20-minute damping still keeps 63–79% of a straight-line projection at these
+leads. These are 5.5 dependent late-October days from one season, not a skill
+estimate for other weather. The exports hold only each minute's current row,
+so unretained revisions cannot be replayed.
+
+Reproduce from stored `seoul:getDayStationRows` responses saved as
+`day-YYYY-MM-DD.json` in one directory. They contain database IDs, so keep them
+in ignored local storage:
+
+```text
+node scripts/replay-seoul-nowcast-v1.mjs <export-directory> <new-output.json>
+```
+
+The [saved replay summary](assets/seoul-nowcast-v1-replay-20261101.json)
+records input and source hashes, assumptions, and per-horizon, time-of-day and
+per-date results. The script makes no requests and refuses to overwrite an
+existing output.
+
 ## Boundaries and checks
 
 This computes from the existing AMOS feed and adds no external request,
@@ -143,6 +198,6 @@ are internal; the dashboard query is read-only. No trading behavior is added.
 
 Tests cover future-data exclusion, revisions/sentinels, timing, midnight,
 duplicate polling, coverage, fallback, delayed jobs, immutable issuance,
-target corrections, missing targets, paired metrics, retention and client
-freshness. Publish Convex schema/functions before the frontend calls the new
+target corrections, missing targets, paired metrics, retention, client
+freshness and the no-change headline. Publish Convex schema/functions before the frontend calls the new
 query. The local Next.js build limitation in `AGENTS.md` still applies.

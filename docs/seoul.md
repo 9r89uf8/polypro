@@ -9,6 +9,9 @@ one forecast per newly captured 15L minute. Separate minute scoring and hourly
 retention jobs preserve issued predictions, count exact-target outcomes, and
 compare both methods on paired cases. These estimates are experimental, have
 no calibrated uncertainty, and do not predict official METAR or settlement.
+A replay of October 26–31 minutes found the damped trend 17–18% less accurate
+than persistence, so the dashboard headlines persistence and shows the trend
+only as a test value.
 No new external feed, credential or approval flag is introduced. The linked
 specification records availability clocks, first-valid-target scoring,
 30/32/365-day retention and all new entry points.

@@ -50,8 +50,10 @@ function prediction(raw, horizonMinutes, issue, qualityStatus, now) {
     && raw.targetTimeUtc - issue.issuedAt < DAY ? raw.targetTimeUtc : null;
   const persistenceC = targetTimeUtc ? number(raw?.persistenceC) : null;
   const dampedTrendC = targetTimeUtc && qualityStatus === "ready" ? number(raw?.dampedTrendC) : null;
-  const estimateC = dampedTrendC ?? persistenceC;
-  const method = dampedTrendC !== null ? "damped_trend" : persistenceC !== null ? "persistence" : null;
+  // No change is the headline. The damped trend lost to it in a replay of
+  // stored minutes, so it remains a separately labeled test value.
+  const estimateC = persistenceC;
+  const method = persistenceC !== null ? "persistence" : null;
   const hasActual = raw?.status === "scored" && targetTimeUtc && targetTimeUtc <= now
     && number(raw.actualC) !== null && validTime(raw.scoredAt) && raw.scoredAt <= now && raw.scoredAt >= targetTimeUtc;
   return {
@@ -156,8 +158,8 @@ export function buildNowcastState(data, date, now) {
       detail: "The reading or forecast is more than 2 minutes old. Showing saved estimates until a fresh forecast arrives." };
   }
   if (latest.qualityStatus === "persistence_only" || latest.predictions.every(item => item.dampedTrendC === null)) {
-    return { ...result, kind: "persistence_only", label: "No-change estimate", isLive: true,
-      detail: latest.qualityReason || "There is not enough usable recent history for a trend. Holding the latest temperature constant." };
+    return { ...result, kind: "persistence_only", label: "Fresh", isLive: true,
+      detail: `Trend test unavailable. ${latest.qualityReason || "There is not enough usable recent history for a trend."}` };
   }
   return { ...result, kind: "ready", label: "Fresh", detail: "", isLive: true };
 }

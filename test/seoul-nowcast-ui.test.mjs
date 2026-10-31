@@ -40,7 +40,7 @@ test("fresh forecasts preserve the actual target and lead from issuance", () => 
   const state = buildNowcastState(dashboard(), DATE, NOW);
   assert.equal(state.kind, "ready");
   assert.equal(state.isLive, true);
-  assert.deepEqual(state.predictions.map(row => row.estimateC), [8.1, 8.0, 7.9]);
+  assert.deepEqual(state.predictions.map(row => row.estimateC), [8.3, 8.3, 8.3]);
   assert.equal(state.predictions[0].actualLeadMinutes, 10.75);
   assert.equal(state.predictions[0].observationLeadMinutes, 11);
   const html = render();
@@ -52,6 +52,18 @@ test("fresh forecasts preserve the actual target and lead from issuance", () => 
   assert.doesNotMatch(html, /80%|95%|±/);
 });
 
+test("no change is the headline; the damped trend appears only as a smaller test line", () => {
+  const state = buildNowcastState(dashboard(), DATE, NOW);
+  assert.ok(state.predictions.every(row => row.method === "persistence"));
+  assert.deepEqual(state.predictions.map(row => row.dampedTrendC), [8.1, 8.0, 7.9]);
+  const html = render();
+  assert.match(html, />Fresh</);
+  assert.equal((html.match(/class="value">8\.3°C</g) ?? []).length, 3);
+  assert.doesNotMatch(html, /class="value">(8\.1|8\.0|7\.9)°C</);
+  for (const value of ["8.1", "8.0", "7.9"]) assert.match(html, new RegExp(`class="trendTest">Trend test ${value.replace(".", "\\.")}°C<`));
+  assert.match(html, /has not beaten no change in saved results/);
+});
+
 test("a parent clock tick expires the same cached query without changing saved values", () => {
   const data = dashboard();
   assert.equal(buildNowcastState(data, DATE, at("12:02:00")).isLive, true);
@@ -60,7 +72,7 @@ test("a parent clock tick expires the same cached query without changing saved v
   assert.equal(state.kind, "stale");
   assert.equal(state.isLive, false);
   assert.equal(state.latest.issuedAt, data.latest.issuedAt);
-  assert.deepEqual(state.predictions.map(row => row.estimateC), [8.1, 8.0, 7.9]);
+  assert.deepEqual(state.predictions.map(row => row.estimateC), [8.3, 8.3, 8.3]);
   const html = render(data, DATE, at("12:02:01"));
   assert.match(html, /Last issued temperature nowcast/);
   assert.match(html, /Updates delayed/);
@@ -83,8 +95,9 @@ test("persistence-only uses the no-change estimate even if stray trend values ar
   assert.deepEqual(state.predictions.map(row => row.estimateC), [8.3, 8.3, 8.3]);
   assert.ok(state.predictions.every(row => row.method === "persistence"));
   const html = render(data);
-  assert.match(html, /No-change estimate/);
-  assert.match(html, /Waiting for enough recent readings/);
+  assert.match(html, />Fresh</);
+  assert.match(html, /Trend test unavailable\. Waiting for enough recent readings\./);
+  assert.doesNotMatch(html, /Trend test \d/);
   assert.equal((html.match(/No change · persistence/g) ?? []).length, 3);
 });
 
@@ -103,7 +116,7 @@ test("missing or duplicate horizon records never turn into invented forecast tem
   const raw = issue();
   raw.predictions = [raw.predictions[0], raw.predictions[0], raw.predictions[2]];
   const state = buildNowcastState(dashboard({ latest: raw }), DATE, NOW);
-  assert.deepEqual(state.predictions.map(row => row.estimateC), [null, null, 7.9]);
+  assert.deepEqual(state.predictions.map(row => row.estimateC), [null, null, 8.3]);
   assert.deepEqual(state.predictions.map(row => row.targetTimeUtc), [null, null, at("12:21:00")]);
   assert.equal(formatNowcastTemperature(NaN), "—");
   assert.equal(formatNowcastTemperature("8.3"), "—");
@@ -192,7 +205,10 @@ test("fresh pending minute issues do not hide separately supplied completed fore
   assert.equal(state.recent[0].issuedAt, at("11:39:15"));
   assert.equal(state.recent[0].predictions[0].actualC, 8.0);
   assert.equal(state.recentResolved, true);
-  assert.match(render(data), /Recent scored forecasts/);
+  const html = render(data);
+  assert.match(html, /Recent scored forecasts/);
+  assert.match(html, /No change<\/th><th scope="col">Trend test<\/th><th scope="col">Actual 15L/);
+  assert.match(html, /<td>8\.3°C<\/td><td>8\.1°C<\/td><td>8\.0°C<\/td>/);
 });
 
 test("recent history is bounded, sorted, and excludes other issue dates and future records", () => {
