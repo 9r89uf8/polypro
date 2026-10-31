@@ -13,6 +13,27 @@ function Outcome({ prediction }) {
   return <span className={styles.pending}>{prediction.status === "missing" ? "Reading missing" : "Awaiting reading"}</span>;
 }
 
+function TimeOfDayAccuracy({ state }) {
+  const excluded = state.timeOfDayExcludedDays;
+  return <>
+    <h3>By time of day</h3>
+    <p>Grouped by each forecast’s issue time in KST, comparing both methods on the same paired cases. The windows are fixed clock hours, so sunrise moves within them across the seasons.</p>
+    {!state.timeOfDay.some(row => row.pairedCount > 0) ? <p className={styles.emptyResults}>No paired forecasts have been scored by time of day yet.</p>
+      : <div className={styles.tableScroll} role="region" aria-label="Nowcast accuracy by time of day" tabIndex={0}>
+        <table>
+          <caption className={styles.srOnly}>Errors in degrees Celsius by KST issue-time window and lead. Trend and no-change errors use the same forecast cases.</caption>
+          <thead><tr><th scope="col">Issued (KST)</th><th scope="col">Paired cases</th><th scope="col">Paired days</th><th scope="col">No-change MAE</th><th scope="col">Trend MAE</th></tr></thead>
+          <tbody>{state.timeOfDay.map(row => <tr key={`${row.key}-${row.horizonMinutes}`}>
+            <th scope="row">{row.label}<span className={styles.tableNote}>{row.horizonMinutes} min ahead</span></th>
+            <td>{row.pairedCount}</td><td>{row.dayCount}</td>
+            <td>{formatNowcastError(row.pairedPersistenceMaeC)}</td><td>{formatNowcastError(row.dampedMaeC)}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
+    {excluded ? <p className={styles.caveat}>Excludes {excluded} {excluded === 1 ? "day" : "days"} recorded before time-of-day results were kept.</p> : null}
+  </>;
+}
+
 function AccuracyDetails({ state, date }) {
   const hasChecks = state.metrics.some(row => row.scoredCount > 0);
   const hasPairs = state.metrics.some(row => row.pairedCount > 0);
@@ -33,6 +54,7 @@ function AccuracyDetails({ state, date }) {
       </table>
     </div>}
     <p className={styles.caveat}>{hasPairs ? "Paired cases compare both methods on the same targets. " : "A trend comparison needs scored forecasts from both methods. "}Recorded days may cover only part of this window. Overlapping forecasts do not establish performance across different weather or seasons.</p>
+    <TimeOfDayAccuracy state={state} />
     {state.recent.length ? <>
       <h3>{state.recentResolved ? "Recent scored forecasts" : "Recent saved forecasts"}</h3>
       <div className={styles.tableScroll} role="region" aria-label="Recent nowcast outcomes" tabIndex={0}>

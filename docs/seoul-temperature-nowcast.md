@@ -122,6 +122,26 @@ exactly the same cases. The API also exposes bias and scored/paired-day
 counts. These are experimental records, not independent sample counts or
 calibrated uncertainty.
 
+Each daily row also keeps those scored/paired counts and error sums in
+`timeOfDay`, split by the forecast's KST issue time into five fixed windows:
+overnight 00–06, morning 06–10, midday 10–14, afternoon 14–18 and evening
+18–24. They match the [stored-minute replay](#display-decision-and-stored-minute-replay)
+and do not follow sunrise, which moves with the season. The dashboard returns
+`timeOfDayMetrics` for every window and horizon, plus
+`timeOfDayExcludedDayCount`: days whose rows were written before the breakdown
+existed. Those rows are excluded, never summed partially.
+
+`seoulNowcast:backfillTimeOfDayScores` recomputes such rows from their
+retained scored outcomes, one KST date per transaction, and continues to later
+dates on its own. A concurrent score is either already included or added
+afterwards. A row older than 29 days, whose outcomes may have expired, or whose
+recomputed counts disagree with its daily totals stays excluded. Run it once
+after deploying the breakdown; rerunning it changes nothing:
+
+```text
+npx convex run seoulNowcast:backfillTimeOfDayScores --deployment-name striped-chipmunk-763
+```
+
 Issued counts describe generated horizon forecasts only. Unavailable issue
 records and skipped/superseded jobs are not counted as forecast opportunities
 in these score denominators.
@@ -198,6 +218,6 @@ are internal; the dashboard query is read-only. No trading behavior is added.
 
 Tests cover future-data exclusion, revisions/sentinels, timing, midnight,
 duplicate polling, coverage, fallback, delayed jobs, immutable issuance,
-target corrections, missing targets, paired metrics, retention, client
-freshness and the no-change headline. Publish Convex schema/functions before the frontend calls the new
+target corrections, missing targets, paired metrics, time-of-day sums and
+their backfill, retention, client freshness and the no-change headline. Publish Convex schema/functions before the frontend calls the new
 query. The local Next.js build limitation in `AGENTS.md` still applies.

@@ -2,6 +2,14 @@ import { formatSeoulTime } from "./displayTime.js";
 
 export const NOWCAST_FRESHNESS_MS = 2 * 60_000;
 export const NOWCAST_HORIZONS = [10, 15, 20];
+// Fixed KST issue-time windows, matching the backend's score breakdown.
+export const NOWCAST_TIME_OF_DAY = [
+  { key: "overnight", label: "Overnight · 12–6 AM" },
+  { key: "morning", label: "Morning · 6–10 AM" },
+  { key: "midday", label: "Midday · 10 AM–2 PM" },
+  { key: "afternoon", label: "Afternoon · 2–6 PM" },
+  { key: "evening", label: "Evening · 6 PM–12 AM" },
+];
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 const QUALITY_STATUSES = new Set(["ready", "persistence_only", "unavailable"]);
@@ -20,6 +28,10 @@ function number(value) {
 
 function count(value) {
   return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function nonnegative(value) {
+  return number(value) !== null && value >= 0 ? value : null;
 }
 
 export function formatNowcastTemperature(value) {
@@ -98,7 +110,6 @@ function normalizeMetrics(rows) {
     const scoredCount = count(raw?.scoredCount) ?? 0;
     const pairedCount = count(raw?.pairedCount) ?? 0;
     const comparable = pairedCount > 0 && pairedCount <= scoredCount && count(raw?.dayCount) > 0;
-    const nonnegative = value => number(value) !== null && value >= 0 ? value : null;
     const pairedPersistenceMaeC = comparable ? nonnegative(raw?.pairedPersistenceMaeC) : null;
     const dampedMaeC = comparable ? nonnegative(raw?.dampedMaeC) : null;
     const hasPair = pairedPersistenceMaeC !== null && dampedMaeC !== null;
@@ -116,10 +127,27 @@ function normalizeMetrics(rows) {
   });
 }
 
+function normalizeTimeOfDay(rows) {
+  return NOWCAST_TIME_OF_DAY.flatMap(({ key, label }) => NOWCAST_HORIZONS.map(horizonMinutes => {
+    const matching = Array.isArray(rows) ? rows.filter(item => item?.window === key && item?.horizonMinutes === horizonMinutes) : [];
+    // Conflicting duplicate rows cannot safely become a single comparison.
+    const raw = matching.length === 1 ? matching[0] : null;
+    const pairedCount = count(raw?.pairedCount) ?? 0;
+    const dayCount = count(raw?.dayCount) ?? 0;
+    const comparable = pairedCount > 0 && pairedCount <= (count(raw?.scoredCount) ?? 0) && dayCount > 0;
+    const pairedPersistenceMaeC = comparable ? nonnegative(raw?.pairedPersistenceMaeC) : null;
+    const dampedMaeC = comparable ? nonnegative(raw?.dampedMaeC) : null;
+    const hasPair = pairedPersistenceMaeC !== null && dampedMaeC !== null;
+    return { key, label, horizonMinutes, pairedCount: hasPair ? pairedCount : 0, dayCount: hasPair ? dayCount : 0,
+      pairedPersistenceMaeC: hasPair ? pairedPersistenceMaeC : null, dampedMaeC: hasPair ? dampedMaeC : null };
+  }));
+}
+
 /** Display saved forecasts without recomputing or refreshing their issuance time. */
 export function buildNowcastState(data, date, now) {
   const base = { kind: "loading", label: "Loading", detail: "Loading saved nowcasts…", isLive: false,
-    isArchived: false, latest: null, predictions: [], recent: [], recentResolved: false, metrics: [], date };
+    isArchived: false, latest: null, predictions: [], recent: [], recentResolved: false, metrics: [],
+    timeOfDay: [], timeOfDayExcludedDays: 0, date };
   if (!validTime(now)) return base;
   const today = seoulDate(now);
   if (date > today) return { ...base, kind: "future", label: "Future date", detail: "Nowcasts appear as observations arrive on this date." };
@@ -144,7 +172,8 @@ export function buildNowcastState(data, date, now) {
   const metricsStartDate = /^\d{4}-\d{2}-\d{2}$/.test(data.metricsStartDate) && data.metricsStartDate <= date ? data.metricsStartDate : date;
   const metricsWindowDays = Number.isInteger(data.metricsWindowDays) && data.metricsWindowDays > 0 ? data.metricsWindowDays : 1;
   const result = { ...base, isArchived, latest, metrics, recent, recentResolved: recent.some(row => row.predictions.some(item => item.status === "scored")),
-    predictions: latest?.predictions ?? [], metricsStartDate, metricsWindowDays };
+    predictions: latest?.predictions ?? [], metricsStartDate, metricsWindowDays,
+    timeOfDay: normalizeTimeOfDay(data.timeOfDayMetrics), timeOfDayExcludedDays: count(data.timeOfDayExcludedDayCount) ?? 0 };
   if (!latest) return { ...result, kind: "empty", label: isArchived ? "Archived" : "Waiting for readings",
     detail: isArchived ? "No saved nowcasts were issued on this date." : "Waiting for a saved forecast from a recent 15L reading." };
   const hasEstimate = latest.predictions.some(item => item.estimateC !== null);

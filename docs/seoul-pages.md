@@ -15,7 +15,9 @@ status when issue or observation age exceeds two minutes; historical values
 remain labeled as saved/archived. Refresh does not reissue forecasts.
 Details show recent exact-minute outcomes with no-change and trend-test columns,
 and 30-day recorded MAE comparing both on the same paired cases with actual day
-counts.
+counts. A “By time of day” table splits that paired comparison by each
+forecast's KST issue time (overnight, morning, midday, afternoon, evening) and
+notes any days recorded before the breakdown existed.
 Cross-midnight target dates stay explicit. This card is separate from official
 METAR and daily-high values. See the [nowcast specification](./seoul-temperature-nowcast.md)
 for input versioning, scoring and retention.

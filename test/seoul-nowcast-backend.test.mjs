@@ -436,6 +436,108 @@ test("dashboard compares damped forecasts with persistence on the same scored su
   assert.deepEqual(h.calls.external, []);
 });
 
+test("time-of-day sums follow the KST issue time and add up to the daily totals", async () => {
+  const h = harness();
+  await h.seedHistory();
+  await h.issue();
+  const midday = h.forecasts()[0].predictions.find(row => row.horizonMinutes === 10);
+  h.setNow(OBS + 10 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + 10 * MINUTE, { tempC: 21 })]);
+  await h.call("scorePending");
+
+  const evening = Date.parse("2026-10-31T10:00:00Z");
+  await h.seedHistory({ end: evening });
+  await h.issue(evening);
+  h.setNow(evening + 10 * MINUTE + 20_000);
+  await h.ingest([observation(evening + 10 * MINUTE, { tempC: 19 })]);
+  await h.call("scorePending");
+
+  const row = h.tables.seoulNowcastDailyScores.find(item => item.horizonMinutes === 10);
+  assert.deepEqual(Object.keys(row.timeOfDay).sort(), ["evening", "midday"]);
+  for (const key of ["scoredCount", "pairedCount", "persistenceAbsErrorSum", "dampedAbsErrorSum"]) {
+    const total = row.timeOfDay.midday[key] + row.timeOfDay.evening[key];
+    assert.ok(Math.abs(total - row[key]) < 1e-10, `time-of-day ${key} adds up to the daily total`);
+  }
+  const view = await h.call("getDashboard", { stationIcao: "RKSI", date: localDate(NOW) });
+  const cell = (window, horizon) => view.timeOfDayMetrics.find(item => item.window === window && item.horizonMinutes === horizon);
+  assert.equal(view.timeOfDayMetrics.length, 15);
+  assert.deepEqual([cell("midday", 10).startHourKst, cell("midday", 10).endHourKst], [10, 14]);
+  assert.deepEqual([cell("midday", 10).pairedCount, cell("midday", 10).dayCount], [1, 1]);
+  assert.ok(Math.abs(cell("midday", 10).dampedMaeC - Math.abs(midday.dampedTrendC - 21)) < 1e-10);
+  assert.equal(cell("midday", 10).pairedPersistenceMaeC, 1);
+  assert.equal(cell("evening", 10).scoredCount, 1);
+  assert.deepEqual([cell("morning", 10).scoredCount, cell("morning", 10).dampedMaeC], [0, null]);
+  assert.equal(view.timeOfDayExcludedDayCount, 0);
+});
+
+test("rows written before the breakdown stay excluded until the backfill recomputes them from outcomes", async () => {
+  const h = harness();
+  await h.seedHistory();
+  await h.issue();
+  h.setNow(OBS + 10 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + 10 * MINUTE, { tempC: 21 })]);
+  await h.call("scorePending");
+  // Rows recorded by the release before time-of-day sums existed.
+  for (const row of h.tables.seoulNowcastDailyScores) await h.db.patch(row._id, { timeOfDay: undefined });
+  h.setNow(OBS + 15 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + 15 * MINUTE, { tempC: 21.5 })]);
+  await h.call("scorePending");
+  assert.ok(h.tables.seoulNowcastDailyScores.every(row => row.timeOfDay === undefined), "a legacy row never receives a partial sum");
+  const before = await h.call("getDashboard", { stationIcao: "RKSI", date: localDate(NOW) });
+  assert.equal(before.timeOfDayExcludedDayCount, 1);
+  assert.ok(before.timeOfDayMetrics.every(item => item.scoredCount === 0));
+
+  const result = await h.call("backfillTimeOfDayScores");
+  assert.deepEqual([result.backfilledRows, result.mismatchedRows, result.more], [3, 0, false]);
+  for (const row of h.tables.seoulNowcastDailyScores) {
+    const parts = Object.values(row.timeOfDay);
+    assert.equal(parts.reduce((sum, part) => sum + part.scoredCount, 0), row.scoredCount);
+    assert.equal(parts.reduce((sum, part) => sum + part.pairedCount, 0), row.pairedCount);
+  }
+  const after = await h.call("getDashboard", { stationIcao: "RKSI", date: localDate(NOW) });
+  assert.equal(after.timeOfDayExcludedDayCount, 0);
+  const restored = after.timeOfDayMetrics.find(item => item.window === "midday" && item.horizonMinutes === 15);
+  const overall = after.metrics.find(item => item.horizonMinutes === 15);
+  assert.equal(restored.scoredCount, overall.scoredCount);
+  assert.ok(Math.abs(restored.dampedMaeC - overall.dampedMaeC) < 1e-12);
+  assert.deepEqual(await h.call("backfillTimeOfDayScores"), { backfilledRows: 0, mismatchedRows: 0, more: false });
+
+  h.setNow(OBS + 20 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + 20 * MINUTE, { tempC: 22 })]);
+  await h.call("scorePending");
+  const later = h.tables.seoulNowcastDailyScores.find(row => row.horizonMinutes === 20);
+  assert.deepEqual([later.scoredCount, later.timeOfDay.midday.scoredCount], [1, 1], "later scores add to restored sums");
+});
+
+test("the backfill skips rows whose retained outcomes disagree and continues to later dates", async () => {
+  const h = harness();
+  await h.seedHistory();
+  await h.issue();
+  h.setNow(OBS + 10 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + 10 * MINUTE, { tempC: 21 })]);
+  await h.call("scorePending");
+  h.setNow(NOW + DAY);
+  await h.ingest([observation(OBS + DAY, { tempC: 20 })]);
+  await h.issue(OBS + DAY);
+  h.setNow(OBS + DAY + 10 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + DAY + 10 * MINUTE, { tempC: 23 })]);
+  await h.call("scorePending");
+  for (const row of h.tables.seoulNowcastDailyScores) await h.db.patch(row._id, { timeOfDay: undefined });
+  const firstDay = localDate(NOW);
+  const lost = h.outcomes().find(row => row.date === firstDay && row.status === "scored");
+  await h.db.delete(lost._id);
+
+  const first = await h.call("backfillTimeOfDayScores");
+  assert.deepEqual([first.date, first.backfilledRows, first.mismatchedRows, first.more], [firstDay, 2, 1, true]);
+  const continuation = h.calls.scheduled.filter(row => row.name === "seoulNowcast:backfillTimeOfDayScores");
+  assert.equal(continuation.length, 1);
+  assert.equal(h.tables.seoulNowcastDailyScores.find(row => row.date === firstDay && row.horizonMinutes === 10).timeOfDay, undefined);
+  const second = await h.call("backfillTimeOfDayScores", continuation[0].args);
+  assert.deepEqual([second.date, second.backfilledRows, second.mismatchedRows, second.more], [localDate(NOW + DAY), 3, 0, false]);
+  const view = await h.call("getDashboard", { stationIcao: "RKSI", date: localDate(NOW + DAY) });
+  assert.equal(view.timeOfDayExcludedDayCount, 1, "the unmatched day stays visibly excluded");
+});
+
 test("recent completed checks stay visible when fresh pending forecasts fill the recent list", async () => {
   const h = harness();
   await h.seedHistory();

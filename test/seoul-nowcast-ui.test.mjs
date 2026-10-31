@@ -194,6 +194,33 @@ test("accuracy compares the same paired cases and exposes sample days and window
   assert.notEqual(formatNowcastError(0.06), formatNowcastError(0.09));
 });
 
+test("time-of-day accuracy lists each KST window and lead, ignoring conflicting or invalid rows", () => {
+  const timeOfDayMetrics = [
+    { window: "morning", horizonMinutes: 10, scoredCount: 50, pairedCount: 40, dayCount: 2, pairedPersistenceMaeC: 0.25, dampedMaeC: 0.2 },
+    { window: "evening", horizonMinutes: 20, scoredCount: 30, pairedCount: 30, dayCount: 1, pairedPersistenceMaeC: 0.3, dampedMaeC: 0.45 },
+    { window: "overnight", horizonMinutes: 10, scoredCount: 5, pairedCount: 9, dayCount: 1, pairedPersistenceMaeC: 0.1, dampedMaeC: 0.1 },
+    { window: "midday", horizonMinutes: 15, scoredCount: 9, pairedCount: 9, dayCount: 1, pairedPersistenceMaeC: 0.1, dampedMaeC: 0.2 },
+    { window: "midday", horizonMinutes: 15, scoredCount: 9, pairedCount: 9, dayCount: 1, pairedPersistenceMaeC: 0.4, dampedMaeC: 0.1 },
+  ];
+  const data = dashboard({ timeOfDayMetrics, timeOfDayExcludedDayCount: 1 });
+  const state = buildNowcastState(data, DATE, NOW);
+  assert.equal(state.timeOfDay.length, 15);
+  assert.deepEqual(state.timeOfDay.slice(0, 3).map(row => [row.key, row.horizonMinutes]), [["overnight", 10], ["overnight", 15], ["overnight", 20]]);
+  const cell = (key, horizon) => state.timeOfDay.find(row => row.key === key && row.horizonMinutes === horizon);
+  assert.deepEqual([cell("morning", 10).pairedCount, cell("morning", 10).pairedPersistenceMaeC, cell("morning", 10).dampedMaeC], [40, 0.25, 0.2]);
+  assert.deepEqual([cell("overnight", 10).pairedCount, cell("overnight", 10).dampedMaeC], [0, null], "paired cannot exceed scored");
+  assert.deepEqual([cell("midday", 15).pairedCount, cell("midday", 15).dampedMaeC], [0, null], "duplicates are not merged");
+  assert.equal(state.timeOfDayExcludedDays, 1);
+  const html = render(data);
+  assert.match(html, /By time of day/);
+  assert.match(html, /Morning · 6–10 AM<span class="tableNote">10 min ahead<\/span><\/th><td>40<\/td><td>2<\/td><td>0\.25°C<\/td><td>0\.20°C<\/td>/);
+  assert.match(html, /Evening · 6 PM–12 AM<span class="tableNote">20 min ahead<\/span><\/th><td>30<\/td><td>1<\/td><td>0\.30°C<\/td><td>0\.45°C<\/td>/);
+  assert.match(html, /Excludes 1 day recorded before time-of-day results were kept\./);
+  const empty = render(dashboard());
+  assert.match(empty, /No paired forecasts have been scored by time of day yet\./);
+  assert.doesNotMatch(empty, /Excludes \d/);
+});
+
 test("fresh pending minute issues do not hide separately supplied completed forecasts", () => {
   const completed = issue({ issuedAt: at("11:39:15"), latestObservationTimeUtc: at("11:39:00"), predictions: [
     { horizonMinutes: 10, targetTimeUtc: at("11:50:00"), persistenceC: 8.3, dampedTrendC: 8.1,

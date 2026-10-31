@@ -11,7 +11,8 @@ compare both methods on paired cases. These estimates are experimental, have
 no calibrated uncertainty, and do not predict official METAR or settlement.
 A replay of October 26–31 minutes found the damped trend 17–18% less accurate
 than persistence, so the dashboard headlines persistence and shows the trend
-only as a test value.
+only as a test value. Daily nowcast score rows also keep sums for five fixed
+KST issue-time windows, so the live comparison can be read by time of day.
 No new external feed, credential or approval flag is introduced. The linked
 specification records availability clocks, first-valid-target scoring,
 30/32/365-day retention and all new entry points.

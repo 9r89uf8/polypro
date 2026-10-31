@@ -2,6 +2,7 @@ import { internalMutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { buildNowcast, NOWCAST_MODEL_VERSION, NOWCAST_HORIZONS_MINUTES } from "./lib/seoulNowcastModel.js";
+import { NOWCAST_TIME_OF_DAY_WINDOWS } from "./lib/seoulNowcastSchema.js";
 
 const MINUTE = 60_000, DAY = 86400_000;
 export const NOWCAST_SCORING_VERSION = "first-valid-captured-15l-v1";
@@ -45,6 +46,26 @@ export async function captureObservation(ctx, row, receivedAt, sourceFirstSeenAt
   return { versionId, changed: true, newMinute: !previous };
 }
 
+function timeOfDayKey(issuedAt) {
+  const hour = new Date(issuedAt + 9 * 3600_000).getUTCHours();
+  return NOWCAST_TIME_OF_DAY_WINDOWS.find((window) => hour >= window.startHourKst && hour < window.endHourKst).key;
+}
+
+function addTimeOfDayScore(timeOfDay, key, persistenceErrorC, dampedErrorC) {
+  const current = timeOfDay[key] ?? { scoredCount: 0, pairedCount: 0, persistenceAbsErrorSum: 0,
+    pairedPersistenceAbsErrorSum: 0, dampedAbsErrorSum: 0, persistenceErrorSum: 0, dampedErrorSum: 0 };
+  const paired = dampedErrorC !== null;
+  return { ...timeOfDay, [key]: {
+    scoredCount: current.scoredCount + 1,
+    pairedCount: current.pairedCount + (paired ? 1 : 0),
+    persistenceAbsErrorSum: current.persistenceAbsErrorSum + Math.abs(persistenceErrorC),
+    pairedPersistenceAbsErrorSum: current.pairedPersistenceAbsErrorSum + (paired ? Math.abs(persistenceErrorC) : 0),
+    dampedAbsErrorSum: current.dampedAbsErrorSum + (paired ? Math.abs(dampedErrorC) : 0),
+    persistenceErrorSum: current.persistenceErrorSum + persistenceErrorC,
+    dampedErrorSum: current.dampedErrorSum + (paired ? dampedErrorC : 0),
+  } };
+}
+
 async function dailyScore(ctx, record) {
   return ctx.db.query("seoulNowcastDailyScores")
     .withIndex("by_station_model_date_horizon", (q) => q.eq("stationIcao", "RKSI")
@@ -62,7 +83,7 @@ async function recordIssuance(ctx, record) {
       horizonMinutes: record.horizonMinutes, dayStartUtc: Date.parse(`${record.date}T00:00:00+09:00`),
       issuedCount: 1, scoredCount: 0, missingCount: 0, pairedCount: 0,
       persistenceAbsErrorSum: 0, pairedPersistenceAbsErrorSum: 0, dampedAbsErrorSum: 0,
-      persistenceErrorSum: 0, dampedErrorSum: 0,
+      persistenceErrorSum: 0, dampedErrorSum: 0, timeOfDay: {},
     });
   }
 }
@@ -149,6 +170,10 @@ export const scorePending = internalMutationGeneric({
           pairedPersistenceAbsErrorSum: stats.pairedPersistenceAbsErrorSum + (paired ? Math.abs(persistenceErrorC) : 0),
           dampedAbsErrorSum: stats.dampedAbsErrorSum + (paired ? Math.abs(dampedErrorC) : 0),
           dampedErrorSum: stats.dampedErrorSum + (paired ? dampedErrorC : 0),
+          // Rows written before the breakdown stay without it; the backfill
+          // recomputes them from outcomes rather than holding a partial sum.
+          ...(stats.timeOfDay ? { timeOfDay: addTimeOfDayScore(stats.timeOfDay,
+            timeOfDayKey(outcome.issuedAt), persistenceErrorC, paired ? dampedErrorC : null) } : {}),
         });
         scored++;
       } else {
@@ -162,6 +187,46 @@ export const scorePending = internalMutationGeneric({
       await ctx.scheduler.runAfter(1000, internal.seoulNowcast.scorePending, {});
     }
     return { scored, missing, pendingChecked: pending.length };
+  },
+});
+
+// One-time catch-up for daily rows written before time-of-day sums existed.
+// Each row is recomputed from its retained scored outcomes in one transaction,
+// so a concurrent score is either already included or added afterwards. Rows
+// whose outcomes may have expired, or whose recomputed counts disagree with the
+// daily totals, stay excluded rather than partially summed.
+export const backfillTimeOfDayScores = internalMutationGeneric({
+  args: { afterDayStartUtc: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const oldest = Date.now() - 29 * DAY;
+    const legacy = (await ctx.db.query("seoulNowcastDailyScores")
+      .withIndex("by_day", (q) => q.gt("dayStartUtc", Math.max(oldest, args.afterDayStartUtc ?? oldest))).collect())
+      .filter((row) => row.stationIcao === "RKSI" && !row.timeOfDay);
+    if (!legacy.length) return { backfilledRows: 0, mismatchedRows: 0, more: false };
+    const { date, dayStartUtc } = legacy[0];
+    const outcomes = await ctx.db.query("seoulNowcastOutcomes")
+      .withIndex("by_station_date_status_target", (q) => q.eq("stationIcao", "RKSI").eq("date", date).eq("status", "scored"))
+      .collect();
+    let backfilledRows = 0, mismatchedRows = 0;
+    for (const row of legacy.filter((item) => item.date === date)) {
+      let timeOfDay = {};
+      for (const outcome of outcomes) {
+        if (outcome.modelVersion !== row.modelVersion || outcome.horizonMinutes !== row.horizonMinutes
+          || !Number.isFinite(outcome.persistenceErrorC)) continue;
+        timeOfDay = addTimeOfDayScore(timeOfDay, timeOfDayKey(outcome.issuedAt), outcome.persistenceErrorC,
+          Number.isFinite(outcome.dampedErrorC) ? outcome.dampedErrorC : null);
+      }
+      const total = (key) => Object.values(timeOfDay).reduce((sum, part) => sum + part[key], 0);
+      if (total("scoredCount") !== row.scoredCount || total("pairedCount") !== row.pairedCount) {
+        mismatchedRows++;
+        continue;
+      }
+      await ctx.db.patch(row._id, { timeOfDay });
+      backfilledRows++;
+    }
+    const more = legacy.some((row) => row.dayStartUtc > dayStartUtc);
+    if (more) await ctx.scheduler.runAfter(0, internal.seoulNowcast.backfillTimeOfDayScores, { afterDayStartUtc: dayStartUtc });
+    return { date, backfilledRows, mismatchedRows, more };
   },
 });
 
@@ -230,6 +295,23 @@ export const getDashboard = queryGeneric({
         dampedBiasC: pairedCount ? sum("dampedErrorSum") / pairedCount : null,
       };
     });
+    // Days whose rows predate the breakdown are counted as excluded, never
+    // summed partially. Windows use each forecast's KST issue time.
+    const timeOfDayMetrics = NOWCAST_TIME_OF_DAY_WINDOWS.flatMap((window) => NOWCAST_HORIZONS_MINUTES.map((horizonMinutes) => {
+      const parts = scores.filter((row) => row.horizonMinutes === horizonMinutes && row.timeOfDay?.[window.key])
+        .map((row) => row.timeOfDay[window.key]);
+      const sum = (key) => parts.reduce((total, part) => total + part[key], 0);
+      const scoredCount = sum("scoredCount"), pairedCount = sum("pairedCount");
+      return {
+        window: window.key, startHourKst: window.startHourKst, endHourKst: window.endHourKst, horizonMinutes,
+        scoredCount, pairedCount, dayCount: parts.filter((part) => part.pairedCount > 0).length,
+        persistenceMaeC: scoredCount ? sum("persistenceAbsErrorSum") / scoredCount : null,
+        pairedPersistenceMaeC: pairedCount ? sum("pairedPersistenceAbsErrorSum") / pairedCount : null,
+        dampedMaeC: pairedCount ? sum("dampedAbsErrorSum") / pairedCount : null,
+        dampedBiasC: pairedCount ? sum("dampedErrorSum") / pairedCount : null,
+      };
+    }));
+    const timeOfDayExcludedDayCount = new Set(scores.filter((row) => !row.timeOfDay).map((row) => row.date)).size;
     const recent = await Promise.all(forecasts.map((forecast) => publicForecast(ctx, forecast)));
     // Fresh issues have not reached their targets yet. A separate bounded read
     // keeps actual completed checks visible during continuous minute issuance.
@@ -241,6 +323,7 @@ export const getDashboard = queryGeneric({
       .filter((row) => row && row.stationIcao === "RKSI" && row.date === args.date);
     const recentResolved = await Promise.all(resolvedForecasts.map((row) => publicForecast(ctx, row)));
     return { stationIcao: "RKSI", date: args.date, latest: recent[0] ?? null, recent, recentResolved, metrics,
+      timeOfDayMetrics, timeOfDayExcludedDayCount,
       metricsStartDate, metricsEndDate: args.date, metricsWindowDays: 30,
       modelVersion: NOWCAST_MODEL_VERSION, scoringVersion: NOWCAST_SCORING_VERSION };
   },

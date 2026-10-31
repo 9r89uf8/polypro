@@ -3,6 +3,21 @@ import { v } from "convex/values";
 
 const nullableNumber = v.union(v.number(), v.null());
 const nullableString = v.union(v.string(), v.null());
+
+// Fixed KST issue-time windows for score breakdowns. They do not follow
+// sunrise, which moves with the season.
+export const NOWCAST_TIME_OF_DAY_WINDOWS = Object.freeze([
+  { key: "overnight", startHourKst: 0, endHourKst: 6 },
+  { key: "morning", startHourKst: 6, endHourKst: 10 },
+  { key: "midday", startHourKst: 10, endHourKst: 14 },
+  { key: "afternoon", startHourKst: 14, endHourKst: 18 },
+  { key: "evening", startHourKst: 18, endHourKst: 24 },
+]);
+const timeOfDayScore = v.object({
+  scoredCount: v.number(), pairedCount: v.number(),
+  persistenceAbsErrorSum: v.number(), pairedPersistenceAbsErrorSum: v.number(),
+  dampedAbsErrorSum: v.number(), persistenceErrorSum: v.number(), dampedErrorSum: v.number(),
+});
 export const nowcastPrediction = v.object({
   horizonMinutes: v.number(), targetTimeUtc: v.number(),
   observationLeadMinutes: v.number(), actualLeadMinutes: v.number(),
@@ -70,6 +85,10 @@ export const seoulNowcastTables = {
     pairedCount: v.number(), persistenceAbsErrorSum: v.number(),
     pairedPersistenceAbsErrorSum: v.number(), dampedAbsErrorSum: v.number(),
     persistenceErrorSum: v.number(), dampedErrorSum: v.number(),
+    // Present once every scored outcome on the row is included. Rows written
+    // before the breakdown lack it until backfillTimeOfDayScores runs.
+    timeOfDay: v.optional(v.object(Object.fromEntries(NOWCAST_TIME_OF_DAY_WINDOWS
+      .map(({ key }) => [key, v.optional(timeOfDayScore)])))),
   })
     .index("by_station_model_date_horizon", ["stationIcao", "modelVersion", "date", "horizonMinutes"])
     .index("by_day", ["dayStartUtc"]),
