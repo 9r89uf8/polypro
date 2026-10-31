@@ -62,54 +62,19 @@ collection does not restore historical rows deleted with the old database.
 
 ## Routes and current dashboard contract
 
-The live page also includes an [RKSI satellite image loop](./seoul-satellite-loop.md)
-below the temperature chart. It retains the last hour of available Himawari
-visible, infrared and daytime cloud-analysis images, centers every frame on the airport, and offers
-play/pause, frame scrubbing, speed and 20/50/100 km zoom controls. The default
-view is 50 km across. Frame times use KST with AM/PM; missing frames, delayed
-imagery and daytime-only visible coverage are explicit. The live image loop
-does not appear as historical imagery on past or future date pages.
-New frames use lossless PNGs with a stronger, fixed visible contrast curve.
-The same source brightness keeps the same displayed shade throughout a loop;
-there is no separate automatic contrast adjustment for individual frames.
-Playback switches to the new rendering version as it becomes available and
-does not alternate legacy and enhanced frames.
+The dashboard no longer renders either satellite-image panel: Himawari's
+**Satellite over the airport** (including its Visible, Infrared and Cloud
+analysis tabs) or GOCI-II's **Hourly high-resolution view**. Their shared
+layout is removed, so the Seoul market follows the temperature chart directly.
+This applies to today's, archived and future date pages. The compact
+**GK2A clouds** and **GK2A sunlight** rows remain in the observed-cloud card.
 
-The **Cloud analysis · Day** tab uses the fixed JMA Day Microphysics RGB
-warm-season settings, with its named recipe and plain-language color legend
-visible alongside the player. It combines same-slot B04, B07 and B13 source
-objects, preserving the same last-hour playback, zoom and KST AM/PM clocks.
-Colors help interpret cloud phase, relative opacity and temperature; they are
-not automatic cloud labels or measurements of cloud thickness. Upper clouds
-can hide lower layers. Low sunlight, missing bands and rejected composites
-produce an explicit unavailable state. Existing visible and infrared modes
-remain available independently, including infrared at night. The composite
-has roughly 2 km nominal source sampling at nadir, coarser near RKSI; zoom
-does not add cloud detail. See the [scientific recipe and limitations](./seoul-satellite-loop.md#daytime-cloud-analysis).
-
-An **Hourly high-resolution view** card from GOCI-II on GK-2B sits next to
-the loop: side by side from 1280 px wide, and below it on narrower screens.
-GOCI-II pixels at RKSI are about 0.26 × 0.36 km, about twice as fine per axis
-as Himawari visible, but there is only one image per hour and only in
-daylight. The card shows today's KST images only, the latest by default, with
-hour buttons for earlier ones, 20/50/100 km zoom (50 km default), the RKSI
-marker, a north arrow, a scale bar and KST AM/PM observation times. Notes
-state the native pixel size (zoom adds no detail beyond it), low sun and
-possible sun glint. An image older than 80 minutes in daylight is labelled
-delayed; a rejected newer image shows its reason next to the older image.
-Night, collecting, no-image-yet and failed-collection states are explicit.
-If the card's query itself fails, an error boundary shows "GOCI-II status
-could not load" in the card only; the rest of the page keeps working.
-Past and future date pages show "Available on today's dashboard" and do not
-query the card. The colours are approximate true colour (660/555/443 nm) with
-a fixed curve; they are not a cloud mask and have no cloud-height correction.
-
-The card is approval-gated by `KHOA_GOCI2_ACCESS_APPROVED`. Until KHOA/NOSC
-approve automated download, storage and display and the user sets that flag,
-the card shows **GOCI-II approval required** with that explanation, renders no
-image and no proxy imagery, and disables Refresh and zoom. The page makes no
-other change to the Himawari loop. Collection, rendering, retention and the
-activation and removal commands are in the [GOCI-II contract](./seoul-goci2.md).
+This is a UI-only removal. The image components and backend integrations are
+retained, including their collectors, schedules, storage retention and
+server-side switches/approval gates. Removing the panels does not disable
+collection or revoke approval. Their implementation and source contracts
+remain in the [Himawari loop documentation](./seoul-satellite-loop.md) and
+[GOCI-II documentation](./seoul-goci2.md).
 
 The streamlined implementation contains six information areas. This section
 is the source contract for the current UI; historical panel descriptions at
@@ -370,15 +335,13 @@ These two history reads and the AM/PM presentation change add no collector,
 schema, cron, flag, or approval activation. The earlier production release
 records above describe their named releases and do not verify this extension.
 
-The GOCI-II card reads `seoulGoci2:getLatest({ stationIcao: "RKSI" })` on
-today's route only. Without `KHOA_GOCI2_ACCESS_APPROVED === "true"` it returns
-`approval_required` before any database read or storage URL. It makes no
-external request. Only the card's own Refresh button calls the
-`seoulGoci2:requestRefresh` mutation, which shares the server cron's approval
-gate, daylight window, 2-minute cooldown, lease and hourly spacing. Page entry
-and the page-level Refresh button do not request GOCI-II work. The server
-collects every five minutes in daylight whether or not the page is open, and
-the browser re-evaluates image age every 15 seconds.
+The removed image panels no longer mount their subscriptions to
+`seoulSatellite:getLoop` or `seoulGoci2:getLatest`, load satellite-image URLs,
+or run image-age/playback timers on this page. Their image Refresh controls
+are absent, and page entry and page-level Refresh do not call
+`seoulSatellite:requestRefresh` or `seoulGoci2:requestRefresh`. The retained
+backend endpoints still enforce their existing enablement/approval checks;
+scheduled collection and retention continue independently of the dashboard.
 
 For today's route, initial entry and the manual refresh request only:
 

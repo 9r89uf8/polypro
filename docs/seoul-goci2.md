@@ -1,15 +1,22 @@
 # RKSI GOCI-II hourly view (approval-gated)
 
-The Seoul dashboard has a second satellite card next to the Himawari-9 loop:
-an hourly, daytime, true-colour view of Incheon International Airport,
+This document describes the retained collector, renderer and card for an
+hourly, daytime, true-colour view of Incheon International Airport,
 **RKSI, 37.4602° N, 126.4407° E**, from GOCI-II on GK-2B. It is for visual
 inspection only. It does not change the temperature forecast, cloud-trend
 model, market display or any trading decision.
 
 ## Status
 
-**Active.** The code was deployed on October 30, 2026 (October 31 KST) with
-the approval flag absent, and the disabled state was verified (see
+**Current dashboard status:** the **Hourly high-resolution view** panel has
+been removed from `/seoul/day/[date]`, including the live route reached through
+`/seoul/today`. The page no longer mounts the card, subscribes to
+`seoulGoci2:getLatest`, or exposes its Refresh control. The retained component,
+collector, schedule, retention and `KHOA_GOCI2_ACCESS_APPROVED` gate are
+unchanged; this UI removal does not revoke approval or stop collection.
+
+**Collector activation record.** The code was deployed on October 30, 2026
+(October 31 KST) with the approval flag absent, and the disabled state was verified (see
 [Release verification](#release-verification)). The user then set
 `KHOA_GOCI2_ACCESS_APPROVED=true` on `striped-chipmunk-763`. The first live
 run exposed a slot-search bug, fixed after the real NOSC formats were checked
@@ -211,12 +218,13 @@ constraint, byte count and SHA-256 of every request (at most 16).
   while a run holds its 5-minute lease, or within 50 minutes of the newest
   stored observation, because the next hourly slot cannot exist yet.
 
-## Dashboard
+## Retained dashboard component
 
-The card is described in the [Seoul page contract](./seoul-pages.md). It
-shows today's KST images only (latest by default, hourly buttons for earlier
-ones), with 20/50/100 km zoom, an RKSI marker, north arrow, scale bar and
-KST AM/PM observation times. Past and future date pages do not query it.
+The [current Seoul page contract](./seoul-pages.md) removes this card from
+the dashboard. Its retained implementation shows today's KST images only
+(latest by default, hourly buttons for earlier ones), with 20/50/100 km zoom,
+an RKSI marker, north arrow, scale bar and KST AM/PM observation times. If
+mounted for a past or future date, it does not query images.
 
 ## Verification (October 30, 2026)
 

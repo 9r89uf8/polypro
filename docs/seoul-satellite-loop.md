@@ -1,9 +1,18 @@
 # RKSI satellite image loop
 
-The Seoul dashboard includes an airport-centered satellite animation for
-visual inspection of cloud formations and movement. Its target is Incheon
-International Airport, **RKSI, 37.4602° N, 126.4407° E**. This display does not
-change the temperature forecast, cloud-trend model, or trading decisions.
+This document describes the retained airport-centered satellite animation
+and collector for visual inspection of cloud formations and movement. Its
+target is Incheon International Airport, **RKSI, 37.4602° N, 126.4407° E**.
+This display does not change the temperature forecast, cloud-trend model, or
+trading decisions.
+
+**Current dashboard status:** the **Satellite over the airport** panel has
+been removed from `/seoul/day/[date]`, including the live route reached through
+`/seoul/today`. The page no longer mounts the player, subscribes to its image
+query, or requests image refreshes. The component and the contracts below
+remain in the repository; collectors, schedules, retention and
+`NOAA_HIMAWARI_IMAGES_ENABLED` are unchanged. The separate numeric GK2A cloud
+and sunlight rows remain visible. See the [current page contract](./seoul-pages.md).
 
 ## Source and permission
 
@@ -79,9 +88,10 @@ available supported visible/infrared frame and complete cloud-analysis bundle
 in the trailing hour; it does not
 invent missing slots or sample every other image.
 
-The collector has one station-wide lease and bounded batches. Page-entry and
-manual refresh requests share the same queue, deduplication and cooldown as
-the cron. Continuation work keeps the same run identity, checks enablement
+The collector has one station-wide lease and bounded batches. The retained
+player's page-entry and manual refresh paths share the same queue,
+deduplication and cooldown as the cron; the dashboard no longer mounts those
+paths. Continuation work keeps the same run identity, checks enablement
 again, and stops when the retained window is filled or no eligible data is
 available. A failed object is recorded without blocking the remaining images;
 failed keys are retried on later refreshes within the retained window. Failure
@@ -125,10 +135,11 @@ line-time records and is distinct from nominal slot, NOAA object modification,
 download and database capture clocks. The UI labels stale imagery and never
 claims the observation is current merely because a refresh succeeded.
 
-The live loop is available only on today's Seoul page. Past and future date
-pages do not start collection or display the current loop as historical
-imagery. At KST midnight the date check prevents a previous-day page from
-continuing to masquerade as live.
+When mounted, the retained player permits the live loop only for today's
+Seoul date. Past and future dates do not start collection or display the
+current loop as historical imagery. At KST midnight its date check prevents
+a previous-day view from continuing to masquerade as live. The current
+dashboard does not mount this player for any date.
 
 ## Lossless rendering and contrast update
 
