@@ -1,0 +1,71 @@
+{
+  "generatedAt": "2026-10-31T17:54:08.263Z",
+  "version": "rksi15l-iem-drift-v1",
+  "cutoffDateExclusive": "2026-10-26",
+  "windowDays": 15,
+  "reports": 189188,
+  "reportPairs": 188905,
+  "pairsPerCell": {
+    "minimum": 300,
+    "maximum": 341
+  },
+  "inputs": [
+    {
+      "file": "rksi-2016.csv",
+      "bytes": 2043364,
+      "sha256": "8d357f36f44dd31812623fe605f5e7631be6905d5e918c988453476e5b19af87"
+    },
+    {
+      "file": "rksi-2017.csv",
+      "bytes": 2034168,
+      "sha256": "7b2f0659c63b06c346c3611ed788ebf193416722b9f10f52c5a34f143a7fad3e"
+    },
+    {
+      "file": "rksi-2018.csv",
+      "bytes": 2042884,
+      "sha256": "bcfbe4998fb5a7f4becbdb1a8fb990d3f46715571182430cadbcc75ea6bfea9f"
+    },
+    {
+      "file": "rksi-2019.csv",
+      "bytes": 2033724,
+      "sha256": "81848149911586864c5eece06efbc733f3cdc1d9d54e16f50983a71272184ded"
+    },
+    {
+      "file": "rksi-2020.csv",
+      "bytes": 2039811,
+      "sha256": "8fac38021f5704fc106e3a34e58a0d50db72497ec6e622e29c8f8f807811564b"
+    },
+    {
+      "file": "rksi-2021.csv",
+      "bytes": 2037184,
+      "sha256": "c116bf188aa0b2a3f906a89536cb1d55caccf7dfc4ac0d26ed12910a406f1c81"
+    },
+    {
+      "file": "rksi-2022.csv",
+      "bytes": 2012747,
+      "sha256": "d9bf87e036bd6a5e60be4b294a5d23dece3f86bbc00dac6c7961ac4b149c8c72"
+    },
+    {
+      "file": "rksi-2023.csv",
+      "bytes": 2024198,
+      "sha256": "87b9b71935e1a4f58446012d5c1ae6937ec297b848e951c93ad41b52a4f2059c"
+    },
+    {
+      "file": "rksi-2024.csv",
+      "bytes": 2017529,
+      "sha256": "d8b776892a9f8ba36772da270b87cbed3340fe11a58bf17f01793b9ec7f7ea9c"
+    },
+    {
+      "file": "rksi-2025.csv",
+      "bytes": 2029524,
+      "sha256": "8c83b3c742081daf19072fa84890dbd1c9369754146dfc2f9e32d1d73cba6d53"
+    },
+    {
+      "file": "rksi-2026.csv",
+      "bytes": 1627872,
+      "sha256": "9e5a6762bdf2e940f34c98654d775b445e92cd277c2d7e40d5ce36fed4e995e1"
+    }
+  ],
+  "moduleSha256": "c5bb80f70c65a7ec4d77e068b93911a9e38c7d241473abb221eb6849f6f6cf5f",
+  "scriptSha256": "ea14db672f368f6ad58ad7d160ceb7418da91ac408b02db2a376dcb8ddfef4b7"
+}

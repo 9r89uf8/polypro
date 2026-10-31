@@ -6,7 +6,8 @@ import { build } from "esbuild";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  buildNowcastState, formatNowcastAge, formatNowcastError, formatNowcastTemperature, formatNowcastTime, NOWCAST_FRESHNESS_MS,
+  buildNowcastState, formatNowcastAge, formatNowcastChange, formatNowcastError, formatNowcastTemperature, formatNowcastTime,
+  NOWCAST_FRESHNESS_MS,
 } from "../app/seoul/day/[date]/nowcastState.js";
 
 const DATE = "2026-10-31";
@@ -17,9 +18,9 @@ const issue = (fields = {}) => ({
   modelVersion: "damped-trend-v1", qualityStatus: "ready", qualityReason: "",
   intervalStatus: "insufficient_calibration",
   predictions: [
-    { horizonMinutes: 10, targetTimeUtc: at("12:11:00"), persistenceC: 8.3, dampedTrendC: 8.1, status: "pending" },
-    { horizonMinutes: 15, targetTimeUtc: at("12:16:00"), persistenceC: 8.3, dampedTrendC: 8.0, status: "pending" },
-    { horizonMinutes: 20, targetTimeUtc: at("12:21:00"), persistenceC: 8.3, dampedTrendC: 7.9, status: "pending" },
+    { horizonMinutes: 10, targetTimeUtc: at("12:11:00"), persistenceC: 8.3, dampedTrendC: 8.1, climatologyDriftC: 8.4, status: "pending" },
+    { horizonMinutes: 15, targetTimeUtc: at("12:16:00"), persistenceC: 8.3, dampedTrendC: 8.0, climatologyDriftC: 8.5, status: "pending" },
+    { horizonMinutes: 20, targetTimeUtc: at("12:21:00"), persistenceC: 8.3, dampedTrendC: 7.9, climatologyDriftC: 8.6, status: "pending" },
   ], ...fields,
 });
 const dashboard = (fields = {}) => ({ stationIcao: "RKSI", date: DATE, latest: issue(), recent: [], metrics: [],
@@ -52,16 +53,20 @@ test("fresh forecasts preserve the actual target and lead from issuance", () => 
   assert.doesNotMatch(html, /80%|95%|±/);
 });
 
-test("no change is the headline; the damped trend appears only as a smaller test line", () => {
+test("no change is the headline; drift and trend appear only as smaller test lines", () => {
   const state = buildNowcastState(dashboard(), DATE, NOW);
   assert.ok(state.predictions.every(row => row.method === "persistence"));
   assert.deepEqual(state.predictions.map(row => row.dampedTrendC), [8.1, 8.0, 7.9]);
+  assert.deepEqual(state.predictions.map(row => row.driftC), [8.4, 8.5, 8.6]);
   const html = render();
   assert.match(html, />Fresh</);
   assert.equal((html.match(/class="value">8\.3°C</g) ?? []).length, 3);
-  assert.doesNotMatch(html, /class="value">(8\.1|8\.0|7\.9)°C</);
-  for (const value of ["8.1", "8.0", "7.9"]) assert.match(html, new RegExp(`class="trendTest">Trend test ${value.replace(".", "\\.")}°C<`));
-  assert.match(html, /has not beaten no change in saved results/);
+  assert.doesNotMatch(html, /class="value">(8\.1|8\.0|7\.9|8\.4|8\.5|8\.6)°C</);
+  for (const [drift, trend] of [["8.4", "8.1"], ["8.5", "8.0"], ["8.6", "7.9"]]) {
+    assert.match(html, new RegExp(`class="testValue">Drift test ${drift.replace(".", "\\.")}°C</span><span class="testValue">Trend test ${trend.replace(".", "\\.")}°C<`));
+  }
+  assert.match(html, /Neither replaces the large number until saved results show it beating no change/);
+  assert.match(html, /Iowa Environmental Mesonet/);
 });
 
 test("a parent clock tick expires the same cached query without changing saved values", () => {
@@ -88,6 +93,18 @@ test("a newly issued forecast cannot make an old input observation fresh", () =>
   assert.match(render(data), /3m 30s ago/);
 });
 
+test("a forecast issued since the last 15-second page tick shows at once instead of blanking the card", () => {
+  const fresh = dashboard({ latest: issue({ issuedAt: NOW + 10_000, latestObservationTimeUtc: at("12:00:30") }) });
+  const state = buildNowcastState(fresh, DATE, NOW);
+  assert.equal(state.kind, "ready");
+  assert.equal(state.isLive, true);
+  assert.equal(state.clock, NOW + 10_000);
+  assert.deepEqual(state.predictions.map(row => row.estimateC), [8.3, 8.3, 8.3]);
+  assert.match(render(fresh), /0s ago/);
+  const tooFar = buildNowcastState(dashboard({ latest: issue({ issuedAt: NOW + 31_000 }) }), DATE, NOW);
+  assert.deepEqual([tooFar.kind, tooFar.predictions], ["empty", []]);
+});
+
 test("persistence-only uses the no-change estimate even if stray trend values are present", () => {
   const data = dashboard({ latest: issue({ qualityStatus: "persistence_only", qualityReason: "Waiting for enough recent readings." }) });
   const state = buildNowcastState(data, DATE, NOW);
@@ -98,6 +115,7 @@ test("persistence-only uses the no-change estimate even if stray trend values ar
   assert.match(html, />Fresh</);
   assert.match(html, /Trend test unavailable\. Waiting for enough recent readings\./);
   assert.doesNotMatch(html, /Trend test \d/);
+  assert.match(html, /Drift test 8\.4°C/, "the drift test does not depend on trend coverage");
   assert.equal((html.match(/No change · persistence/g) ?? []).length, 3);
 });
 
@@ -117,6 +135,7 @@ test("missing or duplicate horizon records never turn into invented forecast tem
   raw.predictions = [raw.predictions[0], raw.predictions[0], raw.predictions[2]];
   const state = buildNowcastState(dashboard({ latest: raw }), DATE, NOW);
   assert.deepEqual(state.predictions.map(row => row.estimateC), [null, null, 8.3]);
+  assert.deepEqual(state.predictions.map(row => row.driftC), [null, null, 8.6]);
   assert.deepEqual(state.predictions.map(row => row.targetTimeUtc), [null, null, at("12:21:00")]);
   assert.equal(formatNowcastTemperature(NaN), "—");
   assert.equal(formatNowcastTemperature("8.3"), "—");
@@ -173,30 +192,35 @@ test("actuals appear only after the target and score exist; missing is distinct 
   assert.match(render(data, DATE, at("12:18:00")), /Reading missing/);
 });
 
-test("accuracy compares the same paired cases and exposes sample days and window", () => {
-  const data = dashboard({ metrics: [{ horizonMinutes: 10, scoredCount: 100, pairedCount: 40, dayCount: 2,
-    persistenceMaeC: 0.9, pairedPersistenceMaeC: 0.4, dampedMaeC: 0.2 }] });
+test("accuracy lists each method against no change on its own cases and exposes sample days and window", () => {
+  const data = dashboard({ metrics: [{ horizonMinutes: 10, scoredCount: 100, scoredDayCount: 3, pairedCount: 40, dayCount: 2,
+    persistenceMaeC: 0.9, pairedPersistenceMaeC: 0.4, dampedMaeC: 0.2,
+    driftPairedCount: 60, driftDayCount: 2, driftPairedPersistenceMaeC: 0.5, driftMaeC: 0.45 }] });
   const state = buildNowcastState(data, DATE, NOW);
-  assert.equal(state.metrics[0].persistenceMaeC, 0.9);
-  assert.equal(state.metrics[0].pairedPersistenceMaeC, 0.4);
-  assert.equal(state.metrics[0].pairedCount, 40);
-  assert.equal(state.metrics[0].dayCount, 2);
+  assert.deepEqual([state.metrics[0].persistenceMaeC, state.metrics[0].scoredDayCount], [0.9, 3]);
+  assert.deepEqual([state.metrics[0].pairedCount, state.metrics[0].dayCount, state.metrics[0].pairedPersistenceMaeC], [40, 2, 0.4]);
+  assert.deepEqual([state.metrics[0].driftPairedCount, state.metrics[0].driftMaeC, state.metrics[0].driftPairedPersistenceMaeC], [60, 0.45, 0.5]);
   const html = render(data);
   assert.match(html, /Recorded performance · past 30 days/);
   assert.match(html, /2026-10-02 to 2026-10-31/);
-  assert.match(html, /Paired days/);
-  assert.match(html, /0\.90°C<\/td><td>40<\/td><td>2<\/td><td>0\.40°C<\/td><td>0\.20°C/);
+  assert.match(html, /No-change MAE, same cases/);
+  assert.match(html, /10 min<\/th><td class="textCell">No change<\/td><td>100<\/td><td>3<\/td><td>0\.90°C<\/td><td>—<\/td>/);
+  assert.match(html, /10 min<\/th><td class="textCell">Drift test<\/td><td>60<\/td><td>2<\/td><td>0\.45°C<\/td><td>0\.50°C<\/td>/);
+  assert.match(html, /10 min<\/th><td class="textCell">Trend test<\/td><td>40<\/td><td>2<\/td><td>0\.20°C<\/td><td>0\.40°C<\/td>/);
   assert.match(html, /Recorded days may cover only part of this window/);
-  const unpaired = buildNowcastState(dashboard({ metrics: [{ ...data.metrics[0], pairedCount: 0 }] }), DATE, NOW);
-  assert.equal(unpaired.metrics[0].dampedMaeC, null);
-  assert.equal(unpaired.metrics[0].pairedPersistenceMaeC, null);
+  const invalid = buildNowcastState(dashboard({ metrics: [{ ...data.metrics[0], pairedCount: 0, driftPairedCount: 101 }] }), DATE, NOW);
+  assert.deepEqual([invalid.metrics[0].dampedMaeC, invalid.metrics[0].pairedPersistenceMaeC], [null, null]);
+  assert.deepEqual([invalid.metrics[0].driftPairedCount, invalid.metrics[0].driftMaeC], [0, null], "drift cases cannot exceed scored cases");
   assert.equal(formatNowcastError(0.04), "0.04°C");
   assert.notEqual(formatNowcastError(0.06), formatNowcastError(0.09));
+  assert.deepEqual([formatNowcastChange(0.2, 0.25), formatNowcastChange(0.45, 0.3), formatNowcastChange(0.3, 0.3)], ["−20%", "+50%", "0%"]);
+  assert.deepEqual([formatNowcastChange(null, 0.3), formatNowcastChange(0.2, 0)], ["—", "—"]);
 });
 
 test("time-of-day accuracy lists each KST window and lead, ignoring conflicting or invalid rows", () => {
   const timeOfDayMetrics = [
-    { window: "morning", horizonMinutes: 10, scoredCount: 50, pairedCount: 40, dayCount: 2, pairedPersistenceMaeC: 0.25, dampedMaeC: 0.2 },
+    { window: "morning", horizonMinutes: 10, scoredCount: 50, pairedCount: 40, dayCount: 2, pairedPersistenceMaeC: 0.25, dampedMaeC: 0.2,
+      driftPairedCount: 50, driftDayCount: 2, driftPairedPersistenceMaeC: 0.26, driftMaeC: 0.13 },
     { window: "evening", horizonMinutes: 20, scoredCount: 30, pairedCount: 30, dayCount: 1, pairedPersistenceMaeC: 0.3, dampedMaeC: 0.45 },
     { window: "overnight", horizonMinutes: 10, scoredCount: 5, pairedCount: 9, dayCount: 1, pairedPersistenceMaeC: 0.1, dampedMaeC: 0.1 },
     { window: "midday", horizonMinutes: 15, scoredCount: 9, pairedCount: 9, dayCount: 1, pairedPersistenceMaeC: 0.1, dampedMaeC: 0.2 },
@@ -208,22 +232,25 @@ test("time-of-day accuracy lists each KST window and lead, ignoring conflicting 
   assert.deepEqual(state.timeOfDay.slice(0, 3).map(row => [row.key, row.horizonMinutes]), [["overnight", 10], ["overnight", 15], ["overnight", 20]]);
   const cell = (key, horizon) => state.timeOfDay.find(row => row.key === key && row.horizonMinutes === horizon);
   assert.deepEqual([cell("morning", 10).pairedCount, cell("morning", 10).pairedPersistenceMaeC, cell("morning", 10).dampedMaeC], [40, 0.25, 0.2]);
+  assert.deepEqual([cell("morning", 10).driftPairedCount, cell("morning", 10).driftPairedPersistenceMaeC, cell("morning", 10).driftMaeC], [50, 0.26, 0.13]);
+  assert.deepEqual([cell("evening", 20).driftPairedCount, cell("evening", 20).driftMaeC], [0, null]);
   assert.deepEqual([cell("overnight", 10).pairedCount, cell("overnight", 10).dampedMaeC], [0, null], "paired cannot exceed scored");
   assert.deepEqual([cell("midday", 15).pairedCount, cell("midday", 15).dampedMaeC], [0, null], "duplicates are not merged");
   assert.equal(state.timeOfDayExcludedDays, 1);
   const html = render(data);
   assert.match(html, /By time of day/);
-  assert.match(html, /Morning · 6–10 AM<span class="tableNote">10 min ahead<\/span><\/th><td>40<\/td><td>2<\/td><td>0\.25°C<\/td><td>0\.20°C<\/td>/);
-  assert.match(html, /Evening · 6 PM–12 AM<span class="tableNote">20 min ahead<\/span><\/th><td>30<\/td><td>1<\/td><td>0\.30°C<\/td><td>0\.45°C<\/td>/);
+  assert.match(html, /Drift test cases<\/th><th scope="col">Drift test vs no change<\/th><th scope="col">Trend test cases<\/th><th scope="col">Trend test vs no change/);
+  assert.match(html, /Morning · 6–10 AM<span class="tableNote">10 min ahead<\/span><\/th><td>50<\/td><td>−50%<span class="tableNote">0\.13°C vs 0\.26°C<\/span><\/td><td>40<\/td><td>−20%<span class="tableNote">0\.20°C vs 0\.25°C<\/span><\/td>/);
+  assert.match(html, /Evening · 6 PM–12 AM<span class="tableNote">20 min ahead<\/span><\/th><td>0<\/td><td>—<\/td><td>30<\/td><td>\+50%<span class="tableNote">0\.45°C vs 0\.30°C<\/span><\/td>/);
   assert.match(html, /Excludes 1 day recorded before time-of-day results were kept\./);
   const empty = render(dashboard());
-  assert.match(empty, /No paired forecasts have been scored by time of day yet\./);
+  assert.match(empty, /No test forecasts have been scored by time of day yet\./);
   assert.doesNotMatch(empty, /Excludes \d/);
 });
 
 test("fresh pending minute issues do not hide separately supplied completed forecasts", () => {
   const completed = issue({ issuedAt: at("11:39:15"), latestObservationTimeUtc: at("11:39:00"), predictions: [
-    { horizonMinutes: 10, targetTimeUtc: at("11:50:00"), persistenceC: 8.3, dampedTrendC: 8.1,
+    { horizonMinutes: 10, targetTimeUtc: at("11:50:00"), persistenceC: 8.3, dampedTrendC: 8.1, climatologyDriftC: 8.2,
       status: "scored", actualC: 8.0, scoredAt: at("11:50:30") },
   ] });
   const data = dashboard({ recent: [issue()], recentResolved: [completed] });
@@ -234,8 +261,8 @@ test("fresh pending minute issues do not hide separately supplied completed fore
   assert.equal(state.recentResolved, true);
   const html = render(data);
   assert.match(html, /Recent scored forecasts/);
-  assert.match(html, /No change<\/th><th scope="col">Trend test<\/th><th scope="col">Actual 15L/);
-  assert.match(html, /<td>8\.3°C<\/td><td>8\.1°C<\/td><td>8\.0°C<\/td>/);
+  assert.match(html, /No change<\/th><th scope="col">Drift test<\/th><th scope="col">Trend test<\/th><th scope="col">Actual 15L/);
+  assert.match(html, /<td>8\.3°C<\/td><td>8\.2°C<\/td><td>8\.1°C<\/td><td>8\.0°C<\/td>/);
 });
 
 test("recent history is bounded, sorted, and excludes other issue dates and future records", () => {

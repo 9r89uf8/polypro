@@ -3,10 +3,12 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildNowcast, NOWCAST_HORIZONS_MINUTES, NOWCAST_MODEL_VERSION } from '../convex/lib/seoulNowcastModel.js';
+import { NOWCAST_DRIFT_VERSION } from '../convex/lib/seoulNowcastDrift.js';
 
 // Offline replay of the deployed nowcast rule over stored day exports. No
-// requests, production writes, or fitting: the rule's parameters were fixed
-// before these days were replayed. Each issue sees only rows first seen by then.
+// requests, production writes, or fitting: the trend's parameters and the drift
+// table (built from reports before the replayed days) were fixed beforehand.
+// Each issue sees only rows first seen by then.
 const [inputDir, output] = process.argv.slice(2);
 if (!inputDir || !output) throw new Error('Usage: node scripts/replay-seoul-nowcast-v1.mjs <dir of day-YYYY-MM-DD.json exports> <new-output.json>');
 const minute = 60_000;
@@ -61,21 +63,28 @@ const bucket = time => buckets.find(([, low, high]) => {
   return hour >= low && hour < high;
 })[0];
 const accumulators = Object.fromEntries(NOWCAST_HORIZONS_MINUTES.map(horizon => [horizon, {}]));
-const metar = Object.fromEntries(NOWCAST_HORIZONS_MINUTES.map(horizon => [horizon, { pairedSlots: 0, persistenceExact: 0, dampedTrendExact: 0 }]));
+const metar = Object.fromEntries(NOWCAST_HORIZONS_MINUTES.map(horizon => [horizon, {
+  pairedSlots: 0, persistenceExact: 0, dampedTrendExact: 0, driftSlots: 0, driftPersistenceExact: 0, driftExact: 0 }]));
 const statusCounts = {};
 const missingTargets = Object.fromEntries(NOWCAST_HORIZONS_MINUTES.map(horizon => [horizon, 0]));
-function add(horizon, group, key, persistenceError, dampedError) {
+// Each test is accumulated only on its own available cases, with the
+// persistence error on exactly those cases kept beside it.
+function addTest(stats, prefix, persistenceError, testError) {
+  if (testError === null) return;
+  stats[`${prefix}Paired`] = (stats[`${prefix}Paired`] ?? 0) + 1;
+  stats[`${prefix}PairedPersistenceAbs`] = (stats[`${prefix}PairedPersistenceAbs`] ?? 0) + Math.abs(persistenceError);
+  stats[`${prefix}Abs`] = (stats[`${prefix}Abs`] ?? 0) + Math.abs(testError);
+  stats[`${prefix}Signed`] = (stats[`${prefix}Signed`] ?? 0) + testError;
+  if (Math.abs(testError) < Math.abs(persistenceError) - 1e-9) stats[`${prefix}Better`] = (stats[`${prefix}Better`] ?? 0) + 1;
+  if (Math.abs(testError) > Math.abs(persistenceError) + 1e-9) stats[`${prefix}Worse`] = (stats[`${prefix}Worse`] ?? 0) + 1;
+}
+function add(horizon, group, key, persistenceError, dampedError, driftError) {
   const target = (accumulators[horizon][group] ??= {});
-  const stats = (target[key] ??= { scored: 0, persistenceAbs: 0, paired: 0, pairedPersistenceAbs: 0, dampedAbs: 0, dampedSigned: 0, dampedBetter: 0, dampedWorse: 0 });
+  const stats = (target[key] ??= { scored: 0, persistenceAbs: 0 });
   stats.scored += 1;
   stats.persistenceAbs += Math.abs(persistenceError);
-  if (dampedError === null) return;
-  stats.paired += 1;
-  stats.pairedPersistenceAbs += Math.abs(persistenceError);
-  stats.dampedAbs += Math.abs(dampedError);
-  stats.dampedSigned += dampedError;
-  if (Math.abs(dampedError) < Math.abs(persistenceError) - 1e-9) stats.dampedBetter += 1;
-  if (Math.abs(dampedError) > Math.abs(persistenceError) + 1e-9) stats.dampedWorse += 1;
+  addTest(stats, 'damped', persistenceError, dampedError);
+  addTest(stats, 'drift', persistenceError, driftError);
 }
 
 let start = 0;
@@ -98,29 +107,44 @@ for (const trigger of minutes) {
     }
     const persistenceError = prediction.persistenceC - target.tempC;
     const dampedError = finite(prediction.dampedTrendC) ? prediction.dampedTrendC - target.tempC : null;
+    const driftError = finite(prediction.climatologyDriftC) ? prediction.climatologyDriftC - target.tempC : null;
     const groups = [['all', 'all'], ['byIssueTimeKst', bucket(issuedAt)], ['byIssueDateKst', local(issuedAt).slice(0, 10)]];
     if (Math.abs(persistenceError) >= 0.5 - 1e-9) groups.push(['actualMoveAtLeast0.5C', 'all']);
-    for (const [group, key] of groups) add(prediction.horizonMinutes, group, key, persistenceError, dampedError);
-    if (routineReports.has(prediction.targetTimeUtc) && dampedError !== null) {
-      const slot = metar[prediction.horizonMinutes];
-      slot.pairedSlots += 1;
-      if (rounded(prediction.persistenceC) === routineReports.get(prediction.targetTimeUtc)) slot.persistenceExact += 1;
-      if (rounded(prediction.dampedTrendC) === routineReports.get(prediction.targetTimeUtc)) slot.dampedTrendExact += 1;
+    for (const [group, key] of groups) add(prediction.horizonMinutes, group, key, persistenceError, dampedError, driftError);
+    if (routineReports.has(prediction.targetTimeUtc)) {
+      const slot = metar[prediction.horizonMinutes], reported = routineReports.get(prediction.targetTimeUtc);
+      if (dampedError !== null) {
+        slot.pairedSlots += 1;
+        if (rounded(prediction.persistenceC) === reported) slot.persistenceExact += 1;
+        if (rounded(prediction.dampedTrendC) === reported) slot.dampedTrendExact += 1;
+      }
+      if (driftError !== null) {
+        slot.driftSlots += 1;
+        if (rounded(prediction.persistenceC) === reported) slot.driftPersistenceExact += 1;
+        if (rounded(prediction.climatologyDriftC) === reported) slot.driftExact += 1;
+      }
     }
   }
 }
 
 const fixed = value => Number(value.toFixed(4));
+const summarizeTest = (stats, prefix, name) => {
+  const paired = stats[`${prefix}Paired`] ?? 0;
+  return {
+    [`${name}Paired`]: paired,
+    [`${name}PairedPersistenceMaeC`]: paired ? fixed(stats[`${prefix}PairedPersistenceAbs`] / paired) : null,
+    [`${name}MaeC`]: paired ? fixed(stats[`${prefix}Abs`] / paired) : null,
+    [`${name}BiasC`]: paired ? fixed(stats[`${prefix}Signed`] / paired) : null,
+    [`${name}RelativeChange`]: paired ? fixed(stats[`${prefix}Abs`] / stats[`${prefix}PairedPersistenceAbs`] - 1) : null,
+    [`${name}BetterCases`]: stats[`${prefix}Better`] ?? 0,
+    [`${name}WorseCases`]: stats[`${prefix}Worse`] ?? 0,
+  };
+};
 const summarize = stats => ({
   scored: stats.scored,
   persistenceMaeC: fixed(stats.persistenceAbs / stats.scored),
-  paired: stats.paired,
-  pairedPersistenceMaeC: stats.paired ? fixed(stats.pairedPersistenceAbs / stats.paired) : null,
-  dampedTrendMaeC: stats.paired ? fixed(stats.dampedAbs / stats.paired) : null,
-  dampedTrendBiasC: stats.paired ? fixed(stats.dampedSigned / stats.paired) : null,
-  dampedTrendRelativeChange: stats.paired ? fixed(stats.dampedAbs / stats.pairedPersistenceAbs - 1) : null,
-  dampedTrendBetterCases: stats.dampedBetter,
-  dampedTrendWorseCases: stats.dampedWorse,
+  ...summarizeTest(stats, 'damped', 'dampedTrend'),
+  ...summarizeTest(stats, 'drift', 'seasonalDrift'),
 });
 const horizons = Object.fromEntries(NOWCAST_HORIZONS_MINUTES.map(horizon => {
   const groups = accumulators[horizon];
@@ -137,11 +161,13 @@ const horizons = Object.fromEntries(NOWCAST_HORIZONS_MINUTES.map(horizon => {
 const scriptBytes = await fs.readFile(fileURLToPath(import.meta.url));
 const modelBytes = await fs.readFile(fileURLToPath(new URL('../convex/lib/seoulNowcastModel.js', import.meta.url)));
 const trendBytes = await fs.readFile(fileURLToPath(new URL('../convex/seoulHighPredictionModel.js', import.meta.url)));
+const driftBytes = await fs.readFile(fileURLToPath(new URL('../convex/lib/seoulNowcastDrift.js', import.meta.url)));
 const result = {
   generatedAt: new Date().toISOString(),
-  purpose: 'Offline replay of the fixed nowcast rule; persistence and damped trend compared on identical scored targets.',
+  purpose: 'Offline replay of the fixed nowcast rule; persistence compared with the damped trend and the seasonal drift, each on its own available scored targets.',
   modelVersion: NOWCAST_MODEL_VERSION,
-  sources: { scriptSha256: sha256(scriptBytes), modelSha256: sha256(modelBytes), trendHelperSha256: sha256(trendBytes) },
+  driftModelVersion: NOWCAST_DRIFT_VERSION,
+  sources: { scriptSha256: sha256(scriptBytes), modelSha256: sha256(modelBytes), trendHelperSha256: sha256(trendBytes), driftTableSha256: sha256(driftBytes) },
   inputs,
   replayWindowKst: { firstTrigger: local(minutes[0]), lastTrigger: local(minutes.at(-1)) },
   assumptions: [
@@ -158,6 +184,9 @@ await fs.writeFile(output, `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx' 
 
 for (const horizon of NOWCAST_HORIZONS_MINUTES) {
   const { all, byIssueTimeKst, nextRoutineMetarWholeDegree: m } = horizons[horizon];
-  const times = Object.entries(byIssueTimeKst).map(([key, s]) => `${key} ${(100 * s.dampedTrendRelativeChange).toFixed(0)}%`).join(', ');
-  console.log(`${horizon} min: paired ${all.paired}, persistence MAE ${all.pairedPersistenceMaeC}, damped MAE ${all.dampedTrendMaeC} (${(100 * all.dampedTrendRelativeChange).toFixed(1)}%); by KST issue time ${times}; METAR whole degree ${m.persistenceExact} vs ${m.dampedTrendExact} of ${m.pairedSlots}`);
+  for (const [name, label, exact, slots, baselineExact] of [['dampedTrend', 'trend', m.dampedTrendExact, m.pairedSlots, m.persistenceExact],
+    ['seasonalDrift', 'drift', m.driftExact, m.driftSlots, m.driftPersistenceExact]]) {
+    const times = Object.entries(byIssueTimeKst).map(([key, s]) => `${key} ${(100 * s[`${name}RelativeChange`]).toFixed(0)}%`).join(', ');
+    console.log(`${horizon} min ${label}: cases ${all[`${name}Paired`]}, persistence MAE ${all[`${name}PairedPersistenceMaeC`]}, ${label} MAE ${all[`${name}MaeC`]} (${(100 * all[`${name}RelativeChange`]).toFixed(1)}%); by KST issue time ${times}; METAR whole degree ${baselineExact} vs ${exact} of ${slots}`);
+  }
 }

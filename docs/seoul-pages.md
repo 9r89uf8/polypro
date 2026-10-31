@@ -8,16 +8,19 @@ It subscribes to `seoulNowcast:getDashboard` for the selected issuance date.
 Since November 1, 2026 KST each card's large value is the persistence
 (no-change) estimate. The damped trend appears only as a smaller “Trend test”
 line, because a replay of stored minutes found it less accurate than no change.
-Insufficient history shows “Trend test unavailable” with the reason. Actual
+A “Drift test” line above it adds the seasonal time-of-day mean change learned
+from open IEM METAR history; it needs no trend coverage. Insufficient history
+shows “Trend test unavailable” with the reason. Actual
 source/issue clocks and “No calibrated prediction range yet.” remain visible.
 The existing 15-second clock expires live
 status when issue or observation age exceeds two minutes; historical values
 remain labeled as saved/archived. Refresh does not reissue forecasts.
-Details show recent exact-minute outcomes with no-change and trend-test columns,
-and 30-day recorded MAE comparing both on the same paired cases with actual day
-counts. A “By time of day” table splits that paired comparison by each
-forecast's KST issue time (overnight, morning, midday, afternoon, evening) and
-notes any days recorded before the breakdown existed.
+Details show recent exact-minute outcomes with no-change, drift-test and
+trend-test columns, and 30-day recorded MAE with one row per lead and method:
+cases, days, the method's error and the no-change error on the same cases. A
+“By time of day” table gives each test's cases and error change against no
+change by the forecast's KST issue time (overnight, morning, midday, afternoon,
+evening) and notes any days recorded before the breakdown existed.
 Cross-midnight target dates stay explicit. This card is separate from official
 METAR and daily-high values. See the [nowcast specification](./seoul-temperature-nowcast.md)
 for input versioning, scoring and retention.

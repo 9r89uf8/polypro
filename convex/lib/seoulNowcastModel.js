@@ -1,4 +1,5 @@
 import { medianFinite, robustTemperatureTrend } from "../seoulHighPredictionModel.js";
+import { NOWCAST_DRIFT_MILLI_C_PER_30_MIN, NOWCAST_DRIFT_VERSION } from "./seoulNowcastDrift.js";
 
 export const NOWCAST_MODEL_VERSION = "rksi15l-minute-nowcast-v1";
 export const NOWCAST_HORIZONS_MINUTES = Object.freeze([10, 15, 20]);
@@ -91,6 +92,22 @@ function timeFeatures(issuedAt) {
   };
 }
 
+// Seasonal drift: the IEM-derived mean change for each KST half-hour slot and
+// day of year, summed minute by minute from the latest reading to the target.
+function driftRateCPerMinute(minuteUtc) {
+  const local = new Date(minuteUtc + KST_OFFSET_MS);
+  const dayStart = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+  const dayOfYear = 1 + Math.floor((dayStart - Date.UTC(local.getUTCFullYear(), 0, 1)) / DAY_MS);
+  const slot = local.getUTCHours() * 2 + Math.floor(local.getUTCMinutes() / 30);
+  return NOWCAST_DRIFT_MILLI_C_PER_30_MIN[dayOfYear - 1][slot] / 1000 / 30;
+}
+
+export function seasonalDriftC(fromMinuteUtc, toMinuteUtc) {
+  let total = 0;
+  for (let minute = fromMinuteUtc; minute < toMinuteUtc; minute += MINUTE_MS) total += driftRateCPerMinute(minute);
+  return total;
+}
+
 function historySnapshot(entries) {
   return entries.map(({ row, ambiguous, versionIds }) => ({
     versionId: row._id,
@@ -112,6 +129,7 @@ export function buildNowcast({ versions = [], issuedAt, triggerObsTimeUtc } = {}
     && Number.isFinite(new Date(issuedAt + KST_OFFSET_MS).getTime());
   const result = {
     modelVersion: NOWCAST_MODEL_VERSION,
+    driftModelVersion: NOWCAST_DRIFT_VERSION,
     issuedAt: validIssueTime ? issuedAt : null,
     qualityStatus: "unavailable",
     reasonCode: null,
@@ -204,6 +222,9 @@ export function buildNowcast({ versions = [], issuedAt, triggerObsTimeUtc } = {}
       dampedTrendC: trendUsable
         ? latest.tempC + slope * NOWCAST_DAMPING_MINUTES * -Math.expm1(-observationLeadMinutes / NOWCAST_DAMPING_MINUTES)
         : null,
+      // Needs only the latest reading and clock, so it is available even
+      // when the trend lacks coverage.
+      climatologyDriftC: latest.tempC + seasonalDriftC(latest.obsTimeUtc, targetTimeUtc),
     };
   });
   return result;

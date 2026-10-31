@@ -7,6 +7,9 @@ makes no claim of measured skill or calibrated uncertainty. The dashboard
 headlines the persistence (no-change) estimate; a replay of stored minutes
 found the damped trend less accurate, so it is shown only as a smaller test
 value. See [the display decision](#display-decision-and-stored-minute-replay).
+A second test value, the [seasonal drift](#seasonal-drift-test), adds the mean
+change for the time of day and time of year learned from open METAR history.
+Both tests are scored against persistence on their own cases.
 
 ## Issuance and timing
 
@@ -45,13 +48,18 @@ estimating from a truncated window.
   Pairwise offsets use elapsed time, not array positions.
 - Insufficient trend coverage leaves a clearly labeled persistence fallback
   with the damped estimate absent.
+- **Seasonal drift** (`climatologyDriftC`, versioned separately as
+  `rksi15l-iem-drift-v1`): latest 15L temperature plus the table's mean change
+  for each minute from the latest reading to the target. It needs no trend
+  coverage, so persistence-only issues still carry it. See
+  [Seasonal drift test](#seasonal-drift-test).
 
 The window and damping time are **fixed, unvalidated starting parameters**.
 16L, wind, dew point, pressure, visibility/RVR, precipitation and local time are
 retained for future analysis; they do not adjust this first model. Rain totals
 are not interpreted as minute rainfall. Cloud base is not cloud coverage.
 Satellite and market prices are not inputs. No regression or training job is
-deployed.
+deployed; the drift table is a static average built offline.
 
 Every result carries `intervalStatus: insufficient_calibration`. The UI says
 “No calibrated prediction range yet”; no confidence band is invented. A learned
@@ -96,7 +104,9 @@ every minute, including with no open page or a failed source feed. Policy
 
 The valid-target index finds the first eligible target even after many
 invalid revisions. Outcome and daily-statistic updates are atomic, so retries
-cannot double-count errors.
+cannot double-count errors. Outcomes issued after the drift test was added
+also carry `climatologyDriftC` and `driftModelVersion`, and receive
+`driftErrorC` with the other errors when scored.
 
 ## Dashboard and retention
 
@@ -106,9 +116,12 @@ having a scored target, and current-model
 daily aggregates for the 30 dates ending on the selected date. Targets can
 cross midnight. The frontend prefers the scored issues in its details, so a
 continuous stream of new pending forecasts does not hide actual results.
-Each card's large value is the persistence estimate. The damped trend appears
-as a smaller “Trend test” line, or “Trend test unavailable” when coverage is
-insufficient, and recent results list both beside the actual 15L reading.
+Each card's large value is the persistence estimate. The seasonal drift and the
+damped trend appear as smaller “Drift test” and “Trend test” lines; “Trend test
+unavailable” explains a missing trend. Recent results list all three beside
+the actual 15L reading. The accuracy table has one row per lead and method,
+each test beside the no-change error on its own cases, and the time-of-day
+table shows each test's error change against no change.
 
 The existing 15-second client clock expires live status when either issue or
 source-observation age exceeds two minutes, even if database writes stop.
@@ -120,7 +133,11 @@ and signed error sums by issuance date, horizon and model. Persistence MAE
 uses all scored targets; **paired** persistence MAE and damped MAE compare
 exactly the same cases. The API also exposes bias and scored/paired-day
 counts. These are experimental records, not independent sample counts or
-calibrated uncertainty.
+calibrated uncertainty. Drift sums (`driftPairedCount`,
+`driftPairedPersistenceAbsErrorSum`, `driftAbsErrorSum`, `driftErrorSum`) work
+the same way on drift cases. Rows and time-of-day windows written before the
+drift test lack them and count from zero, because no earlier drift forecasts
+exist; the dashboard returns `driftMaeC` beside `driftPairedPersistenceMaeC`.
 
 Each daily row also keeps those scored/paired counts and error sums in
 `timeOfDay`, split by the forecast's KST issue time into five fixed windows:
@@ -209,15 +226,75 @@ records input and source hashes, assumptions, and per-horizon, time-of-day and
 per-date results. The script makes no requests and refuses to overwrite an
 existing output.
 
+## Seasonal drift test
+
+Added on November 1, 2026 KST. The open
+[Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/request/download.phtml?network=KR__ASOS)
+(IEM) archive has RKSI METARs without an account: 189,188 reports at :00 and
+:30 KST from January 1, 2016 through October 25, 2026, giving 188,905 pairs 30
+minutes apart. Each pair's whole-degree change is averaged by KST half-hour
+slot and day of year, pooled over ±15 days (300–341 pairs per cell), and
+stored in thousandths of a degree in the generated
+[`convex/lib/seoulNowcastDrift.js`](../convex/lib/seoulNowcastDrift.js). In late
+October the means run from about −0.2°C per half hour overnight to +0.65°C
+around 8 AM and −0.55°C around 5 PM. The forecast adds the mean for each minute
+from the latest reading to the target. Nothing is fetched live.
+
+The table stops the day before the stored test minutes begin, so the replay
+below is out of sample. It ran the production `buildNowcast` over the same
+October 26–31 issues as the trend replay:
+
+| Target | Cases | Persistence MAE | Drift MAE | Change |
+| --- | ---: | ---: | ---: | ---: |
+| 10 minutes | 7,845 | 0.242°C | 0.231°C | −4.3% |
+| 15 minutes | 7,836 | 0.294°C | 0.271°C | −7.8% |
+| 20 minutes | 7,830 | 0.343°C | 0.306°C | −10.8% |
+
+- By KST issue time the drift helped most from 14:00 to 18:00 (11–23% lower
+  error), then 10:00–14:00 and 06:00–10:00 (6–16%), overnight (2–8%), and
+  roughly tied from 18:00 to midnight.
+- It was better on five of six dates and 6–7% worse on October 29.
+- When the actual change was at least 0.5°C it was still 5–14% better.
+- At routine METAR minutes its whole degree matched 202, 193 and 173 reports
+  versus 199, 190 and 178 for persistence, out of 264, 264 and 262.
+- Splitting the means by the latest METAR's cloud and rain did not help in a
+  separate exploratory check, so the table is unconditional.
+
+These are 5.5 dependent, mostly clear late-October days. The live ledger, which
+scores the drift against persistence on its own cases, is the forward test;
+the drift is not the headline until it keeps winning there. A new table needs a
+new `NOWCAST_DRIFT_VERSION` and a scoring change, because the daily drift sums
+are not split by drift version.
+
+Reproduce the table and replay (the IEM files and day exports stay in ignored
+local storage):
+
+```text
+node scripts/fetch-iem-rksi-metars.mjs <new-iem-dir> 2016 2026-10-26
+node scripts/build-seoul-nowcast-drift.mjs <iem-dir> 2026-10-26 rksi15l-iem-drift-v1 convex/lib/seoulNowcastDrift.js <new-evidence.json>
+node scripts/replay-seoul-nowcast-v1.mjs <day-export-directory> <new-output.json>
+```
+
+The [build evidence](assets/seoul-nowcast-drift-v1-build-20261101.json) records
+the eleven input hashes, pair counts and module hash, and the
+[replay summary](assets/seoul-nowcast-drift-v1-replay-20261101.json) records the
+results above per horizon, time of day and date. A fresh download can differ
+if IEM later corrects its archive. IEM data is freely available; it is credited
+here and in the dashboard's method note.
+
 ## Boundaries and checks
 
 This computes from the existing AMOS feed and adds no external request,
-credentials, provider capability, approval flag or satellite fallback. Existing
+credentials, provider capability, approval flag or satellite fallback. The
+drift table is built offline from the open IEM archive; production never
+requests IEM data. Existing
 access gates remain unchanged. Issuance, scoring and retention entry points
 are internal; the dashboard query is read-only. No trading behavior is added.
 
 Tests cover future-data exclusion, revisions/sentinels, timing, midnight,
 duplicate polling, coverage, fallback, delayed jobs, immutable issuance,
 target corrections, missing targets, paired metrics, time-of-day sums and
-their backfill, retention, client freshness and the no-change headline. Publish Convex schema/functions before the frontend calls the new
+their backfill, the drift table lookup across slots, days and leap years, drift
+scoring from zero on older rows, retention, client freshness and the
+no-change headline. Publish Convex schema/functions before the frontend calls the new
 query. The local Next.js build limitation in `AGENTS.md` still applies.

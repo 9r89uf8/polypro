@@ -13,6 +13,10 @@ A replay of October 26–31 minutes found the damped trend 17–18% less accurat
 than persistence, so the dashboard headlines persistence and shows the trend
 only as a test value. Daily nowcast score rows also keep sums for five fixed
 KST issue-time windows, so the live comparison can be read by time of day.
+A second test value adds a seasonal time-of-day drift built offline from open
+Iowa Environmental Mesonet RKSI METARs (2016 to October 25, 2026). It beat
+persistence by 4–11% on the stored October 26–31 minutes and is now scored
+live; production makes no IEM request.
 No new external feed, credential or approval flag is introduced. The linked
 specification records availability clocks, first-valid-target scoring,
 30/32/365-day retention and all new entry points.

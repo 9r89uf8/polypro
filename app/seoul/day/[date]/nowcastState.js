@@ -42,6 +42,13 @@ export function formatNowcastError(value) {
   return number(value) === null ? "—" : `${Number(value.toFixed(2)).toFixed(2)}°C`;
 }
 
+// Relative error of a test against no change on the same cases; negative is better.
+export function formatNowcastChange(testMaeC, baselineMaeC) {
+  if (number(testMaeC) === null || number(baselineMaeC) === null || baselineMaeC <= 0) return "—";
+  const percent = Math.round(100 * (testMaeC / baselineMaeC - 1));
+  return `${percent > 0 ? "+" : percent < 0 ? "−" : ""}${Math.abs(percent)}%`;
+}
+
 export function formatNowcastTime(time, date, { seconds = false } = {}) {
   if (!validTime(time)) return "—";
   const day = seoulDate(time);
@@ -62,6 +69,8 @@ function prediction(raw, horizonMinutes, issue, qualityStatus, now) {
     && raw.targetTimeUtc - issue.issuedAt < DAY ? raw.targetTimeUtc : null;
   const persistenceC = targetTimeUtc ? number(raw?.persistenceC) : null;
   const dampedTrendC = targetTimeUtc && qualityStatus === "ready" ? number(raw?.dampedTrendC) : null;
+  // The drift test needs only the latest reading, so it survives a missing trend.
+  const driftC = targetTimeUtc ? number(raw?.climatologyDriftC) : null;
   // No change is the headline. The damped trend lost to it in a replay of
   // stored minutes, so it remains a separately labeled test value.
   const estimateC = persistenceC;
@@ -75,6 +84,7 @@ function prediction(raw, horizonMinutes, issue, qualityStatus, now) {
     observationLeadMinutes: targetTimeUtc ? (targetTimeUtc - issue.latestObservationTimeUtc) / MINUTE : null,
     persistenceC,
     dampedTrendC,
+    driftC,
     estimateC,
     method,
     status: hasActual ? "scored" : raw?.status === "missing" && targetTimeUtc !== null && targetTimeUtc <= now ? "missing" : "pending",
@@ -98,29 +108,40 @@ function normalizeIssue(row, date, now) {
     issuedAt: row.issuedAt,
     latestObservationTimeUtc,
     modelVersion: typeof row.modelVersion === "string" ? row.modelVersion : "",
+    driftModelVersion: typeof row.driftModelVersion === "string" ? row.driftModelVersion : "",
     qualityStatus,
     qualityReason: typeof row.qualityReason === "string" ? row.qualityReason : "",
     predictions,
   };
 }
 
+const TREND_FIELDS = { pairs: "pairedCount", days: "dayCount", baseline: "pairedPersistenceMaeC", test: "dampedMaeC" };
+const DRIFT_FIELDS = { pairs: "driftPairedCount", days: "driftDayCount", baseline: "driftPairedPersistenceMaeC", test: "driftMaeC" };
+
+// A test is compared with no change only when its case and day counts and both
+// errors are valid; anything else becomes an explicit empty comparison.
+function comparison(raw, scoredCount, fields) {
+  const pairs = count(raw?.[fields.pairs]) ?? 0;
+  const days = count(raw?.[fields.days]) ?? 0;
+  const valid = pairs > 0 && pairs <= scoredCount && days > 0;
+  const baseline = valid ? nonnegative(raw?.[fields.baseline]) : null;
+  const test = valid ? nonnegative(raw?.[fields.test]) : null;
+  const ok = baseline !== null && test !== null;
+  return { [fields.pairs]: ok ? pairs : 0, [fields.days]: ok ? days : 0,
+    [fields.baseline]: ok ? baseline : null, [fields.test]: ok ? test : null };
+}
+
 function normalizeMetrics(rows) {
   return NOWCAST_HORIZONS.map(horizonMinutes => {
     const raw = Array.isArray(rows) ? rows.find(item => item?.horizonMinutes === horizonMinutes) : null;
     const scoredCount = count(raw?.scoredCount) ?? 0;
-    const pairedCount = count(raw?.pairedCount) ?? 0;
-    const comparable = pairedCount > 0 && pairedCount <= scoredCount && count(raw?.dayCount) > 0;
-    const pairedPersistenceMaeC = comparable ? nonnegative(raw?.pairedPersistenceMaeC) : null;
-    const dampedMaeC = comparable ? nonnegative(raw?.dampedMaeC) : null;
-    const hasPair = pairedPersistenceMaeC !== null && dampedMaeC !== null;
     return {
       horizonMinutes,
       scoredCount,
-      pairedCount: hasPair ? pairedCount : 0,
-      dayCount: count(raw?.dayCount) ?? 0,
+      scoredDayCount: scoredCount > 0 ? count(raw?.scoredDayCount) ?? 0 : 0,
       persistenceMaeC: scoredCount > 0 ? nonnegative(raw?.persistenceMaeC) : null,
-      pairedPersistenceMaeC: hasPair ? pairedPersistenceMaeC : null,
-      dampedMaeC: hasPair ? dampedMaeC : null,
+      ...comparison(raw, scoredCount, TREND_FIELDS),
+      ...comparison(raw, scoredCount, DRIFT_FIELDS),
       pendingCount: count(raw?.pendingCount),
       missingCount: count(raw?.missingCount),
     };
@@ -132,23 +153,25 @@ function normalizeTimeOfDay(rows) {
     const matching = Array.isArray(rows) ? rows.filter(item => item?.window === key && item?.horizonMinutes === horizonMinutes) : [];
     // Conflicting duplicate rows cannot safely become a single comparison.
     const raw = matching.length === 1 ? matching[0] : null;
-    const pairedCount = count(raw?.pairedCount) ?? 0;
-    const dayCount = count(raw?.dayCount) ?? 0;
-    const comparable = pairedCount > 0 && pairedCount <= (count(raw?.scoredCount) ?? 0) && dayCount > 0;
-    const pairedPersistenceMaeC = comparable ? nonnegative(raw?.pairedPersistenceMaeC) : null;
-    const dampedMaeC = comparable ? nonnegative(raw?.dampedMaeC) : null;
-    const hasPair = pairedPersistenceMaeC !== null && dampedMaeC !== null;
-    return { key, label, horizonMinutes, pairedCount: hasPair ? pairedCount : 0, dayCount: hasPair ? dayCount : 0,
-      pairedPersistenceMaeC: hasPair ? pairedPersistenceMaeC : null, dampedMaeC: hasPair ? dampedMaeC : null };
+    const scoredCount = count(raw?.scoredCount) ?? 0;
+    return { key, label, horizonMinutes, ...comparison(raw, scoredCount, TREND_FIELDS), ...comparison(raw, scoredCount, DRIFT_FIELDS) };
   }));
 }
 
+// The page clock ticks every 15 seconds, so a forecast issued since the last
+// tick, or stamped by a slightly fast server clock, would otherwise read as
+// future and blank the card until the next tick. Larger gaps stay rejected.
+const CLOCK_TOLERANCE_MS = 30_000;
+
 /** Display saved forecasts without recomputing or refreshing their issuance time. */
-export function buildNowcastState(data, date, now) {
+export function buildNowcastState(data, date, pageNow) {
   const base = { kind: "loading", label: "Loading", detail: "Loading saved nowcasts…", isLive: false,
     isArchived: false, latest: null, predictions: [], recent: [], recentResolved: false, metrics: [],
-    timeOfDay: [], timeOfDayExcludedDays: 0, date };
-  if (!validTime(now)) return base;
+    timeOfDay: [], timeOfDayExcludedDays: 0, clock: pageNow, date };
+  if (!validTime(pageNow)) return base;
+  const latestIssuedAt = data?.latest?.issuedAt;
+  const now = validTime(latestIssuedAt) && latestIssuedAt > pageNow && latestIssuedAt - pageNow <= CLOCK_TOLERANCE_MS
+    ? latestIssuedAt : pageNow;
   const today = seoulDate(now);
   if (date > today) return { ...base, kind: "future", label: "Future date", detail: "Nowcasts appear as observations arrive on this date." };
   if (data === undefined) return base;
@@ -172,7 +195,7 @@ export function buildNowcastState(data, date, now) {
   const metricsStartDate = /^\d{4}-\d{2}-\d{2}$/.test(data.metricsStartDate) && data.metricsStartDate <= date ? data.metricsStartDate : date;
   const metricsWindowDays = Number.isInteger(data.metricsWindowDays) && data.metricsWindowDays > 0 ? data.metricsWindowDays : 1;
   const result = { ...base, isArchived, latest, metrics, recent, recentResolved: recent.some(row => row.predictions.some(item => item.status === "scored")),
-    predictions: latest?.predictions ?? [], metricsStartDate, metricsWindowDays,
+    predictions: latest?.predictions ?? [], metricsStartDate, metricsWindowDays, clock: now,
     timeOfDay: normalizeTimeOfDay(data.timeOfDayMetrics), timeOfDayExcludedDays: count(data.timeOfDayExcludedDayCount) ?? 0 };
   if (!latest) return { ...result, kind: "empty", label: isArchived ? "Archived" : "Waiting for readings",
     detail: isArchived ? "No saved nowcasts were issued on this date." : "Waiting for a saved forecast from a recent 15L reading." };

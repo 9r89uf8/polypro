@@ -51,11 +51,11 @@ function timeOfDayKey(issuedAt) {
   return NOWCAST_TIME_OF_DAY_WINDOWS.find((window) => hour >= window.startHourKst && hour < window.endHourKst).key;
 }
 
-function addTimeOfDayScore(timeOfDay, key, persistenceErrorC, dampedErrorC) {
-  const current = timeOfDay[key] ?? { scoredCount: 0, pairedCount: 0, persistenceAbsErrorSum: 0,
-    pairedPersistenceAbsErrorSum: 0, dampedAbsErrorSum: 0, persistenceErrorSum: 0, dampedErrorSum: 0 };
-  const paired = dampedErrorC !== null;
-  return { ...timeOfDay, [key]: {
+// Adds one scored outcome's errors to a score record. Drift sums may be absent
+// on records written before the drift test existed and then start from zero.
+function addScore(current, persistenceErrorC, dampedErrorC, driftErrorC) {
+  const paired = dampedErrorC !== null, drift = driftErrorC !== null;
+  return {
     scoredCount: current.scoredCount + 1,
     pairedCount: current.pairedCount + (paired ? 1 : 0),
     persistenceAbsErrorSum: current.persistenceAbsErrorSum + Math.abs(persistenceErrorC),
@@ -63,7 +63,17 @@ function addTimeOfDayScore(timeOfDay, key, persistenceErrorC, dampedErrorC) {
     dampedAbsErrorSum: current.dampedAbsErrorSum + (paired ? Math.abs(dampedErrorC) : 0),
     persistenceErrorSum: current.persistenceErrorSum + persistenceErrorC,
     dampedErrorSum: current.dampedErrorSum + (paired ? dampedErrorC : 0),
-  } };
+    driftPairedCount: (current.driftPairedCount ?? 0) + (drift ? 1 : 0),
+    driftPairedPersistenceAbsErrorSum: (current.driftPairedPersistenceAbsErrorSum ?? 0) + (drift ? Math.abs(persistenceErrorC) : 0),
+    driftAbsErrorSum: (current.driftAbsErrorSum ?? 0) + (drift ? Math.abs(driftErrorC) : 0),
+    driftErrorSum: (current.driftErrorSum ?? 0) + (drift ? driftErrorC : 0),
+  };
+}
+
+function addTimeOfDayScore(timeOfDay, key, persistenceErrorC, dampedErrorC, driftErrorC) {
+  const current = timeOfDay[key] ?? { scoredCount: 0, pairedCount: 0, persistenceAbsErrorSum: 0,
+    pairedPersistenceAbsErrorSum: 0, dampedAbsErrorSum: 0, persistenceErrorSum: 0, dampedErrorSum: 0 };
+  return { ...timeOfDay, [key]: addScore(current, persistenceErrorC, dampedErrorC, driftErrorC) };
 }
 
 async function dailyScore(ctx, record) {
@@ -83,7 +93,8 @@ async function recordIssuance(ctx, record) {
       horizonMinutes: record.horizonMinutes, dayStartUtc: Date.parse(`${record.date}T00:00:00+09:00`),
       issuedCount: 1, scoredCount: 0, missingCount: 0, pairedCount: 0,
       persistenceAbsErrorSum: 0, pairedPersistenceAbsErrorSum: 0, dampedAbsErrorSum: 0,
-      persistenceErrorSum: 0, dampedErrorSum: 0, timeOfDay: {},
+      persistenceErrorSum: 0, dampedErrorSum: 0, driftPairedCount: 0, driftPairedPersistenceAbsErrorSum: 0,
+      driftAbsErrorSum: 0, driftErrorSum: 0, timeOfDay: {},
     });
   }
 }
@@ -124,6 +135,8 @@ export const issueForObservation = internalMutationGeneric({
         forecastId, stationIcao: "RKSI", date, modelVersion: result.modelVersion, issuedAt,
         horizonMinutes: prediction.horizonMinutes, targetTimeUtc: prediction.targetTimeUtc,
         persistenceC: prediction.persistenceC, dampedTrendC: prediction.dampedTrendC,
+        ...(Number.isFinite(prediction.climatologyDriftC)
+          ? { climatologyDriftC: prediction.climatologyDriftC, driftModelVersion: result.driftModelVersion } : {}),
         status: "pending", scoringVersion: NOWCAST_SCORING_VERSION,
       };
       await ctx.db.insert("seoulNowcastOutcomes", record);
@@ -157,23 +170,19 @@ export const scorePending = internalMutationGeneric({
         const persistenceErrorC = outcome.persistenceC - target.tempC;
         const paired = Number.isFinite(outcome.dampedTrendC);
         const dampedErrorC = paired ? outcome.dampedTrendC - target.tempC : null;
+        const driftErrorC = Number.isFinite(outcome.climatologyDriftC) ? outcome.climatologyDriftC - target.tempC : null;
         await ctx.db.patch(outcome._id, {
           status: "scored", actualC: target.tempC, observationVersionId: target._id,
           targetReceivedAt: target.receivedAt, scoredAt: now, persistenceErrorC,
           ...(paired ? { dampedErrorC } : {}),
+          ...(driftErrorC !== null ? { driftErrorC } : {}),
         });
         await ctx.db.patch(stats._id, {
-          scoredCount: stats.scoredCount + 1,
-          pairedCount: stats.pairedCount + (paired ? 1 : 0),
-          persistenceAbsErrorSum: stats.persistenceAbsErrorSum + Math.abs(persistenceErrorC),
-          persistenceErrorSum: stats.persistenceErrorSum + persistenceErrorC,
-          pairedPersistenceAbsErrorSum: stats.pairedPersistenceAbsErrorSum + (paired ? Math.abs(persistenceErrorC) : 0),
-          dampedAbsErrorSum: stats.dampedAbsErrorSum + (paired ? Math.abs(dampedErrorC) : 0),
-          dampedErrorSum: stats.dampedErrorSum + (paired ? dampedErrorC : 0),
+          ...addScore(stats, persistenceErrorC, dampedErrorC, driftErrorC),
           // Rows written before the breakdown stay without it; the backfill
           // recomputes them from outcomes rather than holding a partial sum.
           ...(stats.timeOfDay ? { timeOfDay: addTimeOfDayScore(stats.timeOfDay,
-            timeOfDayKey(outcome.issuedAt), persistenceErrorC, paired ? dampedErrorC : null) } : {}),
+            timeOfDayKey(outcome.issuedAt), persistenceErrorC, dampedErrorC, driftErrorC) } : {}),
         });
         scored++;
       } else {
@@ -214,10 +223,12 @@ export const backfillTimeOfDayScores = internalMutationGeneric({
         if (outcome.modelVersion !== row.modelVersion || outcome.horizonMinutes !== row.horizonMinutes
           || !Number.isFinite(outcome.persistenceErrorC)) continue;
         timeOfDay = addTimeOfDayScore(timeOfDay, timeOfDayKey(outcome.issuedAt), outcome.persistenceErrorC,
-          Number.isFinite(outcome.dampedErrorC) ? outcome.dampedErrorC : null);
+          Number.isFinite(outcome.dampedErrorC) ? outcome.dampedErrorC : null,
+          Number.isFinite(outcome.driftErrorC) ? outcome.driftErrorC : null);
       }
       const total = (key) => Object.values(timeOfDay).reduce((sum, part) => sum + part[key], 0);
-      if (total("scoredCount") !== row.scoredCount || total("pairedCount") !== row.pairedCount) {
+      if (total("scoredCount") !== row.scoredCount || total("pairedCount") !== row.pairedCount
+        || total("driftPairedCount") !== (row.driftPairedCount ?? 0)) {
         mismatchedRows++;
         continue;
       }
@@ -252,11 +263,25 @@ export const pruneExpired = internalMutationGeneric({
   },
 });
 
+// Drift sums are absent on records written before the drift test; they count
+// as zero because no earlier drift forecasts exist.
+function driftMetrics(records) {
+  const sum = (key) => records.reduce((total, record) => total + (record[key] ?? 0), 0);
+  const driftPairedCount = sum("driftPairedCount");
+  return {
+    driftPairedCount, driftDayCount: records.filter((record) => (record.driftPairedCount ?? 0) > 0).length,
+    driftPairedPersistenceMaeC: driftPairedCount ? sum("driftPairedPersistenceAbsErrorSum") / driftPairedCount : null,
+    driftMaeC: driftPairedCount ? sum("driftAbsErrorSum") / driftPairedCount : null,
+    driftBiasC: driftPairedCount ? sum("driftErrorSum") / driftPairedCount : null,
+  };
+}
+
 async function publicForecast(ctx, forecast) {
   const outcomes = await ctx.db.query("seoulNowcastOutcomes")
     .withIndex("by_forecast", (q) => q.eq("forecastId", forecast._id)).take(3);
   return {
     id: forecast._id, issuedAt: forecast.issuedAt, date: forecast.date, modelVersion: forecast.modelVersion,
+    driftModelVersion: forecast.driftModelVersion ?? null,
     qualityStatus: forecast.qualityStatus, qualityReason: forecast.reason,
     intervalStatus: forecast.intervalStatus, latestObservationTimeUtc: forecast.latestObservationTimeUtc,
     latestObservationReceivedAt: forecast.latestObservationReceivedAt,
@@ -293,6 +318,7 @@ export const getDashboard = queryGeneric({
         dampedMaeC: pairedCount ? sum("dampedAbsErrorSum") / pairedCount : null,
         persistenceBiasC: scoredCount ? sum("persistenceErrorSum") / scoredCount : null,
         dampedBiasC: pairedCount ? sum("dampedErrorSum") / pairedCount : null,
+        ...driftMetrics(days),
       };
     });
     // Days whose rows predate the breakdown are counted as excluded, never
@@ -309,6 +335,7 @@ export const getDashboard = queryGeneric({
         pairedPersistenceMaeC: pairedCount ? sum("pairedPersistenceAbsErrorSum") / pairedCount : null,
         dampedMaeC: pairedCount ? sum("dampedAbsErrorSum") / pairedCount : null,
         dampedBiasC: pairedCount ? sum("dampedErrorSum") / pairedCount : null,
+        ...driftMetrics(parts),
       };
     }));
     const timeOfDayExcludedDayCount = new Set(scores.filter((row) => !row.timeOfDay).map((row) => row.date)).size;

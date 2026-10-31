@@ -436,6 +436,54 @@ test("dashboard compares damped forecasts with persistence on the same scored su
   assert.deepEqual(h.calls.external, []);
 });
 
+test("drift forecasts are saved with each outcome and scored against no-change on the same cases", async () => {
+  const h = harness();
+  await h.seedHistory();
+  await h.issue();
+  const prediction = h.forecasts()[0].predictions.find(row => row.horizonMinutes === 10);
+  assert.equal(h.forecasts()[0].driftModelVersion, "rksi15l-iem-drift-v1");
+  const outcome = h.outcomes().find(row => row.horizonMinutes === 10);
+  assert.deepEqual([outcome.climatologyDriftC, outcome.driftModelVersion], [prediction.climatologyDriftC, "rksi15l-iem-drift-v1"]);
+  h.setNow(OBS + 10 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + 10 * MINUTE, { tempC: 21 })]);
+  await h.call("scorePending");
+  const scored = h.outcomes().find(row => row.horizonMinutes === 10);
+  assert.ok(Math.abs(scored.driftErrorC - (prediction.climatologyDriftC - 21)) < 1e-10);
+  const row = h.tables.seoulNowcastDailyScores.find(item => item.horizonMinutes === 10);
+  assert.equal(row.driftPairedCount, 1);
+  assert.equal(row.timeOfDay.midday.driftPairedCount, 1);
+  const view = await h.call("getDashboard", { stationIcao: "RKSI", date: localDate(NOW) });
+  const metrics = view.metrics.find(item => item.horizonMinutes === 10);
+  assert.deepEqual([metrics.driftPairedCount, metrics.driftDayCount, metrics.driftPairedPersistenceMaeC], [1, 1, 1]);
+  assert.ok(Math.abs(metrics.driftMaeC - Math.abs(prediction.climatologyDriftC - 21)) < 1e-10);
+  const window = view.timeOfDayMetrics.find(item => item.window === "midday" && item.horizonMinutes === 10);
+  assert.ok(Math.abs(window.driftMaeC - metrics.driftMaeC) < 1e-12);
+  assert.equal(view.latest.driftModelVersion, "rksi15l-iem-drift-v1");
+  assert.equal(view.latest.predictions.find(item => item.horizonMinutes === 10).climatologyDriftC, prediction.climatologyDriftC);
+});
+
+test("scores recorded before the drift test start its sums at zero without touching other totals", async () => {
+  const h = harness();
+  await h.seedHistory();
+  await h.issue();
+  // A row and window written by the release before the drift test existed.
+  const before = h.tables.seoulNowcastDailyScores.find(item => item.horizonMinutes === 10);
+  await h.db.patch(before._id, { driftPairedCount: undefined, driftPairedPersistenceAbsErrorSum: undefined,
+    driftAbsErrorSum: undefined, driftErrorSum: undefined, timeOfDay: { midday: { scoredCount: 2, pairedCount: 2,
+      persistenceAbsErrorSum: 1, pairedPersistenceAbsErrorSum: 1, dampedAbsErrorSum: 2, persistenceErrorSum: 1, dampedErrorSum: 2 } } });
+  await h.db.patch(before._id, { scoredCount: 2, pairedCount: 2, persistenceAbsErrorSum: 1, pairedPersistenceAbsErrorSum: 1,
+    dampedAbsErrorSum: 2, persistenceErrorSum: 1, dampedErrorSum: 2 });
+  const legacyView = await h.call("getDashboard", { stationIcao: "RKSI", date: localDate(NOW) });
+  assert.deepEqual([legacyView.metrics[0].driftPairedCount, legacyView.metrics[0].driftMaeC], [0, null]);
+  h.setNow(OBS + 10 * MINUTE + 20_000);
+  await h.ingest([observation(OBS + 10 * MINUTE, { tempC: 21 })]);
+  await h.call("scorePending");
+  const after = h.tables.seoulNowcastDailyScores.find(item => item.horizonMinutes === 10);
+  assert.deepEqual([after.scoredCount, after.pairedCount, after.driftPairedCount], [3, 3, 1]);
+  assert.deepEqual([after.timeOfDay.midday.scoredCount, after.timeOfDay.midday.driftPairedCount], [3, 1]);
+  assert.ok(Math.abs(after.driftPairedPersistenceAbsErrorSum - 1) < 1e-10, "only the new case is in the drift baseline");
+});
+
 test("time-of-day sums follow the KST issue time and add up to the daily totals", async () => {
   const h = harness();
   await h.seedHistory();

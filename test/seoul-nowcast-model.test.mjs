@@ -6,7 +6,9 @@ import {
   NOWCAST_DAMPING_MINUTES,
   NOWCAST_MAX_OBSERVATION_AGE_MS,
   buildNowcast,
+  seasonalDriftC,
 } from "../convex/lib/seoulNowcastModel.js";
+import { NOWCAST_DRIFT_MILLI_C_PER_30_MIN, NOWCAST_DRIFT_VERSION } from "../convex/lib/seoulNowcastDrift.js";
 
 const MINUTE = 60_000;
 const LAST = Date.parse("2026-10-31T04:00:00Z");
@@ -37,6 +39,31 @@ function forecast(versions = history(), fields = {}) {
 function close(actual, expected, epsilon = 1e-10) {
   assert.ok(Math.abs(actual - expected) < epsilon, `${actual} != ${expected}`);
 }
+
+const driftRate = (dayOfYear, slot) => NOWCAST_DRIFT_MILLI_C_PER_30_MIN[dayOfYear - 1][slot] / 1000 / 30;
+
+test("seasonal drift adds the table's mean change minute by minute, even without trend coverage", () => {
+  // LAST is 13:00 KST on October 31, day 304; every horizon stays in the 13:00 slot.
+  for (const versions of [history(), history({ count: 3 })]) {
+    const result = forecast(versions);
+    assert.equal(result.driftModelVersion, NOWCAST_DRIFT_VERSION);
+    for (const prediction of result.predictions) {
+      close(prediction.climatologyDriftC, 10 + prediction.horizonMinutes * driftRate(304, 26));
+    }
+  }
+  assert.equal(forecast(history({ count: 3 })).qualityStatus, "persistence_only");
+  assert.ok(forecast(history({ count: 3 })).predictions.every(p => p.dampedTrendC === null && Number.isFinite(p.climatologyDriftC)));
+});
+
+test("seasonal drift switches half-hour slots and calendar days at the right KST minute", () => {
+  const at = (iso) => Date.parse(iso);
+  close(seasonalDriftC(at("2026-10-31T13:25:00+09:00"), at("2026-10-31T13:35:00+09:00")),
+    5 * driftRate(304, 26) + 5 * driftRate(304, 27));
+  close(seasonalDriftC(at("2026-12-31T23:55:00+09:00"), at("2027-01-01T00:05:00+09:00")),
+    5 * driftRate(365, 47) + 5 * driftRate(1, 0));
+  close(seasonalDriftC(at("2028-12-31T12:00:00+09:00"), at("2028-12-31T12:10:00+09:00")), 10 * driftRate(366, 24), 1e-12);
+  assert.equal(seasonalDriftC(at("2026-10-31T13:00:00+09:00"), at("2026-10-31T13:00:00+09:00")), 0);
+});
 
 test("missing observations and invalid clocks return explicit unavailable results", () => {
   for (const issuedAt of [undefined, null, NaN, Infinity, -1, ISSUE + 0.5]) {
