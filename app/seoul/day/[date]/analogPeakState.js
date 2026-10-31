@@ -119,6 +119,7 @@ export function buildAnalogPeakState(data, date, now) {
     return { ...result, kind: isArchived ? "archived" : "forecast", label: `From ${formatCheckpoint(latest.checkpoint)}`, detail: later.trim() };
   }
   if (unavailable) return { ...result, kind: "unavailable", label: "Unavailable", detail: unavailable.reason || "The checkpoint report was not available." };
-  return { ...result, kind: "season", label: isArchived ? "Archived" : "Season only",
-    detail: isArchived ? "No similar-day estimate was saved for this date." : "A similar-day estimate appears after the 9:00 AM report, usually by 9:05 AM." };
+  return { ...result, kind: "season", label: isArchived ? "Archived" : "Past days only",
+    detail: isArchived ? "No similar-day estimate was saved for this date. These figures describe past days near it."
+      : "These figures describe past days near this date, not a forecast for today. Today’s similar-day estimate appears after the 9:00 AM report, usually by 9:05 AM." };
 }

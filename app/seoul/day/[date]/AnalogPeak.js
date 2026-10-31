@@ -34,12 +34,14 @@ function ForecastCards({ forecast }) {
   </div>;
 }
 
+// Past days near the date only: every label says "usually" or "typical" so the
+// view cannot be read as today's forecast.
 function SeasonCards({ season }) {
   return <div className={styles.predictions}>
-    <Card title="Peak first reached" value={formatPeakTime(season.peakFirstMinutes[1])} line={`Most days ${formatPeakRange(season.peakFirstMinutes)}`}
-      note={`${season.count} days within 15 days of this date`} />
-    <Card title="Last at the high" value={formatPeakTime(season.peakLastMinutes?.[1])} line={`Most days ${formatPeakRange(season.peakLastMinutes)}`} />
-    <Card title="Typical high" value={degrees(season.medianMaxC)} line="Median daily high in the season" />
+    <Card title="Usually first at the high" value={formatPeakTime(season.peakFirstMinutes[1])} line={`Most past days ${formatPeakRange(season.peakFirstMinutes)}`}
+      note={`${season.count} past days within 15 days of this date`} />
+    <Card title="Usually last at the high" value={formatPeakTime(season.peakLastMinutes?.[1])} line={`Most past days ${formatPeakRange(season.peakLastMinutes)}`} />
+    <Card title="Typical high for this date" value={degrees(season.medianMaxC)} line="Middle of past daily highs, not today’s forecast" />
   </div>;
 }
 
@@ -76,9 +78,10 @@ function Details({ state }) {
 export default function AnalogPeak({ dashboard, date, now }) {
   const state = useMemo(() => buildAnalogPeakState(dashboard, date, now), [dashboard, date, now]);
   const latest = state.latest;
+  const title = !latest ? "When the high usually comes" : state.isArchived ? "When the day’s high came" : "When today’s high is likely";
   return <section className={styles.card} aria-labelledby="analog-peak-heading">
     <div className={styles.header}>
-      <div><span className={styles.eyebrow}>ROUTINE METAR · EXPERIMENTAL</span><h2 id="analog-peak-heading">{state.isArchived ? "When the day’s high came" : "When today’s high is likely"}</h2></div>
+      <div><span className={styles.eyebrow}>ROUTINE METAR · EXPERIMENTAL</span><h2 id="analog-peak-heading">{title}</h2></div>
       <span className={`${styles.badge} ${state.kind === "forecast" ? styles.fresh : state.kind === "unavailable" ? styles.delayed : ""}`}>{state.label}</span>
     </div>
     <p className={styles.scope}>Timing of the day’s highest whole-degree routine METAR, the reading the daily-high market settles on. Separate from the 15L nowcast.</p>

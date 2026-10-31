@@ -97,7 +97,9 @@ weight.
 ## Dashboard
 
 The card on `/seoul/day/[date]` follows the nowcast card. Before 9:00 AM it
-shows the seasonal window and typical high. After each checkpoint it shows the
+shows the seasonal window and typical high, labeled throughout as past days near
+the date rather than a forecast for today (“When the high usually comes”, “Past
+days only”, “Usually first at the high”). After each checkpoint it shows the
 analog peak time and range, the chance the high is still ahead, and the likely
 high, each beside the season figure, then the matched conditions, the closest
 days and when similar days last reported their high. A later unavailable

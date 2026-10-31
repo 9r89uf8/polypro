@@ -31,16 +31,17 @@ new Function("require", "module", "exports", bundled.outputFiles[0].text)(create
 const AnalogPeak = componentModule.exports.default;
 const render = (data, date = DATE, now = at("10:00:00")) => renderToStaticMarkup(React.createElement(AnalogPeak, { dashboard: data, date, now }));
 
-test("before the 9:00 AM checkpoint the card shows the seasonal window", () => {
+test("before the 9:00 AM checkpoint the card shows past days near the date, labeled as not today's forecast", () => {
   const state = buildAnalogPeakState(dashboard(), DATE, at("07:00:00"));
-  assert.deepEqual([state.kind, state.label], ["season", "Season only"]);
+  assert.deepEqual([state.kind, state.label], ["season", "Past days only"]);
   const html = render(dashboard(), DATE, at("07:00:00"));
-  assert.match(html, /When today’s high is likely/);
-  assert.match(html, /1:00 PM/);
-  assert.match(html, /Most days 9:30 AM–3:00 PM/);
-  assert.match(html, /317 days within 15 days of this date/);
-  assert.match(html, /Typical high.*17°C/);
-  assert.match(html, /usually by 9:05 AM/);
+  assert.match(html, /When the high usually comes/);
+  assert.doesNotMatch(html, /When today’s high is likely/);
+  assert.match(html, /Usually first at the high.*1:00 PM.*Most past days 9:30 AM–3:00 PM/);
+  assert.match(html, /317 past days within 15 days of this date/);
+  assert.match(html, /Usually last at the high.*3:00 PM/);
+  assert.match(html, /Typical high for this date.*17°C.*not today’s forecast/);
+  assert.match(html, /past days near this date, not a forecast for today\. Today’s similar-day estimate appears after the 9:00 AM report, usually by 9:05 AM\./);
 });
 
 test("a ready checkpoint shows the similar-day window, odds and likely high beside the season", () => {

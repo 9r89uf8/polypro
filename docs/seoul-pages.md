@@ -29,7 +29,9 @@ for input versioning, scoring and retention.
 
 Below the nowcast, an experimental card subscribes to
 `seoulAnalogPeak:getDashboard` for the selected date. Before the 9:00 AM routine
-METAR it shows the seasonal peak window and typical high. After the 9:00 AM and
+METAR it is titled “When the high usually comes”, badged “Past days only” and
+says it describes past days near the date, not a forecast for today; its cards
+give the usual first and last peak times and the typical high. After the 9:00 AM and
 12:00 PM checkpoints it shows the peak time and range from the 30 most similar
 days, the chance the high is still ahead and the likely high, each beside the
 season figure, plus the matched conditions, the closest days and when similar
