@@ -39,7 +39,7 @@ forecasts at 09:00 KST in `seoulProviderForecastLocks`: KMA and Weather.com
 from the last stored captures that had finished by then (no new request), and
 ECMWF IFS, NOAA GFS and DWD ICON from Open-Meteo (never a run published after
 09:00). Each hour from 9 AM is scored against the 15L reading at the top of the
-hour and, for locks with every hour, the forecast high against the
+hour and, for locks with every hour from 10 AM, the forecast high against the
 routine-METAR high from 9 AM, live on the page and once after midnight in
 `seoulProviderForecastScores` (crons `seoul_provider_forecast_lock` at
 00:00–00:15 UTC and `seoul_provider_forecast_scoring` at 15:25 UTC). Open-Meteo

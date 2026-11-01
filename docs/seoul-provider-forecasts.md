@@ -31,6 +31,9 @@ by a later attempt.
   capture finished) is not after 09:00, and which has hourly rows for the date.
   KMA is collected at :05 and :35, so the lock is normally the 08:35 capture.
   Only that capture's rows are used; hours are never merged across captures.
+  KMA's table drops past hours in steps: every capture from 08:05 to 09:35 on
+  November 1 started at 10 AM (07:35 still started at 8 AM), so a KMA lock
+  covers 10 AM to 11 PM and has no 9 AM value.
 - **Weather.com:** the newest capture in the same window whose hourly product
   succeeded and whose `weathercomHourlyCapturedAt` (response completion) is not
   after 09:00, normally the 08:47 capture.
@@ -67,8 +70,11 @@ Hourly rows are stored for every on-the-hour value of the KST date
 where the source gives them, plus `sky` words and KMA's `skyCode`). A variable
 the model does not provide (unit `"undefined"`) or a null value is left out,
 never stored as 0. KMA rows never carry a cloud percentage. The record's status
-is `ok` when every hour from 9 AM to 11 PM is present, `partial` with some and
-`error` with none.
+is `ok` when every hour from 10 AM to 11 PM is present (9 AM is optional, since
+KMA's last capture before the lock has none), `partial` with some hour from
+9 AM on and `error` with none. `getDashboard` derives the status from the
+stored hours with this rule, so KMA locks saved as `partial` under the earlier
+9 AM rule (October 29 to November 1) show as complete.
 
 ## Scoring
 
@@ -85,7 +91,7 @@ is `ok` when every hour from 9 AM to 11 PM is present, `partial` with some and
   (12.5 becomes 13) and compared with the highest routine METAR from 9 AM on
   (reports at :00/:30 only, which excludes SPECIs). The peak-time error is the
   first forecast peak hour minus the first report at the observed high. A high
-  is scored only for a lock with every hour from 9 AM to 11 PM (missing hours
+  is scored only for a lock with every hour from 10 AM to 11 PM (missing hours
   may hold the provider's peak; the hours that exist still count toward the
   MAE) and with at least 26 of the 30 routine reports after the lock.
 - **High from 9 AM, not the settlement high:** the market settles on the

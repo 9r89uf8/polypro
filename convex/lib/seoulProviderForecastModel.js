@@ -123,11 +123,15 @@ export function openMeteoLockRows(payload, date) {
   return { rows, issues, grid };
 }
 
-/** ok when every hour from the lock to 11 PM is present; partial with some; error with none. */
+// Every hour after the lock. The lock hour itself is optional: KMA's table has
+// already dropped 9 AM by its last capture before 9:00, which starts at 10 AM.
+export const REQUIRED_HOURS = SCORED_HOURS.filter((hour) => hour > LOCK_HOUR);
+
+/** ok when every hour from 10 AM to 11 PM is present; partial with some hour from 9 AM on; error with none. */
 export function lockStatus(rows) {
   const hours = new Set(rows.map((row) => row.hour));
-  const covered = SCORED_HOURS.filter((hour) => hours.has(hour)).length;
-  return covered === SCORED_HOURS.length ? "ok" : covered ? "partial" : "error";
+  if (REQUIRED_HOURS.every((hour) => hours.has(hour))) return "ok";
+  return SCORED_HOURS.some((hour) => hours.has(hour)) ? "partial" : "error";
 }
 
 /** The highest hourly value from the lock hour on, and every hour that reaches it. */
@@ -200,7 +204,7 @@ export function buildActuals({ date, amosByHour, metarRows }) {
  * Hourly misses from the lock hour on against the 15L reading at the top of
  * each hour, plus the forecast high against the routine-METAR high from the
  * lock on. The high is compared in whole degrees, rounded half up; it counts
- * only for a lock with every hour from 9 AM to 11 PM, since missing hours may
+ * only for a lock with every hour from 10 AM to 11 PM, since missing hours may
  * hold the provider's peak, and is only final once the day is over.
  */
 export function scoreLock(lock, actuals) {

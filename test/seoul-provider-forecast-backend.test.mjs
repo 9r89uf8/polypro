@@ -13,13 +13,14 @@ const ENV_KEYS = ["KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED", "OPEN_METEO_FORECA
 // A warm afternoon: 7°C until 6 AM, a peak at `peakHour`, then cooling.
 const profile = (peakHour, peakC) => (hour) => tenth(hour <= 6 ? 7 : hour <= peakHour ? 7 + ((peakC - 7) * (hour - 6)) / (peakHour - 6) : peakC - 0.4 * (hour - peakHour));
 
+// Like the KMA page, whose captures from 8:05 to 9:35 AM all start at 10 AM.
 function kmaCapture(capturedAt, { createdAt = capturedAt + 20_000, status = "ok", temps = profile(14, 13), date = DATE, source = "kma_amo_airport" } = {}) {
   return {
     stationIcao: "RKSI", source, collectionTrigger: "scheduled", capturedAt, status, createdAt, dailyRows: [],
     hourlyRows: status !== "ok" ? [] : Array.from({ length: 24 }, (_, hour) => ({
       date, forecastTimeUtc: hourAt(hour, date), forecastTimeLocal: `${date} ${String(hour).padStart(2, "0")}:00`, tempC: Math.round(temps(hour)),
       phrase: hour < 12 ? "Partly cloudy" : "Mostly cloudy", conditionCode: hour < 12 ? "mtph02" : "mtph03",
-    })).filter((row) => row.forecastTimeUtc >= capturedAt - HOUR),
+    })).filter((row) => row.forecastTimeUtc >= hourAt(10, date)),
   };
 }
 
@@ -383,7 +384,8 @@ test("completed days are scored once, and the dashboard shows live scores and th
   const live = await h.call("getDashboard", { stationIcao: "RKSI", date: DATE });
   assert.deepEqual([live.lockAt, live.lockHour, live.actuals.hourly[13].amosC, live.actuals.hourly[13].sky.code], [at("09:00"), 9, actual(13), "CAVOK"]);
   const kma = live.providers[0].score;
-  assert.deepEqual([kma.hoursScored, kma.latest.hour, kma.forecastHighC, kma.forecastHighRoundedC], [5, 13, 13, 13]);
+  assert.deepEqual([kma.hoursScored, kma.latest.hour, kma.forecastHighC, kma.forecastHighRoundedC], [4, 13, 13, 13], "KMA has no 9 AM value");
+  assert.equal(live.providers[0].lock.status, "ok");
   assert.equal("pairs" in kma, false);
   assert.equal(live.providers[2].score.hoursScored, 5);
 
@@ -395,8 +397,8 @@ test("completed days are scored once, and the dashboard shows live scores and th
   assert.deepEqual(await h.call("scoreCompletedDays"), { startDate: "2026-10-27", endDate: DATE, scored: 0, missing: 0 }, "scoring is idempotent");
   const kmaScore = h.tables.seoulProviderForecastScores.find((row) => row.provider === "kma");
   assert.deepEqual([kmaScore.hoursScored, kmaScore.highComplete, kmaScore.actualHighC, kmaScore.forecastHighRoundedC, kmaScore.highErrorC, kmaScore.afterLockReportCount],
-    [15, true, 13, 13, 0, 30]);
-  assert.equal(kmaScore.pairs.length, 15);
+    [14, true, 13, 13, 0, 30], "a KMA lock from 10 AM still has its high scored");
+  assert.equal(kmaScore.pairs.length, 14);
   const gfsScore = h.tables.seoulProviderForecastScores.find((row) => row.provider === "gfs");
   assert.deepEqual([gfsScore.forecastHighRoundedC, gfsScore.highErrorC, gfsScore.peakErrorMinutes], [14, 1, 16 * 60 - (13 * 60 + 30)], "the routine high of 13°C first came at 1:30 PM");
 

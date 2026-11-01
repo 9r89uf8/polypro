@@ -370,7 +370,8 @@ export const getDashboard = queryGeneric({
       const { _id, _creationTime, stationIcao, sourceCaptureId, requestUrl, ...shown } = lock;
       if (lock.status === "error") return { ...base, access: "approved", lock: shown, score: null };
       const { pairs, ...score } = scoreLock(lock, actuals);
-      return { ...base, access: "approved", lock: shown, score };
+      // Coverage follows the current rule, so locks saved under an earlier one show the same way.
+      return { ...base, access: "approved", lock: { ...shown, status: lockStatus(lock.hourly) }, score };
     });
     const summaryStartDate = shiftDate(date, -29);
     const scores = (await ctx.db.query("seoulProviderForecastScores")

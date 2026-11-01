@@ -73,11 +73,13 @@ test("Open-Meteo rows need Seoul unixtime responses and leave unsupported variab
   assert.throws(() => openMeteoLockRows({ ...payload, hourly: { time } }, DATE), /no temperature/);
 });
 
-test("a lock is complete only with every hour from 9 AM to 11 PM", () => {
+test("a lock is complete with every hour from 10 AM to 11 PM", () => {
   const row = (hour) => ({ hour, time: hourTime(DATE, hour), tempC: 10 });
   assert.equal(lockStatus(hours(0, 23).map(row)), "ok");
   assert.equal(lockStatus(hours(9, 23).map(row)), "ok");
-  assert.equal(lockStatus(hours(10, 23).map(row)), "partial");
+  assert.equal(lockStatus(hours(10, 23).map(row)), "ok", "KMA's 8:35 table starts at 10 AM");
+  assert.equal(lockStatus(hours(11, 23).map(row)), "partial");
+  assert.equal(lockStatus([row(9)]), "partial");
   assert.equal(lockStatus(hours(0, 8).map(row)), "error");
   assert.equal(lockStatus([]), "error");
 });

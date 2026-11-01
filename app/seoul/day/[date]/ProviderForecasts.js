@@ -128,7 +128,7 @@ function Record({ state }) {
         </tr>)}</tbody>
       </table>
     </div>
-    <p className={card.caveat}>High columns compare each forecast with the highest routine METAR from 9 AM on, and only for forecasts with every hour stored. Providers can have different numbers of days. Compare them on the days they share before trusting a ranking; a few days say little.{rebuilt ? ` ${rebuilt} model days were rebuilt from Open-Meteo’s archive of the run normally current at 9:00 AM.` : ""}</p>
+    <p className={card.caveat}>High columns compare each forecast with the highest routine METAR from 9 AM on, and only for forecasts with every hour from 10 AM stored. Providers can have different numbers of days. Compare them on the days they share before trusting a ranking; a few days say little.{rebuilt ? ` ${rebuilt} model days were rebuilt from Open-Meteo’s archive of the run normally current at 9:00 AM.` : ""}</p>
   </>;
 }
 
@@ -156,8 +156,8 @@ export default function ProviderForecasts({ dashboard, date, now, amos, metar })
     </details> : null}
     {state.kind !== "loading" && state.kind !== "future" ? <details className={card.details}>
       <summary>Method & recorded results</summary>
-      <p>At 9:00 AM KST each forecast is frozen. KMA and Weather.com come from the last capture that had finished by then (KMA is checked at :05 and :35, Weather.com every 15 minutes). ECMWF, GFS and ICON come from Open-Meteo at 9:00 AM; at that time ECMWF’s newest run is usually the previous day’s 12Z run, six hours older than the 18Z GFS and ICON runs.</p>
-      <p>Every hour from 9 AM to 11 PM is compared with the 15L sensor at the top of the hour. KMA and Weather.com publish whole degrees; rounding adds at most 0.25° to the average miss of an otherwise perfect forecast, and only a few hundredths at typical misses near 1°. The forecast high is the highest hour from 9 AM on, rounded half up; it is compared with the highest routine METAR from 9 AM on, only for forecasts with every hour stored, and the result is final after midnight. The market settles on routine METAR for the whole day, so on a day whose high came before 9 AM the card says so.</p>
+      <p>At 9:00 AM KST each forecast is frozen. KMA and Weather.com come from the last capture that had finished by then (KMA is checked at :05 and :35, and its 8:35 table already starts at 10 AM; Weather.com every 15 minutes). ECMWF, GFS and ICON come from Open-Meteo at 9:00 AM; at that time ECMWF’s newest run is usually the previous day’s 12Z run, six hours older than the 18Z GFS and ICON runs.</p>
+      <p>Every hour from 9 AM to 11 PM is compared with the 15L sensor at the top of the hour. KMA and Weather.com publish whole degrees; rounding adds at most 0.25° to the average miss of an otherwise perfect forecast, and only a few hundredths at typical misses near 1°. The forecast high is the highest hour from 9 AM on, rounded half up; it is compared with the highest routine METAR from 9 AM on, only for forecasts with every hour from 10 AM stored, and the result is final after midnight. The market settles on routine METAR for the whole day, so on a day whose high came before 9 AM the card says so.</p>
       <p>Cloud cover: Weather.com and the models give percent of sky at the hour; KMA gives sky words only; METAR gives eighths of the sky as a range. CAVOK and NSC mean no significant low cloud, not a clear sky.</p>
       <h3>Recorded results · past 30 days</h3>
       <Record state={state} />
