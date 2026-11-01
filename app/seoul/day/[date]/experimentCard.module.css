@@ -15,17 +15,11 @@
 .value{font-size:clamp(29px,3.3vw,43px);font-weight:500;letter-spacing:-.055em;line-height:1.15;color:#bce8ee;margin:13px 0 8px;font-variant-numeric:tabular-nums}
 .target{font:11px var(--font-ibm-mono),monospace;color:#bed0e1;line-height:1.6;margin:0 0 9px;overflow-wrap:anywhere}
 .method{font-size:10px;color:#93b5c7;line-height:1.5}
-.testValue{display:block;font-size:10px;color:#8fa7be;line-height:1.5;margin-top:4px;font-variant-numeric:tabular-nums}
-.testValue+.testValue{margin-top:1px}
-.lead{display:block;font-size:10px;color:#9cb1c6;line-height:1.5;margin:0 0 8px}
-.saved .value{color:#bdcddc}
-.saved .prediction{background:#101a29;border-color:#304055}
 .outcome{border-top:1px solid #2a3d50;padding-top:10px;margin:12px 0 0;font-size:11px;color:#bbd1df;line-height:1.5}
 .timestamps{display:flex;align-items:baseline;gap:8px 24px;flex-wrap:wrap;margin:17px 0 14px}
 .timestamps p{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 7px;font-size:11px;color:#b2c5d8;margin:0;line-height:1.6}
 .timestamps p>span{color:#8da5bb}
 .timestamps small{font-size:10px;color:#93a8ba;padding-left:3px}
-.uncertainty{font-size:11px;line-height:1.6;color:#c8bda4;margin:13px 0 17px}
 .details{border-top:1px solid #2d4054;padding:11px 0 15px}
 .details summary{cursor:pointer;color:#abd5df;font-size:12px;line-height:1.5;padding:5px 0;min-height:28px}
 .details summary:focus-visible,.tableScroll:focus-visible{outline:2px solid #77d1e0;outline-offset:3px}
@@ -40,10 +34,9 @@
 .tableScroll td{color:#c7dce9}
 .tableScroll tr:last-child td,.tableScroll tr:last-child th{border-bottom:0}
 .tableNote{display:block;color:#8fa7be;font-size:9px;margin-top:3px}
-.pending{color:#9bafc5;font-size:10px}
 .details .caveat,.details .version{font-size:10px;color:#95aabd;overflow-wrap:anywhere}
 .emptyResults{padding:5px 0}
 .footer{border-top:1px solid #2b3d52;padding:12px 0;display:flex;justify-content:space-between;gap:10px;color:#8fa7bd;font-size:10px;line-height:1.5}
 .srOnly{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-@media(max-width:600px){.card{padding:19px 14px 0;border-radius:12px;margin-top:15px}.header{align-items:flex-start;gap:10px}.header h2{font-size:18px;max-width:240px}.eyebrow{font-size:8px}.badge{font-size:9px;padding:4px 6px;max-width:105px}.scope,.status{font-size:11px}.predictions{gap:8px}.prediction{padding:13px 10px;border-radius:8px}.prediction h3{font-size:11px}.prediction h3 span{display:block;margin-top:4px;font-size:9px}.value{font-size:29px;margin-top:10px}.target{font-size:9px}.method,.testValue{font-size:9px}.timestamps{gap:6px}.timestamps p{font-size:10px;width:100%}.timestamps small{font-size:9px}.uncertainty{font-size:10px}.footer{font-size:9px;flex-wrap:wrap}.tableScroll th,.tableScroll td{padding:8px 10px}.details summary{font-size:11px}}
+@media(max-width:600px){.card{padding:19px 14px 0;border-radius:12px;margin-top:15px}.header{align-items:flex-start;gap:10px}.header h2{font-size:18px;max-width:240px}.eyebrow{font-size:8px}.badge{font-size:9px;padding:4px 6px;max-width:105px}.scope,.status{font-size:11px}.predictions{gap:8px}.prediction{padding:13px 10px;border-radius:8px}.prediction h3{font-size:11px}.prediction h3 span{display:block;margin-top:4px;font-size:9px}.value{font-size:29px;margin-top:10px}.target{font-size:9px}.method{font-size:9px}.timestamps{gap:6px}.timestamps p{font-size:10px;width:100%}.timestamps small{font-size:9px}.footer{font-size:9px;flex-wrap:wrap}.tableScroll th,.tableScroll td{padding:8px 10px}.details summary{font-size:11px}}
 @media(max-width:380px){.prediction{padding:12px 7px}.value{font-size:25px}.header h2{font-size:17px}.badge{max-width:86px}}

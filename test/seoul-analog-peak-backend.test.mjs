@@ -21,7 +21,7 @@ function metarRow(date, slot, tempC = profile(slot), { reportType = "METAR", min
 }
 
 // Executes the real handlers against an in-memory table set ordered by the
-// schema's indexes, like the nowcast backend tests.
+// schema's indexes, like the provider forecast backend tests.
 function harness() {
   let now = 0, nextId = 0;
   const tables = Object.fromEntries(Object.keys(schema.tables).map(table => [table, []]));

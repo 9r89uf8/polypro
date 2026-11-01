@@ -1,3 +1,6 @@
+// The 15L minute nowcast was removed on November 2, 2026. These definitions
+// stay only so its stored rows keep validating; no function reads or writes
+// them. Clear the four tables before removing this file from the schema.
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 

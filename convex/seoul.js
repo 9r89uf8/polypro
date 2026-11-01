@@ -6,7 +6,6 @@ import {
 } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
-import { captureObservation } from "./seoulNowcast.js";
 
 const SEOUL_TIMEZONE = "Asia/Seoul";
 const AMO_FETCH_TIMEOUT_MS = 25000;
@@ -926,7 +925,6 @@ export const upsertAmosRowsBatch = internalMutationGeneric({
     let insertedCount = 0;
     let patchedCount = 0;
     let unchangedCount = 0;
-    const nowcastMinutes = new Set();
 
     for (const row of args.rows) {
       if (!parseDateKey(row.date)) {
@@ -945,12 +943,6 @@ export const upsertAmosRowsBatch = internalMutationGeneric({
             .eq("collectionCadence", row.collectionCadence),
         )
         .first();
-
-      // Freeze normalized one-minute inputs even when the mutable display row
-      // is unchanged. This seeds new installations honestly at THIS capture,
-      // without inventing past availability from legacy firstSeenAt clocks.
-      const captured = await captureObservation(ctx, row, now, existing ? existing.firstSeenAt : now);
-      if (captured.newMinute && row.rwyDir === "15L") nowcastMinutes.add(row.obsTimeUtc);
 
       if (!existing) {
         await ctx.db.insert("seoulAmosObservations", {
@@ -972,14 +964,6 @@ export const upsertAmosRowsBatch = internalMutationGeneric({
         updatedAt: now,
       });
       patchedCount += 1;
-    }
-
-    // Convex schedules these only after the entire 15L/16L write commits.
-    // Corrections and five-minute polling snapshots do not reissue forecasts.
-    for (const obsTimeUtc of nowcastMinutes) {
-      await ctx.scheduler.runAfter(0, internal.seoulNowcast.issueForObservation, {
-        stationIcao: "RKSI", obsTimeUtc,
-      });
     }
 
     return {

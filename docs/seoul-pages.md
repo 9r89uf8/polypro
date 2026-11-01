@@ -1,33 +1,16 @@
 # Seoul RKSI live-temperature page
 
-## Minute-temperature nowcast — October 31, 2026
+## Minute-temperature nowcast removed — November 2, 2026 KST
 
-The day page now includes an experimental 15L AMOS temperature card with
-explicit KST targets approximately 10, 15 and 20 minutes after issuance.
-It subscribes to `seoulNowcast:getDashboard` for the selected issuance date.
-Since November 1, 2026 KST each card's large value is the persistence
-(no-change) estimate. The damped trend appears only as a smaller “Trend test”
-line, because a replay of stored minutes found it less accurate than no change.
-A “Drift test” line above it adds the seasonal time-of-day mean change learned
-from open IEM METAR history; it needs no trend coverage. Insufficient history
-shows “Trend test unavailable” with the reason. Actual
-source/issue clocks and “No calibrated prediction range yet.” remain visible.
-The existing 15-second clock expires live
-status when issue or observation age exceeds two minutes; historical values
-remain labeled as saved/archived. Refresh does not reissue forecasts.
-Details show recent exact-minute outcomes with no-change, drift-test and
-trend-test columns, and 30-day recorded MAE with one row per lead and method:
-cases, days, the method's error and the no-change error on the same cases. A
-“By time of day” table gives each test's cases and error change against no
-change by the forecast's KST issue time (overnight, morning, midday, afternoon,
-evening) and notes any days recorded before the breakdown existed.
-Cross-midnight target dates stay explicit. This card is separate from official
-METAR and daily-high values. See the [nowcast specification](./seoul-temperature-nowcast.md)
-for input versioning, scoring and retention.
+The experimental “15L AMOS · EXPERIMENTAL” card, which showed 10, 15 and
+20-minute no-change estimates of the 15L reading with trend and drift tests,
+was removed at the owner's request, and the page no longer subscribes to
+`seoulNowcast:getDashboard`. Its final results are in the
+[removal record](./seoul-temperature-nowcast.md).
 
 ## Analog peak timing card — November 1, 2026 KST
 
-Below the nowcast, an experimental card subscribes to
+Below the 9 AM forecast lock card, an experimental card subscribes to
 `seoulAnalogPeak:getDashboard` for the selected date. Before the 9:00 AM routine
 METAR it is titled “When the high usually comes”, badged “Past days only” and
 says it describes past days near the date, not a forecast for today; its cards
@@ -42,7 +25,7 @@ results. Times are KST, rounded to the reports' half hour. See the
 
 ## 9 AM forecast lock card — November 1, 2026 KST
 
-Between the temperature chart and the nowcast, an experimental card subscribes
+Between the temperature chart and the analog peak card, an experimental card subscribes
 to `seoulProviderForecasts:getDashboard` for the selected date and reuses the
 page's 15L and routine-METAR series. Before 9:00 AM it is titled “Forecasts
 locked at 9 AM”, badged “Waiting for 9:00 AM” and shows no forecast. After the

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { buildAnalogPeakState, formatCheckpoint, formatPeakRange, formatPeakTime, formatPercent } from "./analogPeakState";
-import styles from "./nowcast.module.css";
+import styles from "./experimentCard.module.css";
 
 const DATE_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 const formatDay = date => DATE_FORMAT.format(new Date(`${date}T00:00:00Z`));
@@ -84,7 +84,7 @@ export default function AnalogPeak({ dashboard, date, now }) {
       <div><span className={styles.eyebrow}>ROUTINE METAR · EXPERIMENTAL</span><h2 id="analog-peak-heading">{title}</h2></div>
       <span className={`${styles.badge} ${state.kind === "forecast" ? styles.fresh : state.kind === "unavailable" ? styles.delayed : ""}`}>{state.label}</span>
     </div>
-    <p className={styles.scope}>Timing of the day’s highest whole-degree routine METAR, the reading the daily-high market settles on. Separate from the 15L nowcast.</p>
+    <p className={styles.scope}>Timing of the day’s highest whole-degree routine METAR, the reading the daily-high market settles on.</p>
     {state.detail ? <p className={`${styles.status} ${state.kind === "unavailable" ? styles.statusWarning : ""}`} role="status">{state.detail}</p> : null}
     {latest ? <ForecastCards forecast={latest} /> : state.season ? <SeasonCards season={state.season} /> : null}
     {latest ? <div className={styles.timestamps}>

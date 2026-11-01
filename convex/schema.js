@@ -189,6 +189,7 @@ export default defineSchema({
   ...seoulPolymarketTables,
   ...seoulSatelliteTables,
   ...seoulGoci2Tables,
+  // Stored rows of the removed 15L nowcast; nothing reads or writes them.
   ...seoulNowcastTables,
   ...seoulAnalogPeakTables,
   ...seoulProviderForecastTables,

@@ -4,15 +4,16 @@ Added November 1, 2026 KST. The Seoul day page estimates **when the day's
 highest whole-degree routine METAR will first appear**, the chance that it is
 still ahead, and the likely high, from the most similar past mornings. This is
 the reading the daily-high market settles on. It is experimental and separate
-from the 15L minute nowcast and from the `rksi15l-remaining-ceiling-v2`
-decision; neither uses its output.
+from the `rksi15l-remaining-ceiling-v2` decision, which does not use its
+output.
 
 ## Library
 
 [`convex/lib/seoulAnalogPeakLibrary.js`](../convex/lib/seoulAnalogPeakLibrary.js)
-is generated from the open Iowa Environmental Mesonet RKSI archive described in
-the [nowcast specification](./seoul-temperature-nowcast.md#seasonal-drift-test),
-using reports from January 1, 2016 until October 26, 2026 KST. Days need at least
+is generated from the open
+[Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/request/download.phtml?network=KR__ASOS)
+(IEM) RKSI METAR archive, which `scripts/fetch-iem-rksi-metars.mjs` downloads
+without an account, using reports from January 1, 2016 until October 26, 2026 KST. Days need at least
 44 of the 48 routine :00/:30 reports; 3,927 of 3,951 qualified. For each day it
 stores the maximum, the first and last half-hour slots reporting it, and the
 features at 09:00 and 12:00 KST (3,923 days each). Two reports could not be
@@ -96,7 +97,7 @@ weight.
 
 ## Dashboard
 
-The card on `/seoul/day/[date]` follows the nowcast card. Before 9:00 AM it
+The card on `/seoul/day/[date]` follows the 9 AM forecast lock card. Before 9:00 AM it
 shows the seasonal window and typical high, labeled throughout as past days near
 the date rather than a forecast for today (“When the high usually comes”, “Past
 days only”, “Usually first at the high”). After each checkpoint it shows the

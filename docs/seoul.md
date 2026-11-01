@@ -1,28 +1,21 @@
 # RKSI: fastest current-temperature source
 
-## Short-horizon temperature nowcast — October 31, 2026
+## Short-horizon temperature nowcast removed — November 2, 2026
 
-The [15L minute-temperature nowcast](./seoul-temperature-nowcast.md) adds
-persistence and damped-trend estimates for explicit 10/15/20-minute targets.
-The one-minute ingest saves immutable normalized input versions and queues
-one forecast per newly captured 15L minute. Separate minute scoring and hourly
-retention jobs preserve issued predictions, count exact-target outcomes, and
-compare both methods on paired cases. These estimates are experimental, have
-no calibrated uncertainty, and do not predict official METAR or settlement.
-A replay of October 26–31 minutes found the damped trend 17–18% less accurate
-than persistence, so the dashboard headlines persistence and shows the trend
-only as a test value. Daily nowcast score rows also keep sums for five fixed
-KST issue-time windows, so the live comparison can be read by time of day.
-A second test value adds a seasonal time-of-day drift built offline from open
-Iowa Environmental Mesonet RKSI METARs (2016 to October 25, 2026). It beat
-persistence by 4–11% on the stored October 26–31 minutes and is now scored
-live; production makes no IEM request.
+The [15L minute-temperature nowcast](./seoul-temperature-nowcast.md) added on
+October 31 was removed at the owner's request. Its no-change estimate missed
+the 15L reading by 0.12–0.17 °C at 10–20 minutes on November 1, and neither
+its damped-trend nor its seasonal drift test beat it. The one-minute AMOS
+ingest no longer saves nowcast input versions or queues forecasts, and the
+`seoul_temperature_nowcast_scoring` and `seoul_temperature_nowcast_retention`
+crons are gone. The four `seoulNowcast*` tables keep their stored rows and
+their schema, but nothing reads or writes them.
 
 ## Analog peak timing — November 1, 2026
 
 The [analog peak card](./seoul-analog-peak.md) matches the 09:00 and 12:00 KST
 routine METARs with the 30 most similar days in a library built offline from
-the same IEM archive (3,927 days from 2016). It saves one immutable forecast per
+the open Iowa Environmental Mesonet RKSI METAR archive (3,927 days from 2016). It saves one immutable forecast per
 checkpoint (`seoulAnalogPeakForecasts`) and scores it after KST midnight
 (`seoulAnalogPeakOutcomes`), via the new `seoul_analog_peak_checkpoints` and
 `seoul_analog_peak_scoring` crons. In a look-back test it beat the seasonal

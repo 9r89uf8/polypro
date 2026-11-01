@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import TemperatureChart from "./TemperatureChart";
-import TemperatureNowcast from "./TemperatureNowcast";
 import AnalogPeak from "./AnalogPeak";
 import ProviderForecasts from "./ProviderForecasts";
 import MarketChart from "./MarketChart";
@@ -139,7 +138,6 @@ export default function SeoulDayPage() {
   const marketDashboard = useQuery("seoulPolymarket:getDashboard", isToday ? { ...STATION, date } : "skip");
   const marketHistoryDashboard = useQuery("seoulPolymarket:getPriceHistory", dateValid ? { ...STATION, date } : "skip");
   const forecastHistoryDashboard = useQuery("seoulDashboardHistory:getForecastHighHistory", dateValid ? { ...STATION, date } : "skip");
-  const nowcastDashboard = useQuery("seoulNowcast:getDashboard", dateValid ? { ...STATION, date } : "skip");
   const analogPeakDashboard = useQuery("seoulAnalogPeak:getDashboard", dateValid ? { ...STATION, date } : "skip");
   const providerForecastDashboard = useQuery("seoulProviderForecasts:getDashboard", dateValid ? { ...STATION, date } : "skip");
   const pollMetar = useAction("seoul:pollLatestNoaaStationMetar");
@@ -222,7 +220,6 @@ export default function SeoulDayPage() {
       <div className={styles.chartFooter}><span>All times are Seoul time (KST). AMOS reads to 0.1°C; METAR reports whole degrees.{["stale", "error"].includes(forecast.status) && forecast.hourly.length ? " Dashed forecast is retained from an older capture." : ""}</span><span>{isToday ? "Updates automatically every minute" : "Available stored history"}</span></div>
     </section>
     <ProviderForecasts dashboard={providerForecastDashboard} date={date} now={now} amos={series.amos} metar={series.metar} />
-    <TemperatureNowcast dashboard={nowcastDashboard} date={date} now={now} />
     <AnalogPeak dashboard={analogPeakDashboard} date={date} now={now} />
     <SeoulMarket market={market} history={marketHistory} date={date} isToday={isToday} />
     <footer className={styles.footer}><span>RKSI · Incheon International Airport</span><span>KMA / AMO observations & forecast · NOAA METAR</span></footer>

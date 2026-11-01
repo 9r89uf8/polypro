@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { formatSeoulTime } from "./displayTime";
 import ProviderForecastChart, { LineKey } from "./ProviderForecastChart";
 import { buildProviderForecastState, formatHour, formatSigned, formatTemperature, skyPercentRange } from "./providerForecastState";
-import card from "./nowcast.module.css";
+import card from "./experimentCard.module.css";
 import styles from "./providerForecasts.module.css";
 
 const DATE_FORMAT = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });

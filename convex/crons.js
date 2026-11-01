@@ -370,22 +370,6 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
-// Local AMOS nowcast scoring continues when no dashboard is open and marks
-// missing exact-minute targets after the bounded receipt window.
-crons.cron(
-  "seoul_temperature_nowcast_scoring",
-  "* * * * *",
-  internal.seoulNowcast.scorePending,
-  {},
-);
-
-crons.cron(
-  "seoul_temperature_nowcast_retention",
-  "13 * * * *",
-  internal.seoulNowcast.pruneExpired,
-  {},
-);
-
 // Analog peak timing from stored routine METARs: every five minutes through
 // the 09:00 and 12:00 KST hours (00 and 03 UTC) until the checkpoint report
 // arrives, then scoring of completed days at 00:20 KST.
