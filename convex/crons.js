@@ -403,6 +403,24 @@ crons.cron(
   {},
 );
 
+// Provider forecast lock: KMA and Weather.com from the last captures stored by
+// 09:00 KST, plus ECMWF, GFS and ICON from Open-Meteo only when
+// OPEN_METEO_FORECAST_ACCESS_APPROVED is exactly "true". Attempts at 00:00-00:15
+// UTC retry model requests that failed; completed days are scored at 00:25 KST.
+crons.cron(
+  "seoul_provider_forecast_lock",
+  "0,5,10,15 0 * * *",
+  internal.seoulProviderForecasts.runScheduledLock,
+  {},
+);
+
+crons.cron(
+  "seoul_provider_forecast_scoring",
+  "25 15 * * *",
+  internal.seoulProviderForecasts.scoreCompletedDays,
+  {},
+);
+
 // Retains a cadence-tagged five-minute snapshot of every AMOS display row for
 // auditing and fallback; the live chart prefers the one-minute 15L series.
 crons.cron(

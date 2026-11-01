@@ -32,6 +32,25 @@ No new external feed, credential or approval flag is introduced. The linked
 specification records availability clocks, first-valid-target scoring,
 30/32/365-day retention and all new entry points.
 
+## 9 AM provider forecast lock — November 1, 2026
+
+The [provider forecast lock](./seoul-provider-forecasts.md) freezes five RKSI
+forecasts at 09:00 KST in `seoulProviderForecastLocks`: KMA and Weather.com
+from the last stored captures that had finished by then (no new request), and
+ECMWF IFS, NOAA GFS and DWD ICON from Open-Meteo (never a run published after
+09:00). Each hour from 9 AM is scored against the 15L reading at the top of the
+hour and, for locks with every hour, the forecast high against the
+routine-METAR high from 9 AM, live on the page and once after midnight in
+`seoulProviderForecastScores` (crons `seoul_provider_forecast_lock` at
+00:00–00:15 UTC and `seoul_provider_forecast_scoring` at 15:25 UTC). Open-Meteo
+is a new external source behind the new `OPEN_METEO_FORECAST_ACCESS_APPROVED`
+flag, deployed absent: its free API is for non-commercial use only, so the
+owner must confirm the use (or a paid key, `OPEN_METEO_API_KEY`) before
+activation; a running action re-reads the flag through a fresh query before
+every Open-Meteo request. KMA keeps its existing gate and is listed with its
+other protected entry points below. The specification lists the capture
+clocks, model-run tags, entry points, commands and attribution.
+
 Last researched: **2026-10-29 KST**.
 
 The latest [source and satellite investigation](./seoul-edge-research-2026-10-29.md)
@@ -1342,6 +1361,13 @@ Every protected entry point uses the same current flag:
 - `seoulDashboardHistory:getForecastHighHistory` checks the exact same approval
   before reading either retained KMA captures or collector metadata. Revocation
   clears its history, first/latest values, delta, and separate prior-day baseline.
+- `seoulProviderForecasts:lockStoredForecasts` (run by `runScheduledLock` and
+  `backfillStoredForecasts`) reads KMA captures only when the flag is exactly
+  `true` and copies one capture's hourly rows into
+  `seoulProviderForecastLocks`. `seoulProviderForecasts:scoreCompletedDays`
+  scores KMA locks only while approved, and the public
+  `seoulProviderForecasts:getDashboard` otherwise returns KMA as
+  `approval_required` without its lock, score or 30-day results.
 
 The public/manual and scheduled queue mutations check the flag before writing
 queue state or scheduling work. The internal worker checks it again when it

@@ -11,6 +11,11 @@ The November 1 Seoul analog peak change adds `seoul_analog_peak_checkpoints`
 (every five minutes at 00 and 03 UTC) and `seoul_analog_peak_scoring` (15:20
 UTC). They read stored RKSI routine METARs only and likewise leave KORD
 unchanged. See [Seoul analog peak](./seoul-analog-peak.md).
+The November 1 Seoul provider forecast lock adds `seoul_provider_forecast_lock`
+(00:00, 00:05, 00:10 and 00:15 UTC) and `seoul_provider_forecast_scoring`
+(15:25 UTC). They lock and score RKSI forecasts only (Open-Meteo requests are
+gated separately) and leave KORD phone calls unchanged. See
+[Seoul provider forecasts](./seoul-provider-forecasts.md).
 
 ## Purpose
 

@@ -40,6 +40,42 @@ after midnight, the actual high and peak-time errors; details list 30-day
 results. Times are KST, rounded to the reports' half hour. See the
 [analog peak specification](./seoul-analog-peak.md).
 
+## 9 AM forecast lock card — November 1, 2026 KST
+
+Between the temperature chart and the nowcast, an experimental card subscribes
+to `seoulProviderForecasts:getDashboard` for the selected date and reuses the
+page's 15L and routine-METAR series. Before 9:00 AM it is titled “Forecasts
+locked at 9 AM”, badged “Waiting for 9:00 AM” and shows no forecast. After the
+lock (“Which forecast is closest today”, green badge “Locked 9:00 AM”) it names
+the provider with the lowest average miss so far (at least two scored hours)
+and shows a table per provider: what it was locked from (KMA/Weather.com
+capture time, or the model run), its high from 9 AM with the METAR-rounded
+value for tenths, the peak hours, average miss, bias and hours scored. When
+nothing is locked the title stays “Forecasts locked at 9 AM” with no score
+headline: the badge reads “Locking” while a scheduled attempt can still succeed
+before 9:20 AM, then “No lock” in amber with “No forecast was locked at 9:00 AM
+today.” The chart keeps the main chart's midnight-to-midnight axis, cyan 15L
+line and warm-white METAR points, shades the hours before the 9 AM lock line,
+draws each provider in its own colour and dash pattern with filled dots at its
+forecast high, rings the routine high from 9 AM (“Highest since 9 AM” today,
+“High from 9 AM” once archived, kept inside the plot), and adds cloud rows
+under the plot: METAR eighths (shaded at the middle of the range, dashed when
+total cover is not reported), KMA sky words only, and percent for the others.
+A provider without data shows a short status in the legend and its cloud row:
+“approval required”, “no capture by 9 AM” for KMA or Weather.com, “not locked”
+for a model. Legend buttons hide a provider (a hidden one keeps readable text
+with a dashed border and a faded line key); mouse hover or keyboard focus on
+a shown provider dims the rest, a tap does not. The hour slider and pointer
+snap to whole hours and list every value with its miss. When the day's highest
+routine report came before 9 AM, the headline says so, because the scores use
+the high from 9 AM and the market the whole day. Past dates (“How the 9 AM
+forecasts did”) add each high's result and peak-time error once scored after
+midnight; a lock with missing hours shows “Not scored: hours missing” there.
+Details hold hour-by-hour temperature and cloud tables, the method and the
+30-day record. ECMWF, GFS and ICON show “Approval required”
+until `OPEN_METEO_FORECAST_ACCESS_APPROVED` is set; KMA does the same without
+its flag. See the [lock specification](./seoul-provider-forecasts.md).
+
 This document describes the streamlined RKSI dashboard: Seoul time, KMA
 forecast maximum, captured high revisions and peak times, the official
 routine-METAR maximum, observed cloud cover and its trend, the daily
@@ -507,8 +543,15 @@ The protected entry points are:
   `seoulWeather:finalizeHighPredictionInternal`
 - reads: `seoulWeather:getHighPredictionDashboard`,
   `seoulWeather:getHighPredictionDecisionSummaries`,
-  `seoulWeather:getDayPageWeather`, and
-  `seoulWeather:getHighPredictionAccuracy`
+  `seoulWeather:getDayPageWeather`,
+  `seoulWeather:getHighPredictionAccuracy`, and
+  `seoulDashboardHistory:getForecastHighHistory`
+- 9 AM provider lock: `seoulProviderForecasts:lockStoredForecasts` (run by
+  `runScheduledLock` and `backfillStoredForecasts`),
+  `seoulProviderForecasts:scoreCompletedDays`, and the read
+  `seoulProviderForecasts:getDashboard`, which store and show a derived copy
+  of one KMA capture's hourly rows and its scores only while the flag is
+  exactly `true`
 
 Activation and removal are separate production operations:
 
