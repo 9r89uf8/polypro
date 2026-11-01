@@ -47,7 +47,8 @@ is a new external source behind the new `OPEN_METEO_FORECAST_ACCESS_APPROVED`
 flag, deployed absent: its free API is for non-commercial use only, so the
 owner must confirm the use (or a paid key, `OPEN_METEO_API_KEY`) before
 activation; a running action re-reads the flag through a fresh query before
-every Open-Meteo request. KMA keeps its existing gate and is listed with its
+every Open-Meteo request. The owner confirmed the use and set the flag on
+November 1, 2026; no key is set, so requests use the free API. KMA keeps its existing gate and is listed with its
 other protected entry points below. The specification lists the capture
 clocks, model-run tags, entry points, commands and attribution.
 

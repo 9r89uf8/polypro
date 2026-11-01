@@ -193,7 +193,13 @@ For a Convex production target the same commands use `--prod`.
 **Deployed** to `striped-chipmunk-763` on November 1, 2026 at 11:36 KST with
 the flag absent (no `OPEN_METEO_*` variable set). `getDashboard` for
 2026-11-01 then returned ECMWF, GFS and ICON as `approval_required` with no
-data, and KMA and Weather.com as approved. The flag has not been set.
+data, and KMA and Weather.com as approved.
+
+**Activated** on November 1, 2026 at about 11:55 KST: the owner confirmed that
+the use complies with Open-Meteo's terms and set the flag. No
+`OPEN_METEO_API_KEY` is set, so requests use the free API, which is for
+non-commercial use only; commercial use needs a paid key. That day's 9:00
+window had passed, so the first live model lock is November 2 at 09:00 KST.
 
 **Attribution** (shown in the card's details whenever model data is shown):
 Open-Meteo data is [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
