@@ -1,11 +1,15 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 
-// Readings are stored exactly as KMA reports them: temperature is the one-minute
-// average, wind the ten-minute average, speed in m/s. See docs/seoul.md.
+export const nearbySource = v.union(v.literal("kma_apihub_aws_minute"), v.literal("kma_public_aws_page"));
+
+// Readings are stored as KMA reports them, with wind speed in m/s. API Hub gives a
+// one-minute temperature and ten-minute wind in degrees. The public page gives its
+// ten-minute direction only as a compass point, kept in windDirCompass, and
+// windDirDeg is then that point's centre. See docs/seoul.md.
 export const nearbyObservationInput = v.object({
   stationId: v.number(), obsTimeUtc: v.number(), obsTimeLocal: v.string(), rawLine: v.string(),
-  tempC: v.optional(v.number()), windDirDeg: v.optional(v.number()), windSpeedMs: v.optional(v.number()),
+  tempC: v.optional(v.number()), windDirDeg: v.optional(v.number()), windDirCompass: v.optional(v.string()), windSpeedMs: v.optional(v.number()),
 });
 
 export const nearbyStationResult = v.object({
@@ -16,14 +20,14 @@ export const nearbyStationResult = v.object({
 export const seoulNearbyTables = {
   seoulNearbyStationObservations: defineTable({
     stationId: v.number(), obsTimeUtc: v.number(), obsTimeLocal: v.string(),
-    tempC: v.optional(v.number()), windDirDeg: v.optional(v.number()), windSpeedMs: v.optional(v.number()),
-    source: v.literal("kma_apihub_aws_minute"), rawLine: v.string(),
+    tempC: v.optional(v.number()), windDirDeg: v.optional(v.number()), windDirCompass: v.optional(v.string()), windSpeedMs: v.optional(v.number()),
+    source: nearbySource, rawLine: v.string(),
     firstSeenAt: v.number(), updatedAt: v.number(),
   })
     .index("by_station_obs_ts", ["stationId", "obsTimeUtc"])
     .index("by_obs_ts", ["obsTimeUtc"]),
   seoulNearbyCollectorStatus: defineTable({
-    stationIcao: v.literal("RKSI"), status: v.string(), updatedAt: v.number(),
+    stationIcao: v.literal("RKSI"), status: v.string(), updatedAt: v.number(), source: v.optional(nearbySource),
     collectionQueuedAt: v.optional(v.number()), collectionInFlightSince: v.optional(v.number()), collectionRunId: v.optional(v.string()),
     lastAttemptAt: v.optional(v.number()), lastSuccessAt: v.optional(v.number()), latestObsTimeUtc: v.optional(v.number()),
     errorCode: v.optional(v.string()), lastError: v.optional(v.string()), stations: v.optional(v.array(nearbyStationResult)),

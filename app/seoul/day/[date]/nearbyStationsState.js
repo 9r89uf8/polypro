@@ -35,23 +35,25 @@ export function mapOffset({ distanceKm, bearingDeg }) {
 }
 
 const speedLabel = (knots) => (knots < 0.5 ? "under 1 kt" : `${Math.round(knots)} kt`);
+// A source that only names a compass point gets no degrees, because it has none.
+const direction = (dirDeg, compass) => (compass ? { from: compass, degrees: "" } : { from: compassPoint(dirDeg), degrees: ` (${Math.round(dirDeg)}°)` });
 
 /**
  * Wind direction is where the wind comes from. The arrow shows where the air is
  * going, so `arrowDeg` is the opposite way. Unknown parts stay unknown.
  */
-export function describeWind({ dirDeg, speedKt, speedMs }) {
+export function describeWind({ dirDeg, speedKt, speedMs, compass }) {
   const hasDir = number(dirDeg), knots = number(speedKt) ? speedKt : number(speedMs) ? speedMs * KNOTS_PER_MS : null;
   if (knots === 0) return { kind: "calm", arrowDeg: null, short: "Calm", detail: "Calm" };
   if (!hasDir && knots === null) return { kind: "missing", arrowDeg: null, short: "Wind not reported", detail: "Wind not reported" };
   const raw = number(speedMs) ? ` (${speedMs.toFixed(1)} m/s)` : "";
   if (knots === null) {
-    const from = compassPoint(dirDeg);
-    return { kind: "direction_only", arrowDeg: (dirDeg + 180) % 360, short: `from ${from}`, detail: `from ${from} (${Math.round(dirDeg)}°), speed not reported` };
+    const { from, degrees } = direction(dirDeg, compass);
+    return { kind: "direction_only", arrowDeg: (dirDeg + 180) % 360, short: `from ${from}`, detail: `from ${from}${degrees}, speed not reported` };
   }
   if (!hasDir) return { kind: "speed_only", arrowDeg: null, short: speedLabel(knots), detail: `${speedLabel(knots)}${raw}, direction not reported` };
-  const from = compassPoint(dirDeg);
-  return { kind: "wind", arrowDeg: (dirDeg + 180) % 360, short: `from ${from} ${speedLabel(knots)}`, detail: `from ${from} (${Math.round(dirDeg)}°) · ${speedLabel(knots)}${raw}` };
+  const { from, degrees } = direction(dirDeg, compass);
+  return { kind: "wind", arrowDeg: (dirDeg + 180) % 360, short: `from ${from} ${speedLabel(knots)}`, detail: `from ${from}${degrees} · ${speedLabel(knots)}${raw}` };
 }
 
 function describeReading(reading, now, staleAfterMs) {
@@ -62,7 +64,7 @@ function describeReading(reading, now, staleAfterMs) {
     ageLabel: stale ? `Stale · ${ageLabel(age)}` : ageLabel(age), mapAgeLabel: stale ? `Stale · ${shortAge(age)}` : ageLabel(age),
     tempC: number(reading.tempC) ? reading.tempC : null,
     temperature: number(reading.tempC) ? `${reading.tempC.toFixed(1)}°` : "—",
-    wind: describeWind({ dirDeg: reading.windDirDeg, speedKt: reading.windSpeedKt, speedMs: reading.windSpeedMs }),
+    wind: describeWind({ dirDeg: reading.windDirDeg, speedKt: reading.windSpeedKt, speedMs: reading.windSpeedMs, compass: reading.windDirCompass }),
   };
 }
 
@@ -70,7 +72,7 @@ const ERROR_LABELS = {
   key_rejected: "KMA rejected the API key",
   api_not_applied: "KMA says the key has no application for this API",
   rate_limited: "KMA limited the requests",
-  format: "KMA’s response did not match the documented format",
+  format: "KMA’s response did not match the expected format",
   http_error: "KMA returned an error",
   network: "KMA could not be reached",
 };
@@ -124,7 +126,7 @@ export function buildNearbyState(dashboard, now, { isToday, isPast = false } = {
   const reference = describeReading(dashboard.airport?.reference, now, AIRPORT_STALE_MS);
   const status = panelStatus(dashboard, stations, reference.state);
   return {
-    ...status, withheld: status.kind === "approval_required", stations,
+    ...status, withheld: status.kind === "approval_required", stations, usesPublicPage: dashboard.source === "kma_public_aws_page",
     airport: {
       name: dashboard.airport?.name ?? "Incheon Airport", icao: dashboard.airport?.icao ?? "RKSI", elevationM: airportElevationM, reference,
       comparison: describeReading(dashboard.airport?.comparison, now, AIRPORT_STALE_MS),

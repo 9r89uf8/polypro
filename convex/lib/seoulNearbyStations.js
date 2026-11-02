@@ -1,12 +1,18 @@
-// The KMA stations around RKSI and the parser for KMA API Hub's one-minute AWS
-// text response. KMA's specification for nph-aws2_min defines the columns; the
-// response is checked against them because no key was available when this was
-// written (see "Stations around the airport" in docs/seoul.md).
+// The KMA stations around RKSI and the parsers for their two sources. KMA's
+// specification for API Hub's nph-aws2_min defines its columns, and the response is
+// checked against them because no key was available when this was written. The JSON
+// behind KMA's public observation page has no published format, so it is checked
+// against what the page returned on November 3, 2026. See "Stations around the
+// airport" in docs/seoul.md.
 
 export const NEARBY_APPROVAL_FLAG = "KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED";
 export const NEARBY_KEY_NAME = "KMA_APIHUB_AUTH_KEY";
 export const NEARBY_SOURCE = "kma_apihub_aws_minute";
 export const NEARBY_API_URL = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min";
+export const NEARBY_PUBLIC_APPROVAL_FLAG = "KMA_PUBLIC_AWS_PAGE_ACCESS_APPROVED";
+export const NEARBY_PUBLIC_SOURCE = "kma_public_aws_page";
+// One request returns the newest minute for every Incheon station.
+export const NEARBY_PUBLIC_URL = "https://www.weather.go.kr/w/observation/land/aws-obs-data.do?db=MINDB_01M&tm=&stnId=0&sidoCode=2800000000&sort=&config=full";
 export const NEARBY_RETENTION_MS = 48 * 3_600_000;
 // Each request asks for this many past minutes, so a missed poll is filled in. It
 // is longer than the panel's 10-minute stale limit because KMA's delivery delay is
@@ -45,11 +51,15 @@ export const nearbyStationsWithGeometry = () => NEARBY_STATIONS.map((station) =>
   return { ...station, distanceKm: Math.round(distanceKm * 10) / 10, bearingDeg: Math.round(bearingDeg) };
 });
 
-// The approval flag and the key are separate: a key alone never enables anything.
+// Each source has its own approval flag, and a key alone never enables anything.
+// API Hub is used once it is approved and has a key, so collection moves there when
+// the key arrives, with no code change.
 export function nearbyAccess(env) {
-  const approved = env[NEARBY_APPROVAL_FLAG] === "true";
-  const key = typeof env[NEARBY_KEY_NAME] === "string" ? env[NEARBY_KEY_NAME].trim() : "";
-  return { approved, configured: approved && key.length > 0, key: approved ? key : "" };
+  const hubApproved = env[NEARBY_APPROVAL_FLAG] === "true", publicApproved = env[NEARBY_PUBLIC_APPROVAL_FLAG] === "true";
+  const key = hubApproved && typeof env[NEARBY_KEY_NAME] === "string" ? env[NEARBY_KEY_NAME].trim() : "";
+  const source = key ? NEARBY_SOURCE : publicApproved ? NEARBY_PUBLIC_SOURCE : null;
+  const approvedSources = [...(hubApproved ? [NEARBY_SOURCE] : []), ...(publicApproved ? [NEARBY_PUBLIC_SOURCE] : [])];
+  return { approved: approvedSources.length > 0, configured: source !== null, key, source, approvedSources };
 }
 
 const kstFields = (time) => new Date(time + KST_OFFSET).toISOString();
@@ -125,6 +135,60 @@ export function parseAwsMinuteResponse(text, stationId) {
   // Rows that do not fit the table are a format problem, not a quiet minute.
   if (!rows.length && malformed) throw new NearbySourceError("format", `KMA response had ${malformed} row(s) that do not fit the documented table.`);
   return { rows, rejected: malformed + empty };
+}
+
+const COMPASS_WORDS = ["북", "북북동", "북동", "동북동", "동", "동남동", "남동", "남남동", "남", "남남서", "남서", "서남서", "서", "서북서", "북서", "북북서"];
+const COMPASS_POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+const PUBLIC_REQUIRED_FIELDS = ["tm", "awsTmp", "awsWd10", "awsWs10"];
+const PANEL_STATION_IDS = new Set(NEARBY_STATIONS.map((station) => station.id));
+
+// The page writes numbers as text. Anything else, such as null, "" or ".", is no value.
+const publicReading = (value, minimum, maximum) => (/^-?\d+(\.\d+)?$/.test(String(value ?? "")) ? reading(String(value), minimum, maximum) : undefined);
+
+/**
+ * Reads the public page's JSON and keeps the panel's stations. Direction arrives as
+ * one of 16 Korean compass words, stored as the point and its centre in degrees, so
+ * the panel can draw an arrow without claiming a precise bearing. A row carrying the
+ * page's fault flag is dropped, because the flag's values are not published. A
+ * response that does not look as expected is refused rather than stored.
+ */
+export function parsePublicAwsPage(text) {
+  let data;
+  try {
+    data = JSON.parse(String(text ?? ""));
+  } catch {
+    throw new NearbySourceError("format", "KMA's public page did not return JSON.");
+  }
+  if (!Array.isArray(data?.items)) throw new NearbySourceError("format", "KMA's public page returned no station list.");
+  if (data.windUnit !== "m/s") throw new NearbySourceError("format", "KMA's public page does not report wind in m/s.");
+  const rows = [];
+  let malformed = 0, empty = 0;
+  for (const item of data.items) {
+    const stationId = Number(item?.awsStnId);
+    if (!PANEL_STATION_IDS.has(stationId)) continue;
+    const missing = PUBLIC_REQUIRED_FIELDS.filter((name) => !(name in item));
+    if (missing.length) throw new NearbySourceError("format", `KMA's public page is missing fields: ${missing.join(", ")}.`);
+    const parsed = parseKstMinute(String(item.tm ?? ""));
+    if (!parsed) { malformed += 1; continue; }
+    const tempC = publicReading(item.awsTmp, -49.9, 60);
+    const windSpeedMs = publicReading(item.awsWs10, 0, 100);
+    const compassIndex = COMPASS_WORDS.indexOf(item.awsWd10);
+    if (item.awsTroblKnd || (tempC === undefined && windSpeedMs === undefined && compassIndex < 0)) { empty += 1; continue; }
+    rows.push({
+      stationId, obsTimeUtc: parsed.time, obsTimeLocal: parsed.local,
+      rawLine: JSON.stringify({ tm: item.tm, awsStnId: item.awsStnId, awsTmp: item.awsTmp, awsWd10: item.awsWd10, awsWs10: item.awsWs10 }).slice(0, 300),
+      ...(tempC !== undefined ? { tempC } : {}),
+      ...(compassIndex >= 0 ? { windDirDeg: compassIndex * 22.5, windDirCompass: COMPASS_POINTS[compassIndex] } : {}),
+      ...(windSpeedMs !== undefined ? { windSpeedMs } : {}),
+    });
+  }
+  if (!rows.length && malformed) throw new NearbySourceError("format", `KMA's public page had ${malformed} row(s) with an unreadable time.`);
+  return { rows, rejected: malformed + empty };
+}
+
+export function nearbyPublicHttpError(status) {
+  if (status === 429) return new NearbySourceError("rate_limited", "KMA's public page returned HTTP 429.");
+  return new NearbySourceError("http_error", `KMA's public page returned HTTP ${status}.`);
 }
 
 // KMA's specification lists 401 and 403; the rest are general failures.

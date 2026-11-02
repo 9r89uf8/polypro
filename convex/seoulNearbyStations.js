@@ -1,10 +1,10 @@
 import { internalActionGeneric, internalMutationGeneric, internalQueryGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
-import { nearbyObservationInput, nearbyStationResult } from "./lib/seoulNearbySchema.js";
+import { nearbyObservationInput, nearbySource, nearbyStationResult } from "./lib/seoulNearbySchema.js";
 import {
-  AIRPORT, NEARBY_API_URL, NEARBY_RETENTION_MS, NEARBY_SOURCE, NEARBY_STATIONS, NEARBY_WINDOW_MINUTES, NearbySourceError,
-  kstDate, kstMinuteParam, nearbyAccess, nearbyHttpError, nearbyStationsWithGeometry, parseAwsMinuteResponse, sanitizeNearbyError,
+  AIRPORT, NEARBY_API_URL, NEARBY_PUBLIC_URL, NEARBY_RETENTION_MS, NEARBY_SOURCE, NEARBY_STATIONS, NEARBY_WINDOW_MINUTES, NearbySourceError,
+  kstDate, kstMinuteParam, nearbyAccess, nearbyHttpError, nearbyPublicHttpError, nearbyStationsWithGeometry, parseAwsMinuteResponse, parsePublicAwsPage, sanitizeNearbyError,
 } from "./lib/seoulNearbyStations.js";
 
 const MINUTE = 60_000;
@@ -12,6 +12,7 @@ const LOCK_TIMEOUT_MS = 2 * MINUTE;
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_CHARS = 100_000;
 const AMOS_ROWS_READ = 12;
+const STATION_ROWS_READ = 12;
 const RUNWAYS = { reference: { rwyNo: "2", rwyDir: "15L" }, comparison: { rwyNo: "3", rwyDir: "16L" } };
 const STATION_IDS = new Set(NEARBY_STATIONS.map((station) => station.id));
 const shiftDate = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
@@ -63,18 +64,18 @@ export const queueScheduledRefresh = internalMutationGeneric({
 export const collectionAccess = internalQueryGeneric({
   args: { stationIcao: v.string(), runId: v.string() },
   handler: async (ctx, { stationIcao, runId }) => {
-    const { approved, configured } = access();
+    const { approved, configured, source } = access();
     if (!approved) return { status: "approval_required" };
     if (!configured) return { status: "setup_required" };
     const current = await collectorState(ctx, stationIcao);
-    return { status: current?.collectionRunId === runId ? "allowed" : "superseded" };
+    return current?.collectionRunId === runId ? { status: "allowed", source } : { status: "superseded" };
   },
 });
 
 export const storeReadings = internalMutationGeneric({
-  args: { stationIcao: v.string(), runId: v.string(), rows: v.array(nearbyObservationInput) },
-  handler: async (ctx, { stationIcao, runId, rows }) => {
-    if (!access().approved) return { status: "approval_required", insertedCount: 0 };
+  args: { stationIcao: v.string(), runId: v.string(), source: nearbySource, rows: v.array(nearbyObservationInput) },
+  handler: async (ctx, { stationIcao, runId, source, rows }) => {
+    if (!access().approvedSources.includes(source)) return { status: "approval_required", insertedCount: 0 };
     const current = await collectorState(ctx, stationIcao);
     if (current?.collectionRunId !== runId) return { status: "superseded", insertedCount: 0 };
     const now = Date.now();
@@ -84,11 +85,11 @@ export const storeReadings = internalMutationGeneric({
       const existing = await ctx.db.query("seoulNearbyStationObservations")
         .withIndex("by_station_obs_ts", (q) => q.eq("stationId", row.stationId).eq("obsTimeUtc", row.obsTimeUtc)).first();
       if (!existing) {
-        await ctx.db.insert("seoulNearbyStationObservations", { ...row, source: NEARBY_SOURCE, firstSeenAt: now, updatedAt: now });
+        await ctx.db.insert("seoulNearbyStationObservations", { ...row, source, firstSeenAt: now, updatedAt: now });
         insertedCount += 1;
       } else if (existing.rawLine !== row.rawLine) {
         // KMA can revise a minute. firstSeenAt stays, so delivery delay remains measurable.
-        await ctx.db.replace(existing._id, { ...row, source: NEARBY_SOURCE, firstSeenAt: existing.firstSeenAt, updatedAt: now });
+        await ctx.db.replace(existing._id, { ...row, source, firstSeenAt: existing.firstSeenAt, updatedAt: now });
         revisedCount += 1;
       }
     }
@@ -99,11 +100,11 @@ export const storeReadings = internalMutationGeneric({
 
 export const finishRun = internalMutationGeneric({
   args: {
-    stationIcao: v.string(), runId: v.string(), status: v.string(), lastAttemptAt: v.number(), lastSuccessAt: v.optional(v.number()),
+    stationIcao: v.string(), runId: v.string(), source: nearbySource, status: v.string(), lastAttemptAt: v.number(), lastSuccessAt: v.optional(v.number()),
     latestObsTimeUtc: v.optional(v.number()), errorCode: v.optional(v.string()), lastError: v.optional(v.string()), stations: v.array(nearbyStationResult),
   },
   handler: async (ctx, { stationIcao, runId, ...fields }) => {
-    if (!access().approved) return { status: "approval_required", updated: false };
+    if (!access().approvedSources.includes(fields.source)) return { status: "approval_required", updated: false };
     const current = await collectorState(ctx, stationIcao);
     if (current?.collectionRunId !== runId) return { status: "superseded", updated: false };
     const latestObsTimeUtc = Math.max(fields.latestObsTimeUtc ?? 0, current.latestObsTimeUtc ?? 0);
@@ -144,17 +145,40 @@ async function fetchStation(station, key, now) {
   }
 }
 
+// One request covers every station, so a failure is every station's failure.
+async function fetchPublicPage() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(NEARBY_PUBLIC_URL, { redirect: "error", cache: "no-store", signal: controller.signal, headers: { Accept: "application/json" } });
+    if (!response.ok) throw nearbyPublicHttpError(response.status);
+    const text = await response.text();
+    if (text.length > MAX_RESPONSE_CHARS) throw new NearbySourceError("format", "KMA's public page returned more than expected.");
+    const { rows } = parsePublicAwsPage(text);
+    return NEARBY_STATIONS.map((station) => {
+      const stationRows = rows.filter((row) => row.stationId === station.id);
+      return { stationId: station.id, status: stationRows.length ? "ok" : "no_rows", rows: stationRows };
+    });
+  } catch (error) {
+    const errorCode = error instanceof NearbySourceError ? error.code : "network";
+    const message = sanitizeNearbyError(error instanceof Error ? error.message : error);
+    return NEARBY_STATIONS.map((station) => ({ stationId: station.id, status: "error", rows: [], errorCode, error: message }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const collectLatest = internalActionGeneric({
   args: { stationIcao: v.string(), runId: v.string() },
   handler: async (ctx, { stationIcao, runId }) => {
     const permission = await ctx.runQuery(internal.seoulNearbyStations.collectionAccess, { stationIcao, runId });
     if (permission.status !== "allowed") return { status: permission.status };
-    const { key } = access();
-    if (!key) return { status: "setup_required" };
+    const { source } = permission, { key } = access();
+    if (source === NEARBY_SOURCE && !key) return { status: "setup_required" };
     const lastAttemptAt = Date.now();
-    const results = await Promise.all(NEARBY_STATIONS.map((station) => fetchStation(station, key, lastAttemptAt)));
+    const results = source === NEARBY_SOURCE ? await Promise.all(NEARBY_STATIONS.map((station) => fetchStation(station, key, lastAttemptAt))) : await fetchPublicPage();
     const rows = results.flatMap((result) => result.rows);
-    const write = await ctx.runMutation(internal.seoulNearbyStations.storeReadings, { stationIcao, runId, rows });
+    const write = await ctx.runMutation(internal.seoulNearbyStations.storeReadings, { stationIcao, runId, source, rows });
     if (write.status !== "ok") return write;
     const failed = results.filter((result) => result.status === "error");
     const status = failed.length === results.length ? "error" : failed.length || results.some((result) => result.status === "no_rows") ? "partial" : "ok";
@@ -165,7 +189,7 @@ export const collectLatest = internalActionGeneric({
       ...(errorCode ? { errorCode } : {}),
     }));
     await ctx.runMutation(internal.seoulNearbyStations.finishRun, {
-      stationIcao, runId, status, lastAttemptAt, stations,
+      stationIcao, runId, source, status, lastAttemptAt, stations,
       ...(rows.length ? { lastSuccessAt: Date.now(), latestObsTimeUtc: latest } : {}),
       ...(failed.length ? { errorCode: failed[0].errorCode, lastError: failed[0].error } : {}),
     });
@@ -209,22 +233,25 @@ async function latestAmos(ctx, stationIcao, date, { rwyNo, rwyDir }) {
 }
 
 // No upper time bound: the subscription must wake for any newer row, however
-// long ago this query last ran.
-async function latestStationReading(ctx, stationId, now) {
-  const row = await ctx.db.query("seoulNearbyStationObservations")
-    .withIndex("by_station_obs_ts", (q) => q.eq("stationId", stationId)).order("desc").first();
+// long ago this query last ran. Rows from a source that is no longer approved stay
+// hidden, so a switch of source can show nothing until the new source has a row.
+async function latestStationReading(ctx, stationId, now, approvedSources) {
+  const rows = await ctx.db.query("seoulNearbyStationObservations")
+    .withIndex("by_station_obs_ts", (q) => q.eq("stationId", stationId)).order("desc").take(STATION_ROWS_READ);
+  const row = rows.find((candidate) => approvedSources.includes(candidate.source));
   if (!row || now - row.obsTimeUtc > NEARBY_RETENTION_MS) return null;
   return {
     obsTimeUtc: row.obsTimeUtc, firstSeenAt: row.firstSeenAt,
     ...(Number.isFinite(row.tempC) ? { tempC: row.tempC } : {}),
     ...(Number.isFinite(row.windDirDeg) ? { windDirDeg: row.windDirDeg } : {}),
+    ...(row.windDirCompass ? { windDirCompass: row.windDirCompass } : {}),
     ...(Number.isFinite(row.windSpeedMs) ? { windSpeedMs: row.windSpeedMs } : {}),
   };
 }
 
 /**
- * Today's panel. Protected tables are not read unless the approval flag is
- * exactly "true"; revoking it hides stored readings at this boundary too. It
+ * Today's panel. Protected tables are not read unless a source's approval flag is
+ * exactly "true"; revoking it hides that source's readings at this boundary too. It
  * makes no external request and the browser never sees the key or a raw error.
  */
 export const getDashboard = queryGeneric({
@@ -232,9 +259,9 @@ export const getDashboard = queryGeneric({
   handler: async (ctx, args) => {
     const stationIcao = airportOnly(args.stationIcao);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(args.date)) throw new Error("Date must be in YYYY-MM-DD format.");
-    const now = Date.now(), today = kstDate(now), { approved, configured } = access();
+    const now = Date.now(), today = kstDate(now), { approved, configured, source, approvedSources } = access();
     const empty = {
-      stationIcao, date: args.date, today, approved, configured,
+      stationIcao, date: args.date, today, approved, configured, source: null,
       airport: { icao: AIRPORT.icao, name: AIRPORT.name, elevationM: AIRPORT.elevationM, reference: null, comparison: null },
       stations: nearbyStationsWithGeometry().map((station) => ({ ...station, reading: null })),
       collector: null,
@@ -250,7 +277,7 @@ export const getDashboard = queryGeneric({
     if (!approved) return { ...empty, airport, status: "approval_required" };
     const [collector, readings] = await Promise.all([
       collectorState(ctx, stationIcao),
-      Promise.all(empty.stations.map((station) => latestStationReading(ctx, station.id, now))),
+      Promise.all(empty.stations.map((station) => latestStationReading(ctx, station.id, now, approvedSources))),
     ]);
     const stations = empty.stations.map((station, index) => ({ ...station, reading: readings[index] }));
     const lastRun = collector?.status;
@@ -259,7 +286,7 @@ export const getDashboard = queryGeneric({
       : !readings.some(Boolean) ? "building"
       : lastRun === "partial" ? "partial" : "ok";
     return {
-      ...empty, airport, stations, status,
+      ...empty, airport, stations, status, source,
       collector: collector ? {
         status: collector.status, lastAttemptAt: collector.lastAttemptAt ?? null, lastSuccessAt: collector.lastSuccessAt ?? null, errorCode: collector.errorCode ?? null,
       } : null,

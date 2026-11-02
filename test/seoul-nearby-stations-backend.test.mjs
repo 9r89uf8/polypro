@@ -3,15 +3,16 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { getFunctionName } from "convex/server";
 import schema from "../convex/schema.js";
-import { NEARBY_APPROVAL_FLAG, NEARBY_KEY_NAME, NEARBY_STATIONS, nearbyAccess, nearbyStationsWithGeometry, parseAwsMinuteResponse, sanitizeNearbyError } from "../convex/lib/seoulNearbyStations.js";
+import { NEARBY_APPROVAL_FLAG, NEARBY_KEY_NAME, NEARBY_PUBLIC_APPROVAL_FLAG, NEARBY_PUBLIC_SOURCE, NEARBY_PUBLIC_URL, NEARBY_SOURCE, NEARBY_STATIONS, nearbyAccess, nearbyStationsWithGeometry, parseAwsMinuteResponse, parsePublicAwsPage, sanitizeNearbyError } from "../convex/lib/seoulNearbyStations.js";
 import * as backend from "../convex/seoulNearbyStations.js";
 
 const MINUTE = 60_000, DATE = "2026-11-02";
 const at = (time, date = DATE) => Date.parse(`${date}T${time}:00+09:00`);
 const NOW = at("12:31");
 const KEY = "test-key-not-real";
-const ENV_KEYS = [NEARBY_APPROVAL_FLAG, NEARBY_KEY_NAME];
+const ENV_KEYS = [NEARBY_APPROVAL_FLAG, NEARBY_KEY_NAME, NEARBY_PUBLIC_APPROVAL_FLAG];
 const APPROVED = { [NEARBY_APPROVAL_FLAG]: "true", [NEARBY_KEY_NAME]: KEY };
+const PUBLIC_APPROVED = { [NEARBY_PUBLIC_APPROVAL_FLAG]: "true" };
 const stamp = (time) => new Date(time + 9 * 3_600_000).toISOString().slice(0, 16).replace(/[-:T]/g, "");
 
 // The layout of KMA's published nph-aws2_min sample with synthetic values, not KMA data.
@@ -102,6 +103,11 @@ const stationFetch = (make) => async (href) => {
 };
 const allOk = stationFetch((id) => text(body(row(NOW - MINUTE, id, { ta: `${10 + id / 1000}` }))));
 
+// The layout of KMA's public page JSON with synthetic values, not KMA data.
+const publicItem = (time, id, fields = {}) => ({ awsStnId: id, tm: stamp(time), awsTmp: "9.7", awsWd10: "남남동", awsWs10: "1.8", awsWd1: "남", awsWs1: "1.7", awsTroblKnd: "", windUnit: null, ...fields });
+const publicBody = (items, fields = {}) => JSON.stringify({ dataTm: stamp(NOW), windUnit: "m/s", items, ...fields });
+const publicOk = (time = NOW - 6 * MINUTE, fields = {}) => async () => text(publicBody([publicItem(time, 201), ...NEARBY_STATIONS.map((station) => publicItem(time, station.id, fields))]));
+
 test("station geometry matches the supplied report and KMA's coordinates", () => {
   const geometry = Object.fromEntries(nearbyStationsWithGeometry().map((station) => [station.id, [station.distanceKm, station.bearingDeg]]));
   assert.deepEqual(geometry, { 508: [7.1, 276], 665: [7.9, 190], 543: [10.5, 66], 577: [12.3, 312] });
@@ -136,16 +142,153 @@ test("the parser refuses anything that is not the documented table for this stat
 
 test("only the exact string true approves, and a key alone enables nothing", () => {
   for (const flag of [undefined, "", "false", "TRUE", "1", " true", "true "]) {
-    assert.deepEqual(nearbyAccess({ [NEARBY_APPROVAL_FLAG]: flag, [NEARBY_KEY_NAME]: KEY }), { approved: false, configured: false, key: "" });
+    assert.deepEqual(nearbyAccess({ [NEARBY_APPROVAL_FLAG]: flag, [NEARBY_PUBLIC_APPROVAL_FLAG]: flag, [NEARBY_KEY_NAME]: KEY }), { approved: false, configured: false, key: "", source: null, approvedSources: [] });
   }
-  assert.deepEqual(nearbyAccess({ [NEARBY_APPROVAL_FLAG]: "true" }), { approved: true, configured: false, key: "" });
-  assert.deepEqual(nearbyAccess({ [NEARBY_APPROVAL_FLAG]: "true", [NEARBY_KEY_NAME]: `  ${KEY}  ` }), { approved: true, configured: true, key: KEY });
+  assert.deepEqual(nearbyAccess({ [NEARBY_APPROVAL_FLAG]: "true" }), { approved: true, configured: false, key: "", source: null, approvedSources: [NEARBY_SOURCE] });
+  assert.deepEqual(nearbyAccess({ [NEARBY_APPROVAL_FLAG]: "true", [NEARBY_KEY_NAME]: `  ${KEY}  ` }), { approved: true, configured: true, key: KEY, source: NEARBY_SOURCE, approvedSources: [NEARBY_SOURCE] });
+});
+
+test("each source has its own flag, and API Hub takes over once it has approval and a key", () => {
+  const publicOnly = { approved: true, configured: true, key: "", source: NEARBY_PUBLIC_SOURCE, approvedSources: [NEARBY_PUBLIC_SOURCE] };
+  assert.deepEqual(nearbyAccess(PUBLIC_APPROVED), publicOnly);
+  // A key without API Hub's own flag changes nothing, and the public flag never approves API Hub.
+  assert.deepEqual(nearbyAccess({ ...PUBLIC_APPROVED, [NEARBY_KEY_NAME]: KEY }), publicOnly);
+  assert.deepEqual(nearbyAccess({ ...PUBLIC_APPROVED, [NEARBY_APPROVAL_FLAG]: "true" }), { approved: true, configured: true, key: "", source: NEARBY_PUBLIC_SOURCE, approvedSources: [NEARBY_SOURCE, NEARBY_PUBLIC_SOURCE] });
+  assert.deepEqual(nearbyAccess({ ...PUBLIC_APPROVED, ...APPROVED }), { approved: true, configured: true, key: KEY, source: NEARBY_SOURCE, approvedSources: [NEARBY_SOURCE, NEARBY_PUBLIC_SOURCE] });
+});
+
+test("the public page parser keeps the panel's stations and turns compass words into points", () => {
+  const { rows, rejected } = parsePublicAwsPage(publicBody([
+    publicItem(NOW, 201),
+    publicItem(NOW, 508),
+    publicItem(NOW, 665, { awsTmp: null, awsWd10: "북", awsWs10: "0" }),
+    publicItem(NOW, 543, { awsTmp: "-99.9", awsWd10: "", awsWs10: "." }),
+    publicItem(NOW, 577, { awsTmp: "10.4", awsTroblKnd: "1" }),
+  ]));
+  assert.equal(rejected, 2);
+  assert.deepEqual(rows.map(({ rawLine, ...fields }) => fields), [
+    { stationId: 508, obsTimeUtc: NOW, obsTimeLocal: "2026-11-02 12:31", tempC: 9.7, windDirDeg: 157.5, windDirCompass: "SSE", windSpeedMs: 1.8 },
+    { stationId: 665, obsTimeUtc: NOW, obsTimeLocal: "2026-11-02 12:31", windDirDeg: 0, windDirCompass: "N", windSpeedMs: 0 },
+  ]);
+  assert.deepEqual(parsePublicAwsPage(publicBody([])), { rows: [], rejected: 0 });
+  assert.equal(parsePublicAwsPage(publicBody([publicItem(NOW, 508, { awsWd10: "정온" })])).rows[0].windDirDeg, undefined);
+});
+
+test("the public page parser refuses anything that does not look as expected", () => {
+  const format = (value) => assert.throws(() => parsePublicAwsPage(value), (error) => error.code === "format");
+  format("<html>busy</html>");
+  format(JSON.stringify({ windUnit: "m/s" }));
+  format(publicBody([publicItem(NOW, 508)], { windUnit: "km/h" }));
+  const renamed = publicItem(NOW, 508);
+  delete renamed.awsTmp;
+  format(publicBody([renamed]));
+  format(publicBody([publicItem(NOW, 508, { tm: "202611311200" })]));
+});
+
+test("an approved public page run makes one request, stores its stations and labels the source", async () => {
+  const app = harness();
+  Object.assign(app.env, PUBLIC_APPROVED);
+  app.setFetch(publicOk());
+  assert.deepEqual(await app.call("queueScheduledRefresh", {}), { queued: true, status: "queued" });
+  assert.equal((await app.call("collectLatest", app.scheduled[0].args)).status, "ok");
+  assert.deepEqual(app.requests, [NEARBY_PUBLIC_URL]);
+  assert.equal(app.tables.seoulNearbyStationObservations.length, NEARBY_STATIONS.length);
+  assert.ok(app.tables.seoulNearbyStationObservations.every((item) => item.source === NEARBY_PUBLIC_SOURCE));
+  assert.equal(app.tables.seoulNearbyCollectorStatus[0].source, NEARBY_PUBLIC_SOURCE);
+  const dashboard = await app.call("getDashboard", { date: DATE });
+  assert.deepEqual([dashboard.status, dashboard.source], ["ok", NEARBY_PUBLIC_SOURCE]);
+  assert.deepEqual(dashboard.stations.find((station) => station.id === 508).reading, { obsTimeUtc: NOW - 6 * MINUTE, firstSeenAt: NOW, tempC: 9.7, windDirDeg: 157.5, windDirCompass: "SSE", windSpeedMs: 1.8 });
+});
+
+test("public page failures stay explicit, and a missing station is only partial", async () => {
+  const app = harness();
+  Object.assign(app.env, PUBLIC_APPROVED);
+  const run = async () => { await app.call("queueScheduledRefresh", {}); return await app.call("collectLatest", app.scheduled.at(-1).args); };
+  app.setFetch(async () => text("", 403));
+  assert.equal((await run()).status, "error");
+  assert.equal(app.tables.seoulNearbyCollectorStatus[0].errorCode, "http_error");
+  assert.deepEqual((await app.call("getDashboard", { date: DATE })).collector.errorCode, "http_error");
+  app.setNow(NOW + MINUTE);
+  app.setFetch(async () => text("<html>maintenance</html>"));
+  assert.equal((await run()).status, "error");
+  assert.equal(app.tables.seoulNearbyCollectorStatus[0].errorCode, "format");
+  app.setNow(NOW + 2 * MINUTE);
+  app.setFetch(async () => { throw new Error("connection reset"); });
+  assert.equal((await run()).status, "error");
+  assert.equal(app.tables.seoulNearbyCollectorStatus[0].errorCode, "network");
+  app.setNow(NOW + 3 * MINUTE);
+  app.setFetch(async () => text(publicBody([publicItem(NOW, 508)])));
+  assert.equal((await run()).status, "partial");
+  const dashboard = await app.call("getDashboard", { date: DATE });
+  assert.equal(dashboard.status, "partial");
+  assert.equal(dashboard.stations.find((station) => station.id === 665).reading, null);
+});
+
+test("removing the public flag stops queued work, discards in-flight results and hides stored rows", async () => {
+  const queued = harness();
+  Object.assign(queued.env, PUBLIC_APPROVED);
+  queued.setFetch(publicOk());
+  await queued.call("queueScheduledRefresh", {});
+  delete queued.env[NEARBY_PUBLIC_APPROVAL_FLAG];
+  assert.deepEqual(await queued.call("collectLatest", queued.scheduled[0].args), { status: "approval_required" });
+  assert.deepEqual(queued.requests, []);
+
+  const inFlight = harness();
+  Object.assign(inFlight.env, PUBLIC_APPROVED);
+  const respond = publicOk();
+  inFlight.setFetch(async () => { delete inFlight.env[NEARBY_PUBLIC_APPROVAL_FLAG]; return respond(); });
+  await inFlight.call("queueScheduledRefresh", {});
+  assert.deepEqual(await inFlight.call("collectLatest", inFlight.scheduled[0].args), { status: "approval_required", insertedCount: 0 });
+  assert.equal(inFlight.tables.seoulNearbyStationObservations.length, 0);
+
+  const stored = harness();
+  Object.assign(stored.env, PUBLIC_APPROVED);
+  stored.setFetch(publicOk());
+  await stored.call("queueScheduledRefresh", {});
+  await stored.call("collectLatest", stored.scheduled[0].args);
+  delete stored.env[NEARBY_PUBLIC_APPROVAL_FLAG];
+  stored.reads.length = 0;
+  const dashboard = await stored.call("getDashboard", { date: DATE });
+  assert.deepEqual([dashboard.status, dashboard.source], ["approval_required", null]);
+  assert.ok(dashboard.stations.every((station) => station.reading === null));
+  assert.ok(!stored.reads.includes("seoulNearbyStationObservations"));
+});
+
+test("collection moves to API Hub with its flag and key, and each source's rows follow its own flag", async () => {
+  const app = harness();
+  Object.assign(app.env, PUBLIC_APPROVED);
+  const run = async () => { await app.call("queueScheduledRefresh", {}); return await app.call("collectLatest", app.scheduled.at(-1).args); };
+  app.setFetch(publicOk(NOW - 6 * MINUTE));
+  await run();
+
+  // The key and API Hub's flag arrive: API Hub is used and its rows win.
+  app.setNow(NOW + MINUTE);
+  Object.assign(app.env, APPROVED);
+  app.requests.length = 0;
+  app.setFetch(allOk);
+  assert.equal((await run()).status, "ok");
+  assert.equal(app.requests.length, NEARBY_STATIONS.length);
+  assert.ok(app.requests.every((href) => href.startsWith("https://apihub.kma.go.kr/")));
+  let dashboard = await app.call("getDashboard", { date: DATE });
+  assert.equal(dashboard.source, NEARBY_SOURCE);
+  assert.deepEqual([dashboard.stations[0].reading.obsTimeUtc, dashboard.stations[0].reading.windDirCompass], [NOW - MINUTE, undefined]);
+
+  // A revoked API Hub hides its newer rows and leaves the approved public rows showing.
+  delete app.env[NEARBY_APPROVAL_FLAG];
+  dashboard = await app.call("getDashboard", { date: DATE });
+  assert.equal(dashboard.source, NEARBY_PUBLIC_SOURCE);
+  assert.deepEqual([dashboard.stations[0].reading.obsTimeUtc, dashboard.stations[0].reading.windDirCompass], [NOW - 6 * MINUTE, "SSE"]);
+
+  // Results from a source that lost approval mid-run are not stored under any source.
+  app.setNow(NOW + 2 * MINUTE);
+  assert.deepEqual(await app.call("storeReadings", { stationIcao: "RKSI", runId: "x", source: NEARBY_SOURCE, rows: [] }), { status: "approval_required", insertedCount: 0 });
+  assert.deepEqual(await app.call("finishRun", { stationIcao: "RKSI", runId: "x", source: NEARBY_SOURCE, status: "ok", lastAttemptAt: NOW, stations: [] }), { status: "approval_required", updated: false });
 });
 
 test("without approval nothing is queued, requested, written or read, and AMOS still shows", async () => {
   for (const flag of [undefined, "false", "TRUE"]) {
     const app = harness();
-    Object.assign(app.env, { [NEARBY_APPROVAL_FLAG]: flag, [NEARBY_KEY_NAME]: KEY });
+    Object.assign(app.env, { [NEARBY_APPROVAL_FLAG]: flag, [NEARBY_PUBLIC_APPROVAL_FLAG]: flag, [NEARBY_KEY_NAME]: KEY });
     app.seed("seoulAmosObservations", [app.amos("2", "15L", 13.8), app.amos("3", "16L", 13.2)]);
     app.seed("seoulNearbyStationObservations", [{ stationId: 508, obsTimeUtc: NOW - MINUTE, obsTimeLocal: "", tempC: 99, source: "kma_apihub_aws_minute", rawLine: "", firstSeenAt: NOW, updatedAt: NOW }]);
     app.seed("seoulNearbyCollectorStatus", [{ stationIcao: "RKSI", status: "ok", updatedAt: NOW, collectionRunId: "old" }]);
@@ -154,9 +297,11 @@ test("without approval nothing is queued, requested, written or read, and AMOS s
     assert.deepEqual(await app.call("collectLatest", { stationIcao: "RKSI", runId: "old" }), { status: "approval_required" });
     assert.deepEqual(app.requests, []);
     assert.equal(app.tables.seoulNearbyStationObservations.length, 1);
-    assert.deepEqual(await app.call("storeReadings", { stationIcao: "RKSI", runId: "old", rows: [{ stationId: 508, obsTimeUtc: NOW, obsTimeLocal: "", rawLine: "x", tempC: 1 }] }), { status: "approval_required", insertedCount: 0 });
+    for (const source of [NEARBY_SOURCE, NEARBY_PUBLIC_SOURCE]) {
+      assert.deepEqual(await app.call("storeReadings", { stationIcao: "RKSI", runId: "old", source, rows: [{ stationId: 508, obsTimeUtc: NOW, obsTimeLocal: "", rawLine: "x", tempC: 1 }] }), { status: "approval_required", insertedCount: 0 });
+      assert.deepEqual(await app.call("finishRun", { stationIcao: "RKSI", runId: "old", source, status: "error", lastAttemptAt: NOW, stations: [] }), { status: "approval_required", updated: false });
+    }
     assert.equal(app.tables.seoulNearbyStationObservations.length, 1);
-    assert.deepEqual(await app.call("finishRun", { stationIcao: "RKSI", runId: "old", status: "error", lastAttemptAt: NOW, stations: [] }), { status: "approval_required", updated: false });
     assert.equal(app.tables.seoulNearbyCollectorStatus[0].status, "ok");
     app.reads.length = 0;
     const dashboard = await app.call("getDashboard", { stationIcao: "RKSI", date: DATE });

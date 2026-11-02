@@ -6,8 +6,8 @@ Directly below the temperature chart, “Nearby live readings” puts RKSI in th
 middle and KMA's four nearest stations around it. It reads
 `seoulNearbyStations:getDashboard` on today's route only. The browser never calls
 KMA and never receives the key. Source, approval and collector details are in
-[seoul.md](./seoul.md#stations-around-the-airport--november-2-2026). KMA access is
-not approved yet, so the page shows the approval state, not station readings.
+[seoul.md](./seoul.md#stations-around-the-airport--november-2-2026). Neither KMA
+source is approved yet, so the page shows the approval state, not station readings.
 
 - **Map.** North up, with the same scale in every direction and rings at 5, 10 and
   15 km. Each marker sits at the station's true bearing and distance from `AIRPORT`
@@ -23,7 +23,10 @@ not approved yet, so the page shows the approval state, not station readings.
   so “from NW” points toward the SE. The panel says so under the map. Zero speed
   shows “Calm” with a ring and no direction. A missing part says so, and no arrow is
   drawn without a direction. Speeds are in knots: AMOS reports knots and KMA m/s.
-  Stations use the ten-minute average; AMOS does not state its period.
+  Stations use the ten-minute average; AMOS does not state its period. KMA's public
+  page names only one of 16 compass points, so with that source a station's text
+  gives the point with no degrees, and “About these readings” says its arrows are
+  accurate to 22.5° at best and names the page as the source without a licence claim.
 - **Raw only.** Nothing is blended, interpolated, adjusted for height or differenced
   against the airport. Wangsan carries a “134 m above RKSI” tag (“+134 m” on a phone)
   and a note under the map, because its sensor is 141 m up.

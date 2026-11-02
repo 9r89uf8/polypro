@@ -4,10 +4,12 @@
 
 The [around-the-airport panel](./seoul-pages.md#around-the-airport-panel--november-2-2026-kst)
 shows RKSI in the middle and KMA's four nearest stations at their true direction
-and distance. The collector, schema and schedules are built and tested behind a
-new approval flag. **It ships with the flag and key absent. No request has been made
-to the API and no station reading has been stored or shown.** The owner still has
-to choose the source and confirm approval.
+and distance. The collector, schema and schedules are built and tested with two
+sources, each behind its own approval flag: KMA API Hub, and, added on November 3 at
+the owner's request until a key is available, the JSON behind KMA's public
+observation page. **Both flags and the key are absent in production. No request has
+been made by the collector and no station reading has been stored or shown.**
+Setting a flag needs the owner's confirmation of KMA's approval.
 
 ### Stations, as checked
 
@@ -40,10 +42,12 @@ claim predictive value.
 
 ### Sources and what each needs
 
-The owner chooses the source; the collector is written for the first.
+The collector uses API Hub once its flag and key are both set, and otherwise the
+public page if that flag is set. The owner plans to get a key later, so collection
+moves to API Hub with no code change.
 
-**KMA API Hub `nph-aws2_min` (collector built, recommended).** Documented, keyed,
-1-minute AWS data:
+**KMA API Hub `nph-aws2_min` (collector built, the long-term source).** Documented,
+keyed, 1-minute AWS data:
 
 ```text
 GET https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min
@@ -57,6 +61,17 @@ GET https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min
   members, allows 20,000 calls and 5 GB a day, and treats keys as personal. Hub
   questions go to `kmadatahub@korea.kr`. KMA's specification also lists a 403
   for a key whose account has not applied for this API (활용신청).
+- Sign-up needs a Korean phone number, as read from the form on November 3. Step 2 of
+  the general-member form (`/joinForm.do`) requires a code sent by text to a number
+  in Korean format, has no country-code field, and will not submit without the code.
+  Its consent text lists the phone number as required, though the privacy page lists
+  only email, password and name. The FAQ and notices say nothing about overseas
+  users, and whether a foreign number can receive the code is untested. Articles 5(7)
+  and 11(1) bar applying with another person's information, which rules out a
+  borrowed or rented line, so the route to try is asking `kmadatahub@korea.kr`.
+- [The FAQ](https://apihub.kma.go.kr/faqList.do) says Hub data is Public Nuri Type 1,
+  so commercial use is allowed with attribution, and that the API cannot be called
+  without signing up.
 - [API Hub terms](https://apihub.kma.go.kr/policy.do) (effective February 6, 2023)
   leave questions the licence does not settle. Article 11(5) item 12 bars automated
   programs and periodic or continuous connections that overload KMA's systems, in
@@ -72,59 +87,87 @@ GET https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min
   marks third-party rights. It is another route to similar data, and it conflicts
   with the Type 1 listing unless KMA says otherwise.
 
-**KMA's public observation JSON (no collector).**
+**KMA's public observation JSON (collector built, behind its own flag).**
 `https://www.weather.go.kr/w/observation/land/aws-obs-data.do?db=MINDB_01M&tm=&stnId=0&sidoCode=2800000000&sort=&config=full`
-needs no key and carries `awsTmp`, `awsWd10` and `awsWs10`, but it is undocumented
-and shows no licence mark. It gives direction as a 16-point compass word rather than
-the degrees the API specification lists. Its newest row was 6 minutes old on the
-second viewing, in line with the 5–6 minutes behind AMOS in the
-[earlier comparison](#kma-weather-station-113-json). KMA's
+needs no key, and one request returns the newest minute for all 26 Incheon stations,
+including these four. It is undocumented and shows no licence mark, and reaching it
+is not approval. KMA's
 [copyright policy](https://www.kma.go.kr/kmadev/guide/copyright.jsp) requires prior
 consultation for unmarked material, and permits plain viewing. The contacts are
 `webmasterkma@korea.kr` and the Information and Communications Technology Division,
 02-2181-0432. Recheck both contacts before writing, because they can change.
+
+The parser reads `tm`, `awsStnId`, `awsTmp`, `awsWd10` and `awsWs10`, and requires a
+top-level `windUnit` of `m/s`. As seen on November 3, numbers are text and direction
+is one of 16 Korean compass words rather than the degrees the API specification
+lists. A direction is stored as the point (`windDirCompass`) and its centre in
+degrees, so arrows are accurate to 22.5° at best and the panel prints no degrees. A
+row with a non-empty `awsTroblKnd` is dropped, because that flag's values are not
+published. It was empty on every row that day, so whether it fires only for the
+reported element is unknown.
+
+Not established: how `awsTmp` is averaged; whether `tm`, which was the same on every
+row, is each station's own time or the page's; what a station that stops reporting
+looks like; and whether KMA's server answers Convex, because the page has only been
+read from a browser. Its newest row was 6 minutes old on one viewing, in line with
+the 5–6 minutes behind AMOS in the
+[earlier comparison](#kma-weather-station-113-json), so readings arrive well after
+the airport's.
 
 ### Approval
 
 ```text
 KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED=true
 KMA_APIHUB_AUTH_KEY=<the owner's key>
+KMA_PUBLIC_AWS_PAGE_ACCESS_APPROVED=true
 ```
 
 Only the exact string `true` approves. A missing, empty, `false` or different
-value fails closed, and a key alone enables nothing. The approving authority is
-KMA (`kmadatahub@korea.kr`, National Climate Data Center). The scope to confirm is
-automated polling of four stations every minute (5,760 calls a day), 48-hour
-storage, and display on this public page used for trading decisions, given the
-terms and listings above. Set the flag only after the owner confirms this.
-No approval evidence or key belongs in this repository. A KMA fallback is not
-built, and any other source needs its own gate. Code is deployed with both values
-absent. Convex goes first, because the page's query has no error boundary and
-today's whole page fails if the function is missing:
+value fails closed, and a key alone enables nothing. Each flag covers only its own
+source. The approving authority is KMA for both:
+
+- **API Hub** (`kmadatahub@korea.kr`, National Climate Data Center). The scope to
+  confirm is automated polling of four stations every minute (5,760 calls a day),
+  48-hour storage, and display on this public page used for trading decisions, given
+  the terms and listings above.
+- **Public page** (`webmasterkma@korea.kr`, Information and Communications Technology
+  Division). The scope to confirm is reading this JSON automatically once a minute
+  (1,440 requests a day), 48-hour storage, and display with attribution on the same
+  page.
+
+Set a flag only after the owner confirms this. No approval evidence or key belongs
+in this repository. Code is deployed with all three values absent. Convex goes
+first, because the page's query has no error boundary and today's whole page fails
+if the function is missing:
 
 ```text
 npx convex env set KMA_APIHUB_AUTH_KEY <key> --deployment-name striped-chipmunk-763
 npx convex env set KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED true --deployment-name striped-chipmunk-763
 npx convex env remove KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED --deployment-name striped-chipmunk-763
+npx convex env set KMA_PUBLIC_AWS_PAGE_ACCESS_APPROVED true --deployment-name striped-chipmunk-763
+npx convex env remove KMA_PUBLIC_AWS_PAGE_ACCESS_APPROVED --deployment-name striped-chipmunk-763
 ```
 
-While the flag is absent, the queue returns `approval_required` without writing or
-scheduling, the worker makes no request, the storage mutations write nothing, and
+While both flags are absent, the queue returns `approval_required` without writing
+or scheduling, the worker makes no request, the storage mutations write nothing, and
 the query returns no station reading or collector state without reading those
-tables. The airport's AMOS readings are not gated and stay visible. Removing the
-flag stops new work and hides stored rows; the running worker rechecks it through a
-fresh query immediately before its requests, and the storage mutations check again
-after them. With the flag set but no key, the panel says `setup required`.
+tables. The airport's AMOS readings are not gated and stay visible. Removing a flag
+stops new work from that source and hides its stored rows; the running worker
+rechecks through a fresh query immediately before its requests, and the storage
+mutations check that source's flag again after them. A change of source can show
+`No reading` until the new source's first row. With only API Hub's flag set and no
+key, the panel says `setup required`.
 
 Protected entry points, all in `convex/seoulNearbyStations.js`:
 `queueScheduledRefresh` (cron), `collectionAccess` and `collectLatest` (worker),
 `storeReadings` and `finishRun` (writes), and `getDashboard` (public read). There
 is no manual or browser-triggered collection. `pruneExpired` only deletes and runs
-regardless. Behaviour with the flag absent is tested by
+regardless. Behaviour with the flags absent is tested by
 `test/seoul-nearby-stations-backend.test.mjs`; verify it again in production after
-deploying and before activation. Tests cover the main flag-on path but not yet lock
-expiry, the redirect and timeout options, or a run where only some stations return
-rows. Add those before activation.
+deploying and before activation. Tests cover the main flag-on path for both sources
+and a public-page run missing some stations, but not yet lock expiry, the redirect
+and timeout options, or an API Hub run where only some stations return rows. Add
+those before activation.
 
 ### Collector
 
@@ -135,6 +178,11 @@ a lagging feed is still stored and a missed poll is filled in. It makes 5,760 ca
 a day against the 20,000 limit. Requests run in parallel with a ten-second timeout
 and no redirects. Errors stored or shown never include the key. The poll second is
 not tuned: choose one from measured `firstSeenAt` delay.
+
+On the public page the worker makes one request per run instead of one per station,
+1,440 a day, with the same timeout and no redirects. A failure counts for all four
+stations. It returns only the newest minute, so a missed poll is not filled in, and
+an unchanged minute writes nothing.
 
 `convex/lib/seoulNearbyStations.js` parses the response by its header names, from
 [KMA's specification](https://apihub.kma.go.kr/getAttachFile.do?fileName=AWS%EB%A7%A4%EB%B6%84%EC%9E%90%EB%A3%8C%EC%A1%B0%ED%9A%8C_API%EB%AA%85%EC%84%B8%EC%84%9C.pdf).
@@ -152,13 +200,15 @@ with synthetic values; no live response has been parsed.
 ### Schema and schedule
 
 - `seoulNearbyStationObservations`: one row per station and observation minute, with
-  `tempC`, `windDirDeg`, `windSpeedMs`, the raw line, immutable `firstSeenAt` and
-  `updatedAt`. A revised minute keeps its `firstSeenAt`. Indexes `by_station_obs_ts`
-  and `by_obs_ts`. Rows older than 48 hours are deleted on each write and by
-  `seoul_nearby_stations_retention` (hourly at `:27`).
+  `tempC`, `windDirDeg`, `windDirCompass` (public page only), `windSpeedMs`, `source`,
+  the raw line or the fields read, immutable `firstSeenAt` and `updatedAt`. A revised
+  minute keeps its `firstSeenAt`. Indexes `by_station_obs_ts` and `by_obs_ts`. Rows
+  older than 48 hours are deleted on each write and by
+  `seoul_nearby_stations_retention` (hourly at `:27`). The query reads a station's 12
+  newest rows and shows the first from an approved source.
 - `seoulNearbyCollectorStatus`: one row with the run lock, last attempt and success,
-  per-station results, an error code and a bounded error. The public query returns
-  only the status, the times and the code.
+  the last run's source, per-station results, an error code and a bounded error. The
+  public query returns the active source, the status, the times and the code.
 
 The airport row comes from `seoulAmosObservations`, picking the 15L and 16L rows by
 the chart's rule: the newest minute with a temperature, one-minute rows over

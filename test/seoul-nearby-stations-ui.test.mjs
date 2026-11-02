@@ -41,6 +41,18 @@ test("calm and missing wind never draw a direction", () => {
   assert.equal(describeWind({ dirDeg: 90 }).arrowDeg, 270);
 });
 
+test("a compass-only source draws the arrow but claims no degrees", () => {
+  const wind = describeWind({ dirDeg: 157.5, compass: "SSE", speedMs: 1.8 });
+  assert.deepEqual([wind.kind, wind.arrowDeg, wind.short, wind.detail], ["wind", 337.5, "from SSE 3 kt", "from SSE · 3 kt (1.8 m/s)"]);
+  assert.equal(describeWind({ dirDeg: 157.5, compass: "SSE" }).detail, "from SSE, speed not reported");
+  assert.equal(describeWind({ dirDeg: 157.5, compass: "SSE", speedMs: 0 }).short, "Calm");
+  const reading = { obsTimeUtc: NOW - MINUTE, tempC: 9.7, windDirDeg: 135, windDirCompass: "SE", windSpeedMs: 1.3 };
+  const state = buildNearbyState(dashboard({ source: "kma_public_aws_page", stations: [station(543, "Yeongjong-do", 26, 10.5, 66, reading)] }), NOW, LIVE);
+  assert.equal(state.usesPublicPage, true);
+  assert.deepEqual([state.stations[0].temperature, state.stations[0].wind.detail], ["9.7°", "from SE · 3 kt (1.3 m/s)"]);
+  assert.equal(buildNearbyState(dashboard(), NOW, LIVE).usesPublicPage, false);
+});
+
 test("stations sit at their true bearing on one scale", () => {
   const north = mapOffset({ distanceKm: MAP_SPAN_KM, bearingDeg: 0 });
   assert.ok(Math.abs(north.x) < 1e-9 && Math.abs(north.y + 1) < 1e-9);
@@ -127,5 +139,6 @@ test("the page subscribes on today only and says which way arrows point", () => 
   const panel = readFileSync(new URL("../app/seoul/day/[date]/NearbyStations.js", import.meta.url), "utf8");
   assert.match(panel, /Arrows show where the air is going/);
   assert.match(panel, /Korea Meteorological Administration/);
+  assert.match(panel, /usesPublicPage \? "AWS readings on its public observation page/);
   assert.doesNotMatch(panel, /apihub\.kma\.go\.kr|authKey/);
 });
