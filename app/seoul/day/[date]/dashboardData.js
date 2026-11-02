@@ -1,4 +1,5 @@
 import { formatSeoulTime } from "./displayTime.js";
+import { skyPercentRange } from "./providerForecastState.js";
 
 const MINUTE_MS = 60_000;
 const KST_OFFSET_MS = 9 * 60 * MINUTE_MS;
@@ -134,7 +135,7 @@ export function summarizeForecast(dashboard, date, nowMs) {
   for (const row of rawHourly) {
     const time = finite(row?.forecastTimeUtc) ?? fromLocalTimestamp(row?.forecastTimeLocal);
     if (!onDate(row, time, date) || (row?.date && row.date !== date) || finite(row?.tempC) === null) continue;
-    byTime.set(time, { time, minute: seoulMinute(time), tempC: row.tempC });
+    byTime.set(time, { time, minute: seoulMinute(time), tempC: row.tempC, phrase: row.phrase ?? null });
   }
   const hourly = [...byTime.values()].sort((left, right) => left.time - right.time);
   const hourlyPeakC = hourly.length ? Math.max(...hourly.map((row) => row.tempC)) : null;
@@ -173,14 +174,14 @@ function observedTokens(rawMetar) {
 
 function skyCondition(rawMetar) {
   const tokens = observedTokens(rawMetar);
-  const unknown = (label, detail) => ({ label, detail, min: null, max: null, signature: null });
+  const unknown = (code, label, detail) => ({ code, amount: code, label, detail, min: null, max: null, signature: null });
   const verticalVisibility = tokens.find((token) => /^VV(?:\d{3}|\/\/\/)$/.test(token));
-  if (verticalVisibility) return unknown("Sky obscured", "Vertical visibility reported; cloud cover cannot be quantified.");
+  if (verticalVisibility) return unknown("VV", "Sky obscured", "Vertical visibility reported; cloud cover cannot be quantified.");
   // These describe operational significance or detection, not total sky cover.
-  if (tokens.includes("CAVOK")) return unknown("No significant cloud", "CAVOK: good visibility and no significant low cloud. Total cloud cover is not specified.");
-  if (tokens.includes("NSC")) return unknown("No significant cloud", "NSC does not specify total cloud cover.");
-  if (tokens.includes("NCD")) return unknown("No cloud detected", "NCD does not specify total cloud cover.");
-  if (tokens.includes("CLR")) return unknown("No cloud detected", "CLR describes the automated sensor's detection range, not total cloud cover.");
+  if (tokens.includes("CAVOK")) return unknown("CAVOK", "No significant cloud", "CAVOK: good visibility and no significant low cloud. Total cloud cover is not specified.");
+  if (tokens.includes("NSC")) return unknown("NSC", "No significant cloud", "NSC does not specify total cloud cover.");
+  if (tokens.includes("NCD")) return unknown("NCD", "No cloud detected", "NCD does not specify total cloud cover.");
+  if (tokens.includes("CLR")) return unknown("CLR", "No cloud detected", "CLR describes the automated sensor's detection range, not total cloud cover.");
   const layers = tokens.map((token) => /^(FEW|SCT|BKN|OVC)(\d{3}|\/\/\/)(?:CB|TCU)?$/.exec(token))
     .filter(Boolean).map((match) => ({ ...CLOUD_AMOUNTS[match[1]], amount: match[1], token: match[0] }));
   if (layers.length) {
@@ -190,6 +191,8 @@ function skyCondition(rawMetar) {
     const max = Math.min(8, layers.reduce((total, layer) => total + layer.max, 0));
     const amount = min === max ? `${min}/8` : `${min}–${max}/8`;
     return {
+      code: layers.map((layer) => layer.token).join(" "),
+      amount: primary.amount,
       label: primary.label,
       detail: `${layers.map((layer) => layer.token).join(" · ")}. ${layers.length > 1 ? "Combined reported layers" : "Reported cloud amount"}: ${amount} of the sky.`,
       min,
@@ -197,8 +200,227 @@ function skyCondition(rawMetar) {
       signature: layers.length === 1 ? layers[0].amount : null,
     };
   }
-  if (tokens.includes("SKC")) return { label: "Clear sky", detail: "SKC: no cloud reported.", min: 0, max: 0, signature: "SKC" };
-  return unknown("Cloud cover unavailable", "The latest report has no usable cloud-cover observation.");
+  if (tokens.includes("SKC")) return { code: "SKC", amount: "SKC", label: "Clear sky", detail: "SKC: no cloud reported.", min: 0, max: 0, signature: "SKC" };
+  return unknown("", "Cloud cover unavailable", "The latest report has no usable cloud-cover observation.");
+}
+
+const PRECIPITATION_WORDS = { DZ: "drizzle", RA: "rain", SN: "snow", SG: "snow grains", PL: "ice pellets", GR: "hail", GS: "small hail", IC: "ice crystals", UP: "precipitation" };
+const OTHER_WEATHER_WORDS = {
+  TS: "Thunderstorm", BR: "Mist", FG: "Fog", PRFG: "Partial fog", BCFG: "Fog patches", MIFG: "Shallow fog", FZFG: "Freezing fog",
+  HZ: "Haze", FU: "Smoke", DU: "Dust", SA: "Sand", VA: "Volcanic ash", BLDU: "Blowing dust", BLSA: "Blowing sand", BLSN: "Blowing snow",
+  PO: "Dust whirls", SQ: "Squalls", FC: "Funnel cloud", "+FC": "Tornado or waterspout", DS: "Duststorm", "+DS": "Heavy duststorm", SS: "Sandstorm", "+SS": "Heavy sandstorm",
+};
+
+/** Weather at the airport in a report's observed groups. Vicinity (VC) and recent (RE) weather do not count. */
+function presentWeather(rawMetar) {
+  const precipitation = [], other = [];
+  for (const token of observedTokens(rawMetar)) {
+    const match = /^([+-]?)(SH|TS|FZ)?((?:DZ|RA|SN|SG|PL|GR|GS|IC|UP)+)$/.exec(token);
+    if (match) {
+      const kinds = match[3].match(/../g).map((code) => PRECIPITATION_WORDS[code]).join(" and ");
+      // METAR's intensity describes the precipitation, not the thunderstorm.
+      const intensity = { "-": "light ", "+": "heavy " }[match[1]] ?? "";
+      const label = match[2] === "TS" ? `thunderstorm with ${intensity}${kinds}`
+        : `${intensity}${match[2] === "SH" ? `${kinds} showers` : match[2] === "FZ" ? `freezing ${kinds}` : kinds}`;
+      precipitation.push({ label, thunder: match[2] === "TS", frozen: /SN|SG|PL|GR|GS|IC/.test(match[3]) });
+    } else if (OTHER_WEATHER_WORDS[token]) {
+      other.push(OTHER_WEATHER_WORDS[token]);
+    }
+  }
+  return { precipitation, other };
+}
+
+const GAUGE_GAP_MINUTES = 15;
+
+/**
+ * Rain per KST hour from the AMOS `rn` value on the 15L row. It is a running total: the 00:00 row still holds yesterday's,
+ * and it falls to zero at 00:01, so only rises count. A rise across a gap in the rows cannot be placed in one hour, so it
+ * says since when.
+ */
+function gaugeRainByHour(rows, date, nowMs) {
+  const byTime = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const time = observationTime(row);
+    if (!onDate(row, time, date) || finite(row?.precipMm) === null || String(row?.rwyNo) !== "2" || row?.rwyDir !== "15L") continue;
+    if (finite(nowMs) === null || time <= nowMs) byTime.set(time, row.precipMm);
+  }
+  const hours = Array.from({ length: 24 }, () => ({ mm: null, since: null }));
+  let previous = { time: null, minute: 0, total: 0 };
+  for (const [time, total] of [...byTime].sort(([left], [right]) => left - right)) {
+    const minute = seoulMinute(time);
+    if (minute < 1) continue;
+    const hour = Math.floor(minute / 60);
+    const rise = total > previous.total ? total - previous.total : 0;
+    hours[hour].mm = (hours[hour].mm ?? 0) + rise;
+    if (rise > 0 && hour > Math.floor(previous.minute / 60) && minute - previous.minute > GAUGE_GAP_MINUTES) {
+      hours[hour].since = previous.time === null ? "midnight" : localTime(previous.time);
+    }
+    previous = { time, minute, total };
+  }
+  return hours.map(({ mm, since }) => ({ mm: mm === null ? null : Math.round(mm * 10) / 10, since }));
+}
+
+const RKSI_POSITION = { latitude: 37.4602, longitude: 126.4407 };
+const radians = (degrees) => (degrees * Math.PI) / 180;
+
+/** Sunrise and sunset at RKSI as KST minutes of the day, from NOAA's solar equations: calculated, not observed. */
+function sunTimes(date) {
+  const year = Number(date.slice(0, 4));
+  const midnight = Date.UTC(year, Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)));
+  if (!Number.isFinite(midnight)) return null;
+  const angle = (2 * Math.PI * (midnight - Date.UTC(year, 0, 1))) / (Date.UTC(year + 1, 0, 1) - Date.UTC(year, 0, 1));
+  const equationOfTime = 229.18 * (0.000075 + 0.001868 * Math.cos(angle) - 0.032077 * Math.sin(angle) - 0.014615 * Math.cos(2 * angle) - 0.040849 * Math.sin(2 * angle));
+  const declination = 0.006918 - 0.399912 * Math.cos(angle) + 0.070257 * Math.sin(angle) - 0.006758 * Math.cos(2 * angle) + 0.000907 * Math.sin(2 * angle) - 0.002697 * Math.cos(3 * angle) + 0.00148 * Math.sin(3 * angle);
+  const latitude = radians(RKSI_POSITION.latitude);
+  const hourAngle = (Math.acos(Math.cos(radians(90.833)) / (Math.cos(latitude) * Math.cos(declination)) - Math.tan(latitude) * Math.tan(declination)) * 180) / Math.PI;
+  const kstMinute = (sign) => 720 - 4 * (RKSI_POSITION.longitude + sign * hourAngle) - equationOfTime + 540;
+  return { sunriseMinute: kstMinute(1), sunsetMinute: kstMinute(-1) };
+}
+
+const REPORTED_SKY_ICON = { OVC: "overcast", BKN: "mostly", SCT: "partly", FEW: "few", SKC: "clear", CAVOK: "nosig", NSC: "nosig", NCD: "nosig", CLR: "nosig", VV: "fog" };
+const WET_WORDS = /rain|shower|drizzle|thunder|t-?storm|snow|sleet|flurr|hail|wintry/i;
+
+function forecastSkyIcon(words) {
+  const text = String(words ?? "").toLowerCase();
+  if (/thunder|t-?storm/.test(text)) return "thunder";
+  if (/snow|sleet|flurr|hail|wintry/.test(text)) return "snow";
+  if (/rain|shower|drizzle/.test(text)) return "rain";
+  if (/fog|mist|haze|smoke|dust/.test(text)) return "fog";
+  if (/mostly cloudy/.test(text)) return "mostly";
+  if (/partly|scattered|clouds/.test(text)) return "partly";
+  if (/cloudy|overcast/.test(text)) return "overcast";
+  if (/mostly (?:clear|sunny)|fair/.test(text)) return "few";
+  if (/clear|sunny/.test(text)) return "clear";
+  return "unknown";
+}
+
+const captureDay = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Seoul", month: "short", day: "numeric" });
+
+function captureLabel(time, date) {
+  if (finite(time) === null) return "capture time unknown";
+  return seoulDate(time) === date ? localTime(time) : `${captureDay.format(time)}, ${localTime(time)}`;
+}
+
+function observedSkyHour(reports, gauge) {
+  const latest = reports.at(-1) ?? null;
+  const sky = skyCondition(latest?.row.rawMetar);
+  const weather = reports.map(({ row, time }) => ({ time, ...presentWeather(row.rawMetar) }));
+  const wetReports = weather.filter((item) => item.precipitation.length);
+  const wet = wetReports.flatMap((item) => item.precipitation);
+  // Fog and haze follow the latest report, like the cloud text. Like rain, a thunderstorm counts from any report in the hour.
+  const otherWeather = weather.at(-1)?.other ?? [];
+  const thunderReports = weather.filter((item) => item.other.includes("Thunderstorm"));
+  const earlierThunder = thunderReports.length && !otherWeather.includes("Thunderstorm") ? `Thunderstorm at ${thunderReports.map(({ time }) => localTime(time)).join(", ")}` : null;
+  const range = skyPercentRange({ minOktas: sky.min, maxOktas: sky.max });
+  const rainWords = [...new Set(wet.map((item) => item.label))].join(", ");
+  const rainLabel = rainWords ? rainWords[0].toUpperCase() + rainWords.slice(1) : gauge.mm > 0 ? "Rain in gauge" : null;
+  return {
+    kind: "observed",
+    icon: thunderReports.length || wet.some((item) => item.thunder) ? "thunder" : wet.some((item) => item.frozen) ? "snow" : wet.length ? "rain"
+      : otherWeather.some((word) => /fog/i.test(word)) ? "fog" : REPORTED_SKY_ICON[sky.amount] ?? "unknown",
+    cloudText: sky.amount,
+    coverPct: range ? (range[0] + range[1]) / 2 : null,
+    skyLabel: sky.label,
+    skyDetail: [
+      sky.code,
+      range ? `${sky.min === sky.max ? sky.min : `${sky.min}–${sky.max}`}/8` : latest ? "total cover not reported" : null,
+      earlierThunder,
+      ...otherWeather,
+      latest ? `METAR ${localTime(latest.time)}` : "No METAR this hour",
+    ].filter(Boolean).join(" · "),
+    rain: {
+      state: rainLabel ? "wet" : "dry",
+      mm: gauge.mm,
+      label: rainLabel ?? "None reported",
+      detail: [
+        gauge.mm === null ? "Gauge unavailable" : `${gauge.mm} mm${gauge.since ? ` since ${gauge.since}` : ""} · AMOS gauge`,
+        wetReports.length ? `METAR ${wetReports.map(({ time }) => localTime(time)).join(", ")}` : null,
+      ].filter(Boolean).join(" · "),
+    },
+  };
+}
+
+function forecastSkyHour(kma, weathercom, kmaCapturedAt, date) {
+  const kmaWords = typeof kma?.phrase === "string" && kma.phrase.trim() ? kma.phrase.trim() : null;
+  const weathercomWords = typeof weathercom?.latestPhrase === "string" && weathercom.latestPhrase.trim() ? weathercom.latestPhrase.trim() : null;
+  const cloud = finite(weathercom?.latestCloudCoverPct);
+  const cloudPct = cloud !== null && cloud >= 0 && cloud <= 100 ? cloud : null;
+  const hasKma = kmaWords !== null, hasWeathercom = weathercomWords !== null || cloudPct !== null;
+  if (!hasKma && !hasWeathercom) return null;
+  const kmaSource = `KMA, captured ${captureLabel(kmaCapturedAt, date)}`;
+  const weathercomSource = `Weather.com${cloudPct === null ? "" : ` ${Math.round(cloudPct)}% cloud`}${weathercomWords && weathercomWords !== kmaWords && hasKma ? `, ${weathercomWords}` : ""}, captured ${captureLabel(finite(weathercom?.latestCapturedAt), date)}`;
+  const wetSources = [WET_WORDS.test(kmaWords ?? "") ? "KMA" : null, WET_WORDS.test(weathercomWords ?? "") ? "Weather.com" : null].filter(Boolean);
+  const wordSources = [hasKma ? "KMA" : null, weathercomWords ? "Weather.com" : null].filter(Boolean);
+  return {
+    kind: "forecast",
+    skySource: wordSources[0] ?? null,
+    usesWeathercom: hasWeathercom,
+    icon: forecastSkyIcon(kmaWords ?? weathercomWords),
+    cloudText: cloudPct === null ? "" : `${Math.round(cloudPct)}%`,
+    coverPct: cloudPct,
+    skyLabel: kmaWords ?? weathercomWords ?? "Sky words not given",
+    skyDetail: [hasKma ? kmaSource : null, hasWeathercom ? weathercomSource : null].filter(Boolean).join(" · "),
+    rain: {
+      state: wetSources.length ? "wet" : "dry",
+      mm: null,
+      label: wetSources.includes("KMA") ? kmaWords : wetSources.length ? weathercomWords : wordSources.length ? "None forecast" : "—",
+      detail: `${wetSources.length ? `In ${wetSources.join(" and ")} words` : wordSources.length ? `Not in ${wordSources.join(" or ")} words` : "No forecast words"} · no chance % stored`,
+    },
+  };
+}
+
+/** Names the sources the forecast hours actually use: KMA's words can be missing from most of a day's columns. */
+function forecastSourceLabel(rows) {
+  const sky = ["KMA", "Weather.com"].filter((name) => rows.some((row) => row.skySource === name));
+  const cloud = rows.some((row) => row.coverPct !== null);
+  if (cloud && sky.length === 1 && sky[0] === "Weather.com") return "Weather.com sky and cloud %";
+  return [sky.length ? `${sky.join(" and ")} sky` : null, cloud ? "Weather.com cloud %" : null].filter(Boolean).join(", ");
+}
+
+/**
+ * The chart's 24 hour columns. Hours already reported are observed; only later hours are forecast, and a past hour with
+ * neither a report nor a gauge reading stays empty. Forecast cloud percentages come from Weather.com alone: KMA publishes
+ * words, and no stored forecast has a rain chance, so neither is derived here.
+ */
+export function buildHourlySky({ day, forecast, weathercom, date, now }) {
+  const nowMs = finite(now);
+  const today = seoulDate(nowMs);
+  const sun = sunTimes(date);
+  const loading = forecast?.status === "loading";
+  const reportsByHour = Array.from({ length: 24 }, () => []);
+  // Routine reports only, by their :00/:30 slot, because the station file does not mark SPECIs reliably.
+  for (const report of officialRows(day?.rows, date, false)) {
+    const minute = seoulMinute(report.time);
+    if (minute % 30 === 0 && (nowMs === null || report.time <= nowMs)) reportsByHour[Math.floor(minute / 60)].push(report);
+  }
+  const rain = gaugeRainByHour(day?.amosRows, date, nowMs);
+  const atHour = (rows, timeOf) => new Map((Array.isArray(rows) ? rows : []).filter((row) => seoulDate(finite(timeOf(row))) === date).map((row) => [Math.floor(seoulMinute(timeOf(row)) / 60), row]));
+  const kmaByHour = atHour(forecast?.hourly, (row) => row?.time);
+  const weathercomByHour = atHour(weathercom?.points, (row) => row?.forecastTimeUtc);
+  const currentHour = today === date ? Math.floor(seoulMinute(nowMs) / 60) : null;
+  const hours = Array.from({ length: 24 }, (_, hour) => {
+    const centre = hour * 60 + 30;
+    const base = { hour, isDay: sun ? centre >= sun.sunriseMinute && centre < sun.sunsetMinute : true };
+    const upcoming = today !== null && (date > today || (date === today && hour >= currentHour));
+    if (reportsByHour[hour].length || (today !== null && !upcoming && rain[hour].mm !== null)) return { ...base, ...observedSkyHour(reportsByHour[hour], rain[hour]) };
+    const predicted = upcoming ? forecastSkyHour(kmaByHour.get(hour), weathercomByHour.get(hour), forecast?.capturedAt, date) : null;
+    const missing = !upcoming ? "No report" : loading ? "Loading forecast" : "No forecast";
+    return predicted ? { ...base, ...predicted } : {
+      ...base, kind: "none", icon: null, cloudText: "", coverPct: null, skyLabel: missing, skyDetail: "",
+      rain: { state: "none", mm: null, label: missing, detail: "" },
+    };
+  });
+  const lastObserved = hours.findLast((row) => row.kind === "observed")?.hour ?? null;
+  const firstForecast = hours.find((row) => row.kind === "forecast")?.hour ?? null;
+  return {
+    hours,
+    loading,
+    sunriseMinute: sun?.sunriseMinute ?? null,
+    sunsetMinute: sun?.sunsetMinute ?? null,
+    observedEndHour: lastObserved === null ? null : lastObserved + 1,
+    forecastStartHour: firstForecast,
+    forecastSources: forecastSourceLabel(hours.filter((row) => row.kind === "forecast")),
+  };
 }
 
 export function summarizeClouds(metarRows, date, nowMs, isToday) {

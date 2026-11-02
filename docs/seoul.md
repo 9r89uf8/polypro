@@ -1039,6 +1039,14 @@ strongest threshold decision. This is the same source hierarchy used by the
 Wellington research: an official aviation source stays canonical while
 Weather.com remains an unofficial helper.
 
+The one display exception is the day page's
+[hourly sky strip](./seoul-pages.md#hourly-sky-and-rain-strip--november-2-2026-kst).
+It shows Weather.com's cloud percentage beside KMA words, prints its differing
+words in the readout, uses its words for the icon and label in an hour with no
+KMA row, and lets its words raise the dashed rain pill in any forecast hour,
+always named as Weather.com in the readout. It never supplies a temperature,
+daily high, peak time or ceiling.
+
 ### Remaining-temperature ceiling v2
 
 The current deterministic decision model is
@@ -1375,7 +1383,8 @@ contacting AMO. A worker already queued when approval is revoked records only
 the metadata-only `approval_required` attempt and stores no daily or hourly
 forecast rows. The UI says approval or setup is required. Observed AMOS and
 METAR values remain visible, but every KMA forecast field is unavailable;
-Weather.com does not silently replace it.
+Weather.com does not replace any of them, apart from the sky words and cloud
+percentage in the hourly strip, which stay named as Weather.com.
 
 Manual and scheduled requests share a ten-minute minimum interval and a
 15-minute stale-lock timeout in the singleton
@@ -1548,6 +1557,15 @@ Example fields:
 tm_fc, rwy_dir, rwy_use, rwy_main, temp, dewpoint,
 qnh_hpa, qnh_inhg, wd_avg, ws_avg, mor, rvr, rn
 ```
+
+`rn` (stored as `precipMm`) is a running daily rainfall total in millimetres, not
+a rate. The 00:00 KST row still holds the previous day's total, and the value
+falls to zero at 00:01. In the stored rows from October 26 to November 2, 2026
+that was the only decrease, and each day's rises added up to its last reading.
+The day page's hourly strip adds up the rises within each hour, and it labels
+past hours from METAR and this gauge and later hours from KMA and Weather.com,
+naming whichever of those two the shown hours use
+([page details](./seoul-pages.md#hourly-sky-and-rain-strip--november-2-2026-kst)).
 
 This endpoint is queried by both `pollLatestAmosTemperatureSites` and
 `pollLatestAmosRunways` in [`convex/seoul.js`](../convex/seoul.js). The targeted

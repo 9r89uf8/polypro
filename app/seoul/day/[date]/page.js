@@ -10,7 +10,7 @@ import ProviderForecasts from "./ProviderForecasts";
 import MarketChart from "./MarketChart";
 import { buildForecastHistory, buildMarketHistory } from "./historyData";
 import { formatDayMinute, formatSeoulTime } from "./displayTime";
-import { buildTemperatureSeries, summarizeClouds, summarizeForecast, summarizeSatelliteCloudTrend, summarizeSeoulMarket, summarizeSunlight } from "./dashboardData";
+import { buildHourlySky, buildTemperatureSeries, summarizeClouds, summarizeForecast, summarizeSatelliteCloudTrend, summarizeSeoulMarket, summarizeSunlight } from "./dashboardData";
 import styles from "./dashboard.module.css";
 
 const STATION = { stationIcao: "RKSI" };
@@ -145,6 +145,7 @@ export default function SeoulDayPage() {
   const refreshForecast = useMutation("seoulKmaForecast:requestAirportForecastRefresh");
   const series = useMemo(() => buildTemperatureSeries(day, date), [day, date]);
   const forecast = useMemo(() => summarizeForecast(forecastDashboard, date, now), [forecastDashboard, date, now]);
+  const hourlySky = useMemo(() => buildHourlySky({ day, forecast, weathercom: forecastDashboard?.weathercomHourlyDiagnostics, date, now }), [day, forecast, forecastDashboard, date, now]);
   const cloudRows = day?.rows ?? EMPTY_ROWS;
   const clouds = useMemo(() => summarizeClouds(cloudRows, date, now, isToday), [cloudRows, date, now, isToday]);
   const sunlight = useMemo(() => summarizeSunlight(solarDashboard, date, now, isToday), [solarDashboard, date, now, isToday]);
@@ -215,9 +216,9 @@ export default function SeoulDayPage() {
       </article>
     </section>
     <section className={styles.chartCard} aria-labelledby="temperature-heading">
-      <div className={styles.chartHeader}><div><span className={styles.eyebrow}>THE DAY AT A GLANCE</span><h2 id="temperature-heading">Temperature through the day</h2><p>One-minute readings, official reports, and the KMA forecast.</p></div><div className={styles.currentReading}><span>{isToday ? "Current temperature" : "Latest stored reading"}</span><strong>{temperature(series.latestAmos?.tempC, true)}{series.latestAmos ? <small>C</small> : null}</strong><span className={amosStale ? styles.stale : ""}>{series.latestAmos ? `${timeLabel(series.latestAmos.time)} KST${amosStale ? " · delayed" : " · AMOS 15L"}` : "Awaiting AMOS"}</span></div></div>
-      {day === undefined ? <div className={styles.chartLoading} role="status">Loading the day’s temperatures…</div> : <TemperatureChart amos={series.amos} metar={series.metar} forecast={forecast.hourly} date={date} isToday={isToday} nowMinute={nowMinute} />}
-      <div className={styles.chartFooter}><span>All times are Seoul time (KST). AMOS reads to 0.1°C; METAR reports whole degrees.{["stale", "error"].includes(forecast.status) && forecast.hourly.length ? " Dashed forecast is retained from an older capture." : ""}</span><span>{isToday ? "Updates automatically every minute" : "Available stored history"}</span></div>
+      <div className={styles.chartHeader}><div><span className={styles.eyebrow}>THE DAY AT A GLANCE</span><h2 id="temperature-heading">Temperature through the day</h2><p>One-minute readings, official reports, the KMA forecast, and hourly sky and rain.</p></div><div className={styles.currentReading}><span>{isToday ? "Current temperature" : "Latest stored reading"}</span><strong>{temperature(series.latestAmos?.tempC, true)}{series.latestAmos ? <small>C</small> : null}</strong><span className={amosStale ? styles.stale : ""}>{series.latestAmos ? `${timeLabel(series.latestAmos.time)} KST${amosStale ? " · delayed" : " · AMOS 15L"}` : "Awaiting AMOS"}</span></div></div>
+      {day === undefined ? <div className={styles.chartLoading} role="status">Loading the day’s temperatures…</div> : <TemperatureChart amos={series.amos} metar={series.metar} forecast={forecast.hourly} sky={hourlySky} date={date} isToday={isToday} nowMinute={nowMinute} />}
+      <div className={styles.chartFooter}><span>All times are Seoul time (KST). AMOS reads to 0.1°C; METAR reports whole degrees.{["stale", "error"].includes(forecast.status) && forecast.hourly.length ? " Dashed forecast and KMA sky are retained from an older capture." : ""}{forecastDashboard?.weathercomHourlyDiagnostics?.isStale === true && hourlySky.hours.some((row) => row.usesWeathercom) ? " Weather.com sky and cloud % are retained from an older capture." : ""}</span><span>{isToday ? "Updates automatically every minute" : "Available stored history"}</span></div>
     </section>
     <ProviderForecasts dashboard={providerForecastDashboard} date={date} now={now} amos={series.amos} metar={series.metar} />
     <AnalogPeak dashboard={analogPeakDashboard} date={date} now={now} />

@@ -1,5 +1,83 @@
 # Seoul RKSI live-temperature page
 
+## Hourly sky and rain strip — November 2, 2026 KST
+
+The “Temperature through the day” chart has a strip above its plot, on the same
+midnight-to-midnight axis, with 24 hour columns running from each clock hour to
+the next. No new query or collector is involved: the page reads
+`seoul:getDayStationRows` and `seoulWeather:getHighPredictionDashboard` as
+before. `buildHourlySky` in `dashboardData.js` builds the columns.
+
+- **Observed or forecast.** An hour with a stored routine METAR is observed, and
+  so is a past hour with only gauge readings, which shows its rain and says “No
+  METAR this hour”. Routine means the `:00` or `:30` slot, the rule the analog
+  peak card uses, because the station file does not mark SPECIs reliably. Later
+  hours, and the current hour until its report arrives, are forecast. A past hour
+  with neither stays empty and never falls back to a forecast. A solid cyan rule
+  over the observed hours and a dashed grey rule over the forecast hours carry the
+  labels and sources. On narrow sections the source names drop out and appear in
+  the note above the chart, the word shortens to `OBS` or `FCST`, and it drops out
+  when even that does not fit.
+- **Observed hours.** The icon and cloud text come from the hour's latest routine
+  report (`OVC`, `BKN`, `CAVOK`…), using the rules of the observed-cloud card.
+  CAVOK, NSC, NCD and CLR get a dashed cloud outline because they do not state
+  total cover. VV gets a fog icon, and so does a fog group in the latest report,
+  including partial (`PRFG`), patchy (`BCFG`), shallow (`MIFG`) and freezing
+  (`FZFG`) fog. The readout names that report's fog, mist, haze and other weather
+  groups. A rain, snow or thunder icon means any report in the hour had it at the
+  airport, and it takes priority over the fog and cloud icons. The rain detail
+  names each precipitation kind and the time of each wet report. VC and RE groups
+  do not count.
+- **Observed rain.** The rain row prints millimetres from the AMOS rainfall value
+  on the 15L row. It is a running daily total, so the page adds up its rises within
+  each hour and ignores the 00:00 row, which still holds the previous day's total
+  (see [the AMOS notes](./seoul.md#1-fastest-measured-amo-mobile-amos-json)). A
+  rise across a gap of more than 15 minutes that crosses into a new hour prints in
+  the hour the rows resume, and the readout says “since” the last reading, or
+  “since midnight” when the date's first reading already holds a total. On a
+  desktop-width chart, a pill with only a drop means METAR reported precipitation
+  but the gauge did not rise that hour or had no reading. A thin line means the
+  gauge read the hour as dry; with no reading the row stays empty and the readout
+  says “Gauge unavailable”. A thunderstorm group with no precipitation (`TS`) gets
+  the thunder icon and adds no rain mark of its own. The sky detail names it, with
+  its time if it was not in the hour's latest report.
+- **Forecast hours.** The icon and words come from the KMA hourly row. KMA gives
+  words only, so the cloud percentage in the text and shading comes from
+  Weather.com alone and no percentage is derived from KMA categories. When KMA
+  has no row for the hour, because its table starts more than an hour after some
+  captures, thins to every third hour on its last full day, or has ended, the icon
+  and words use Weather.com's. A dashed pill with a drop means KMA or Weather.com
+  words name rain, snow, sleet, hail or thunder, and the readout says whose. The
+  section label and note name the sources the shown hours use: “KMA sky,
+  Weather.com cloud %” when no hour falls back on Weather.com's words, “KMA and
+  Weather.com sky, Weather.com cloud %” when some do, or “Weather.com sky and cloud
+  %” when no hour has KMA words. A part with no data is left out, as in “KMA sky”.
+  When the Weather.com diagnostic is stale or its latest attempt failed, the footer
+  says its sky and cloud % are retained from an older capture, as it does for KMA,
+  and each hour's readout gives the capture time. While the forecast query loads,
+  the strip says it is loading rather than reporting no data.
+- **No rain chance.** KMA publishes none, and the Weather.com collector does not
+  store `precipChance`, so no percentage appears. The note above the chart says
+  so, and the rain row repeats “no rain chance data” where a dry stretch leaves
+  room. “None forecast” means the hour's KMA or Weather.com words name no rain;
+  an hour with no words at all shows “—”. When KMA approval is missing, its rows
+  are already empty, so the forecast hours show Weather.com alone.
+- **Sunrise and sunset.** Calculated for RKSI from NOAA's solar equations and
+  labelled above the plot, with arrows at phone width. The note above the chart
+  says the times are calculated and, on a phone, what the arrows mean. Night hours
+  are shaded behind the strip and plot, and use moon icons rather than sun icons.
+- **Inspection.** The hover, tap and slider readout adds “Sky” and “Rain” for the
+  hour under the cursor, named observed or forecast with the report or capture
+  time, and each column has a native tooltip with the same text. The slider's
+  spoken value includes them. From 900 px down, every hour gets the same readout
+  rows, so the slider below barely moves.
+- **Widths.** Below 34 px per hour, icons and text appear every third hour (every
+  fourth below 10 px per hour, on the narrowest phones), while the cloud shading
+  and rain marks stay hourly: the amount alone at tablet width, a drop alone on a
+  phone, with the millimetres in the readout. From 10 mm the pill prints whole
+  millimetres. The strip shares the chart's width, so it adds no sideways scroll
+  to the page.
+
 ## Minute-temperature nowcast removed — November 2, 2026 KST
 
 The experimental “15L AMOS · EXPERIMENTAL” card, which showed 10, 15 and
@@ -304,6 +382,9 @@ clock remains an actual current clock, not a simulated historical clock.
    the 15L runway threshold. AMOS gaps over five minutes and forecast gaps
    over 90 minutes break their respective lines;
    no Weather.com, threshold-model, or inferred sensor series fills them.
+   The strip above the plot shows hourly sky and rain; Weather.com appears there
+   only as forecast cloud percentage and words, never as a temperature. See
+   [the strip section](#hourly-sky-and-rain-strip--november-2-2026-kst).
 6. **Seoul market through the day.** A separate section below the temperature
    chart plots each temperature outcome's YES bid/ask midpoint in cents, with
    outcome toggles and captured-time inspection. The history uses the latest
@@ -347,8 +428,8 @@ clock remains an actual current clock, not a simulated historical clock.
    chart history uses its own bounded read query.
 
 The visible page omits the old target selectors, remaining-ceiling decisions,
-forecast assessments, model revision/evaluation diagnostics, secondary Weather.com
-comparisons, GK2A panel, and associated collection controls. Their backend
+forecast assessments, model revision/evaluation diagnostics, the former secondary
+Weather.com comparison panels, GK2A panel, and associated collection controls. Their backend
 retention, scheduled jobs, and approval gates are unchanged by this UI work.
 
 ## Current data and refresh behavior
@@ -372,8 +453,10 @@ collection and approval checks remain independent of browser refresh. See
 sampling, identity, freshness, retention, and null-gap details.
 `seoulWeather:getHighPredictionDashboard` continues to supply stored,
 approval-checked KMA captures; only the KMA forecast fields required by the
-streamlined UI are presented. Reusing that existing read endpoint does not
-make its legacy prediction or Weather.com fields current UI features.
+streamlined UI, plus the latest phrase, cloud percentage, capture time and stale
+flag from `weathercomHourlyDiagnostics` for the hourly strip, are presented.
+Reusing that existing read endpoint does not make its legacy prediction or other
+Weather.com fields current UI features.
 
 `seoulDashboardHistory:getForecastHighHistory({ stationIcao: "RKSI", date })`
 supplies the inline daily-high revision history from immutable
@@ -581,8 +664,12 @@ npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
   selector. Daily and hourly status/error fields remain independent. The
   hourly response has its own completion timestamp, and each successful hourly
   value is also appended to query-friendly immutable history. The legacy secondary diagnostic accepted a usable latest capture for at
-  most twelve hours. The streamlined page does not render that diagnostic,
-  and Weather.com is not a KMA fallback.
+  most twelve hours. The streamlined page shows only each forecast hour's latest
+  phrase and cloud percentage, named as Weather.com with its capture time, in the
+  hourly strip. Those come from the separate `weathercomHourlyDiagnostics` history,
+  which has no twelve-hour limit; the footer flags it after 90 minutes or a failed
+  attempt. Weather.com is not a KMA fallback for a temperature, high, peak or
+  ceiling.
 - `seoul_15l_high_prediction_every_5_min` recomputes the Seoul-local current
   date for the always-scheduled `27.0°C` compatibility target plus up to eight
   rows in `seoulPeakActiveTargets`, using model version
@@ -795,7 +882,8 @@ history rows from being backdated to the start of the collector run. They are
 optional so captures created before this history layer continue to validate.
 Optional legacy fields remain for compatibility. Legacy backend selectors
 retain these captures for their secondary comparisons and conservative veto;
-the streamlined page does not render a Weather.com comparison.
+the streamlined page shows Weather.com only in the 9 AM lock card and the hourly
+strip, not in the former secondary comparison panels.
 
 ### `seoulHourlyForecastPredictions`
 
@@ -900,8 +988,11 @@ though the redesigned page no longer renders the diagnostic table.
   retrieval, parsing, storage, and display. Revocation hides stored protected
   rows and stops every protected entry point before another request or write.
 - KMA condition phrases and ceilings remain categorical/separate. Missing KMA
-  data stays missing; no percentage is fabricated. Weather.com is retained
-  only for legacy backend diagnostics and is not shown on the streamlined page.
+  fields stay missing; no percentage is fabricated. On the streamlined page
+  Weather.com appears only in the 9 AM lock card and the hourly strip, where its
+  words fill a sky column with no KMA row, can raise a forecast hour's dashed
+  rain pill, and appear in the readout, named as Weather.com. Otherwise it is
+  retained for legacy backend diagnostics.
 - GK2A numerical collection remains server-side. The viewer is anonymously
   reachable and requires no API key, but its NetCDF embeds a restricted-access
   license. `NMSC_GK2A_ACCESS_APPROVED=true` must not be set until NMSC confirms
