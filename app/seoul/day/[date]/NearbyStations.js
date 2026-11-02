@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import { MAP_SPAN_KM, buildNearbyState, mapOffset } from "./nearbyStationsState";
+import { MAP_SPAN_KM, RUNWAYS, buildNearbyState, mapOffset, runwayMiddle } from "./nearbyStationsState";
 import card from "./experimentCard.module.css";
 import styles from "./nearbyStations.module.css";
 
@@ -21,11 +21,24 @@ function WindArrow({ wind, stale, className }) {
   </svg>;
 }
 
+function RunwayReading({ runway, reading, anchor, placement, role }) {
+  const fresh = reading.state === "fresh", hasFrom = reading.wind.short.startsWith("from ");
+  return <div className={`${styles.runwayCard} ${placement} ${fresh ? "" : styles.airportStale}`} style={{ "--x": anchor.x, "--y": anchor.y }}
+    title={`RKSI AMOS ${runway.name}, the ${role}, shown beside its runway. KMA’s equipment list gives no exact position for the thermometer.`}>
+    <span className={styles.airportTemperature}><small>{runway.name}</small> {reading.temperature}</span>
+    <span className={styles.airportWind}><WindArrow wind={reading.wind} stale={!fresh} className={styles.inlineArrow} /><span>{hasFrom ? <><span className={styles.cardFrom}>from </span>{reading.wind.short.slice(5)}</> : reading.wind.short}</span></span>
+    <span className={reading.state === "stale" ? styles.staleText : `${styles.age} ${fresh ? styles.cardFreshAge : ""}`}>{reading.mapAgeLabel}</span>
+  </div>;
+}
+
 function RingMap({ state }) {
-  return <div className={styles.map} role="group" aria-label="Map with north up and the airport in the middle. Stations sit at their true direction and distance. The table repeats every reading.">
+  const runways = Object.values(RUNWAYS);
+  const east = runwayMiddle(RUNWAYS.reference), west = runwayMiddle(RUNWAYS.comparison);
+  return <div className={styles.map} role="group" aria-label="Map with north up and the airport's 15L and 16L runways in the middle. Stations sit at their true direction and distance. The table repeats every reading.">
     <svg className={styles.rings} viewBox={`${-SPAN} ${-SPAN} ${2 * SPAN} ${2 * SPAN}`} aria-hidden="true">
       {RINGS_KM.map((km) => <circle key={km} r={(km / MAP_SPAN_KM) * SPAN} />)}
       <path d={`M0 ${-SPAN}V${SPAN}M${-SPAN} 0H${SPAN}`} />
+      {runways.map(({ name, north, south }) => <line key={name} className={styles.runway} x1={north.x * SPAN} y1={north.y * SPAN} x2={south.x * SPAN} y2={south.y * SPAN} />)}
     </svg>
     <span className={styles.north} aria-hidden="true">N ↑</span>
     {RINGS_KM.map((km) => {
@@ -45,13 +58,10 @@ function RingMap({ state }) {
         </>}
       </div>
     </div>)}
-    <div className={`${styles.airport} ${state.airport.reference.state !== "fresh" ? styles.airportStale : ""}`} title="RKSI AMOS: 15L is the reference reading, 16L the onsite comparison.">
-      <strong className={styles.airportName}>RKSI</strong>
-      <span className={styles.airportTemperature}><small>15L</small> {state.airport.reference.temperature}</span>
-      <span className={styles.airportWind}><WindArrow wind={state.airport.reference.wind} stale={state.airport.reference.state !== "fresh"} className={styles.inlineArrow} />{state.airport.reference.wind.short}</span>
-      <span className={state.airport.reference.state === "stale" ? styles.staleText : styles.age}>{state.airport.reference.mapAgeLabel}</span>
-      <span className={styles.airportComparison}>16L {state.airport.comparison.state === "missing" ? "no reading" : state.airport.comparison.temperature}{state.airport.comparison.state === "stale" ? " · stale" : ""}</span>
-    </div>
+    {runways.map(({ name, north }) => <span key={name} className={styles.runwayEnd} style={{ "--x": north.x, "--y": north.y }} aria-hidden="true">{name}</span>)}
+    <span className={styles.runwayAirport} style={{ "--x": (east.x + west.x) / 2, "--y": (east.y + west.y) / 2 }} aria-hidden="true">RKSI</span>
+    <RunwayReading runway={RUNWAYS.reference} reading={state.airport.reference} anchor={RUNWAYS.reference.south} placement={styles.runwayEast} role="reference" />
+    <RunwayReading runway={RUNWAYS.comparison} reading={state.airport.comparison} anchor={west} placement={styles.runwayWest} role="onsite comparison" />
   </div>;
 }
 
@@ -78,7 +88,7 @@ function Readings({ state }) {
         <th scope="col">°C</th><th scope="col" className={card.textCell}>Wind</th><th scope="col" className={card.textCell}>Observed<span className={styles.wideOnly}> (KST)</span></th>
       </tr></thead>
       <tbody>
-        {[["15L", "Reference", airport.reference], ["16L", "Onsite comparison", airport.comparison]].map(([name, role, row]) => <tr key={name}>
+        {[["15L", "Reference · east runway", airport.reference], ["16L", "Onsite comparison · west runway", airport.comparison]].map(([name, role, row]) => <tr key={name}>
           <th scope="row">RKSI {name}<span className={card.tableNote}>{role}</span></th>
           <td className={`${card.textCell} ${styles.wideOnly}`}>—</td><td className={styles.wideOnly}>{Number.isFinite(airport.elevationM) ? `${airport.elevationM} m` : "—"}</td>
           <td><TemperatureText row={row} /></td><WindCell row={row} /><ObservedCell row={row} />
@@ -106,12 +116,13 @@ export default function NearbyStations({ dashboard, now, isToday, isPast }) {
     {state.kind === "loading" || state.kind === "not_live" || state.kind === "unavailable" ? <>
       <p className={card.status} role="status">{state.message}{state.kind === "not_live" ? <> <Link href="/seoul/today" className={styles.todayLink}>Open today →</Link></> : null}</p>
     </> : <>
-      <p className={card.scope}>RKSI in the middle, with KMA’s nearest stations at their true direction and distance. Raw readings: nothing is blended or adjusted for height.</p>
+      <p className={card.scope}>RKSI’s 15L and 16L runways in the middle, with KMA’s nearest stations at their true direction and distance. Raw readings: nothing is blended or adjusted for height.</p>
       {state.message ? <p className={`${card.status} ${state.tone === "delayed" ? card.statusWarning : ""}`} role="status">{state.message}</p> : null}
       <div className={styles.layout}>
         <div className={styles.mapColumn}>
           <RingMap state={state} />
           <p className={styles.arrowNote}><strong>Arrows show where the air is going.</strong> The text names where the wind comes from, so “from NW” points toward the SE.</p>
+          <p className={styles.arrowNote}><strong>15L and 16L</strong> are drawn on their own runways, about 2.5 km apart. KMA’s equipment list gives no exact position for either thermometer, so each reading sits beside its runway rather than at the sensor.</p>
           {state.tallStations.map((station) => <p key={station.id} className={styles.heightNote}><strong>{station.name}</strong> sits {station.elevationM} m up, about {station.elevationM - state.airport.elevationM} m above the airport, so it is not a like-for-like reading. No height adjustment is applied.</p>)}
         </div>
         <Readings state={state} />
@@ -119,7 +130,7 @@ export default function NearbyStations({ dashboard, now, isToday, isPast }) {
       <details className={card.details}>
         <summary>About these readings</summary>
         <p>{state.usesPublicPage ? "KMA’s public observation page does not document its fields. Station wind uses its ten-minute fields, with direction as one of 16 compass points, so station arrows are accurate to 22.5° at best." : "Temperature at the KMA stations is a one-minute average and wind a ten-minute average."} Airport readings are AMOS 15L, the reference, and 16L, the onsite comparison; AMOS does not publish its wind averaging period here, so wind is not strictly like for like. KMA reports speed in m/s, shown here in knots with the original in the table. Station readings are marked stale after 10 minutes, airport readings after 3.</p>
-        <p>Source: Korea Meteorological Administration (KMA), {state.usesPublicPage ? "AWS readings on its public observation page at weather.go.kr." : "AWS one-minute data through KMA API Hub, under Korea Open Government License Type 1 (attribution)."} <a className={styles.todayLink} href="https://www.kma.go.kr/kmadev/guide/copyright.jsp" target="_blank" rel="noreferrer">KMA copyright policy ↗</a></p>
+        <p>Source: Korea Meteorological Administration (KMA), {state.usesPublicPage ? "AWS readings on its public observation page at weather.go.kr." : "AWS one-minute data through KMA API Hub, under Korea Open Government License Type 1 (attribution)."} Runway positions are from Korea’s AIP (RKSI AD 2.12). <a className={styles.todayLink} href="https://www.kma.go.kr/kmadev/guide/copyright.jsp" target="_blank" rel="noreferrer">KMA copyright policy ↗</a></p>
       </details>
       <div className={card.footer}><span>All times are Seoul time (KST). Temperatures in °C, wind in knots.</span><span>{state.withheld || state.kind === "setup_required" ? "Station collection is off" : "Stations checked every minute"}</span></div>
     </>}

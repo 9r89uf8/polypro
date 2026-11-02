@@ -34,6 +34,22 @@ export function mapOffset({ distanceKm, bearingDeg }) {
   return { x: (distanceKm * Math.sin(radians)) / MAP_SPAN_KM, y: (-distanceKm * Math.cos(radians)) / MAP_SPAN_KM };
 }
 
+// Offset of a point from the map's centre, as a fraction of its half-width (x east,
+// y south). The centre is `AIRPORT` in convex/lib/seoulNearbyStations.js.
+const MAP_CENTRE = { latitude: 37.4602, longitude: 126.4407 };
+const KM_PER_DEGREE = 111.195;
+const pointOnMap = (latitude, longitude) => ({
+  x: ((longitude - MAP_CENTRE.longitude) * KM_PER_DEGREE * Math.cos((MAP_CENTRE.latitude * Math.PI) / 180)) / MAP_SPAN_KM,
+  y: ((MAP_CENTRE.latitude - latitude) * KM_PER_DEGREE) / MAP_SPAN_KM,
+});
+// Runway ends from Korea's AIP (RKSI AD 2.12). KMA's equipment list assigns one
+// thermometer to each runway without a position, so these place the runway, not the sensor.
+export const RUNWAYS = {
+  reference: { name: "15L", north: pointOnMap(37.483944, 126.440156), south: pointOnMap(37.456381, 126.464672) },
+  comparison: { name: "16L", north: pointOnMap(37.472808, 126.415572), south: pointOnMap(37.443414, 126.441728) },
+};
+export const runwayMiddle = ({ north, south }) => ({ x: (north.x + south.x) / 2, y: (north.y + south.y) / 2 });
+
 const speedLabel = (knots) => (knots < 0.5 ? "under 1 kt" : `${Math.round(knots)} kt`);
 // A source that only names a compass point gets no degrees, because it has none.
 const direction = (dirDeg, compass) => (compass ? { from: compass, degrees: "" } : { from: compassPoint(dirDeg), degrees: ` (${Math.round(dirDeg)}°)` });

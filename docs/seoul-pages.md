@@ -2,12 +2,13 @@
 
 ## Around the airport panel — November 2, 2026 KST
 
-Directly below the temperature chart, “Nearby live readings” puts RKSI in the
-middle and KMA's four nearest stations around it. It reads
+Directly below the temperature chart, “Nearby live readings” puts RKSI's 15L and
+16L runways in the middle and KMA's four nearest stations around them. It reads
 `seoulNearbyStations:getDashboard` on today's route only. The browser never calls
 KMA and never receives the key. Source, approval and collector details are in
-[seoul.md](./seoul.md#stations-around-the-airport--november-2-2026). Neither KMA
-source is approved yet, so the page shows the approval state, not station readings.
+[seoul.md](./seoul.md#stations-around-the-airport--november-2-2026). Station readings
+currently come from KMA's public observation page, switched on at the owner's
+instruction before KMA answered.
 
 - **Map.** North up, with the same scale in every direction and rings at 5, 10 and
   15 km. Each marker sits at the station's true bearing and distance from `AIRPORT`
@@ -16,9 +17,18 @@ source is approved yet, so the page shows the approval state, not station readin
   beside the map (below it from 1200 px down) repeats each reading with the distance,
   bearing, height, degrees, original m/s and observation time. On a phone it drops
   the distance and height columns, and its own container scrolls if it must.
-- **Middle card.** The latest AMOS 15L reading as the reference with its wind and
-  age, then 16L as the onsite comparison. It comes from the same query, needs no KMA
-  approval, and picks rows by the temperature chart's rule.
+- **15L and 16L.** The map draws runways 15L/33R and 16L/34R as lines at their true
+  positions, from the runway-end coordinates in
+  [Korea's AIP](https://aim.koca.go.kr/eaipPub/Package/2026-01-08/html/eAIP/KR-AD-2.RKSI-en-GB.html)
+  (RKSI AD 2.12). They are about 2.5 km apart. Each gets its own small card beside
+  its runway with the latest AMOS temperature, wind and age: 15L, the reference, east
+  of its runway and 16L, the onsite comparison, west of its own. KMA's equipment list
+  gives no exact position for either thermometer, so a note under the map says each
+  reading sits beside its runway rather than at the sensor. Both come from the same
+  query, need no KMA approval, and pick rows by the temperature chart's rule. Each
+  card dims on its own when its reading is stale. When the map is 520 px wide or less
+  the cards drop the word “from”, and at 400 px or less they hide a fresh reading's
+  age. A stale age always shows, and the table has both.
 - **Wind.** The arrow shows where the air is going and the text where it comes from,
   so “from NW” points toward the SE. The panel says so under the map. Zero speed
   shows “Calm” with a ring and no direction. A missing part says so, and no arrow is
@@ -54,7 +64,10 @@ source is approved yet, so the page shows the approval state, not station readin
   table scrolls inside its own container. Below 345 px the 5 km ring label is
   hidden. Afterwards the map's stale label was shortened and the phone map made
   slightly taller, because very old readings with long wind text could clip at the
-  map's edge. That last change was not measured again.
+  map's edge. The split 15L and 16L cards were measured at 1440, 1230, 375 and 320 px
+  with live readings: no overlap, clipping or page scroll. With the longest wind text
+  and a stale label on every site, the 16L card touches Muui-do's marker by 2 px at
+  375 px. At 320 px it overlaps Muui-do's marker by 10 px and Wangsan's label by 4 px.
 
 ## Hourly sky and rain strip — November 2, 2026 KST
 

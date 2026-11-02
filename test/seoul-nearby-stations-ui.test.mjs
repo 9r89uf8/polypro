@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { AIRPORT_STALE_MS, MAP_SPAN_KM, STATION_STALE_MS, ageLabel, buildNearbyState, compassPoint, describeWind, mapOffset } from "../app/seoul/day/[date]/nearbyStationsState.js";
+import { AIRPORT_STALE_MS, MAP_SPAN_KM, RUNWAYS, STATION_STALE_MS, ageLabel, buildNearbyState, compassPoint, describeWind, mapOffset, runwayMiddle } from "../app/seoul/day/[date]/nearbyStationsState.js";
 
 const MINUTE = 60_000, NOW = Date.parse("2026-11-02T12:31:30+09:00");
 const LIVE = { isToday: true };
@@ -66,6 +66,22 @@ test("stations sit at their true bearing on one scale", () => {
   for (const row of state.stations) assert.ok(Math.hypot(row.offset.x, row.offset.y) < 1);
   assert.equal(named(state, "Wangsan").directionLabel, "W");
   assert.equal(named(state, "Jangbong-do").directionLabel, "NW");
+});
+
+test("15L and 16L sit on their own runways at the AIP's positions", () => {
+  const km = ({ x, y }) => [x * MAP_SPAN_KM, -y * MAP_SPAN_KM];
+  const near = ([east, north], [wantEast, wantNorth]) => assert.ok(Math.abs(east - wantEast) < 0.02 && Math.abs(north - wantNorth) < 0.02, `${east}, ${north}`);
+  near(km(RUNWAYS.reference.north), [-0.05, 2.64]);
+  near(km(RUNWAYS.reference.south), [2.12, -0.42]);
+  near(km(RUNWAYS.comparison.north), [-2.22, 1.40]);
+  near(km(RUNWAYS.comparison.south), [0.09, -1.87]);
+  const [eastKm, northKm] = km(runwayMiddle(RUNWAYS.reference)), [westKm, westNorthKm] = km(runwayMiddle(RUNWAYS.comparison));
+  assert.ok(eastKm > westKm, "15L is the eastern runway");
+  assert.ok(Math.abs(Math.hypot(eastKm - westKm, northKm - westNorthKm) - 2.49) < 0.02);
+  const panel = readFileSync(new URL("../app/seoul/day/[date]/NearbyStations.js", import.meta.url), "utf8");
+  assert.match(panel, /<RunwayReading runway=\{RUNWAYS\.reference\} reading=\{state\.airport\.reference\}/);
+  assert.match(panel, /<RunwayReading runway=\{RUNWAYS\.comparison\} reading=\{state\.airport\.comparison\}/);
+  assert.match(panel, /gives no exact position for either thermometer/);
 });
 
 test("stale and missing readings say so and no value is invented", () => {

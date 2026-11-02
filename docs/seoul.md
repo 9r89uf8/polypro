@@ -7,9 +7,10 @@ shows RKSI in the middle and KMA's four nearest stations at their true direction
 and distance. The collector, schema and schedules are built and tested with two
 sources, each behind its own approval flag: KMA API Hub, and, added on November 3 at
 the owner's request until a key is available, the JSON behind KMA's public
-observation page. **Both flags and the key are absent in production. No request has
-been made by the collector and no station reading has been stored or shown.**
-Setting a flag needs the owner's confirmation of KMA's approval.
+observation page. **The public page is live in production: its flag was set on
+November 3, 2026 at 08:27 KST on the owner's explicit instruction, before KMA had
+answered.** See [Approval](#approval) for what is still outstanding. API Hub has made
+no request because no key is set.
 
 ### Stations, as checked
 
@@ -106,13 +107,18 @@ row with a non-empty `awsTroblKnd` is dropped, because that flag's values are no
 published. It was empty on every row that day, so whether it fires only for the
 reported element is unknown.
 
+KMA's server answers Convex. On November 3, from 08:28 to 08:52 KST, all 25 checks
+one minute apart found a successful run and all four stations. Rows then advanced a
+minute at a time and were first stored 325–327 seconds after their stated time, in
+line with the 5–6 minutes behind AMOS in the
+[earlier comparison](#kma-weather-station-113-json). One minute (08:40) never
+appeared, and the first run's row was already 505 seconds old. Sampled ages ran from
+6.3 to 9.3 minutes, so no sample reached the panel's 10-minute stale limit, though
+that margin comes from this one 25-minute window.
+
 Not established: how `awsTmp` is averaged; whether `tm`, which was the same on every
-row, is each station's own time or the page's; what a station that stops reporting
-looks like; and whether KMA's server answers Convex, because the page has only been
-read from a browser. Its newest row was 6 minutes old on one viewing, in line with
-the 5–6 minutes behind AMOS in the
-[earlier comparison](#kma-weather-station-113-json), so readings arrive well after
-the airport's.
+row, is each station's own time or the page's; and what a station that stops
+reporting looks like.
 
 ### Approval
 
@@ -136,9 +142,20 @@ source. The approving authority is KMA for both:
   page.
 
 Set a flag only after the owner confirms this. No approval evidence or key belongs
-in this repository. Code is deployed with all three values absent. Convex goes
-first, because the page's query has no error boundary and today's whole page fails
-if the function is missing:
+in this repository.
+
+**State on November 3, 2026.** `KMA_PUBLIC_AWS_PAGE_ACCESS_APPROVED` is `true`. The
+owner chose to set it before KMA answered, having been told that KMA's copyright
+policy asks for prior consultation and that this project's rule is to wait, so this
+is an owner's decision and not KMA's approval. The consultation is still outstanding:
+remove the flag if KMA objects. `KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED` was also
+found set to `true` that morning, with no key. It was absent at the November 2
+release check, and this work did not set it. It does nothing without a key, but with
+it set, adding the key starts API Hub collection immediately, without a separate
+approval step.
+
+New code is deployed with any new flag absent. Convex goes first, because the page's
+query has no error boundary and today's whole page fails if the function is missing:
 
 ```text
 npx convex env set KMA_APIHUB_AUTH_KEY <key> --deployment-name striped-chipmunk-763

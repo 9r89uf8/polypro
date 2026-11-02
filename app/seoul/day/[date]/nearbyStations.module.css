@@ -24,13 +24,20 @@
 .none{font-size:10px;color:#8fa7bd}
 .heightTag{display:inline-block;padding:0 4px;border:1px solid #5c4c33;border-radius:4px;background:#302a21;color:#edc88b;font-size:9px;line-height:1.5}
 .narrowOnly{display:none}
-.airport{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:1px;width:136px;padding:9px 8px;border:1px solid #3f6f80;border-radius:10px;background:#10293a;text-align:center;line-height:1.25;font-size:11px;color:#b9d2e0;box-shadow:0 0 0 4px #0c172699}
+.rings .runway{stroke:#8fb0c6;stroke-width:3;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.runwayEnd,.runwayAirport{position:absolute;left:calc(50% + var(--x)*50%);top:calc(50% + var(--y)*50%/var(--aspect));font:9px var(--font-ibm-mono),monospace;white-space:nowrap}
+.runwayEnd{transform:translate(-50%,calc(-100% - 3px));color:#a9d6e2}
+.runwayAirport{transform:translate(-50%,-50%);padding:0 2px;border-radius:3px;background:#12263a;letter-spacing:.06em;color:#dbe8f3}
+.runwayCard{position:absolute;left:calc(50% + var(--x)*50%);top:calc(50% + var(--y)*50%/var(--aspect));display:flex;flex-direction:column;gap:1px;width:max-content;padding:5px 7px;border:1px solid #3f6f80;border-radius:8px;background:#10293a;line-height:1.25;font-size:11px;color:#b9d2e0;box-shadow:0 0 0 3px #0c172699}
+.runwayEast{transform:translate(7px,-50%)}
+.runwayWest{transform:translate(calc(-100% + 2px),14px)}
+.runwayWest .airportTemperature{color:#e8f1f9}
+@container (max-width:520px){.cardFrom{display:none}}
+@container (max-width:400px){.cardFreshAge{display:none}}
 .airportStale{border-style:dashed;border-color:#8a734a}
-.airportStale .airportTemperature{color:#a79f8f}
-.airportName{font:10px var(--font-ibm-mono),monospace;letter-spacing:.1em;color:#a9d6e2}
-.airportTemperature{font-size:27px;font-weight:500;letter-spacing:-.04em;line-height:1.15;color:#85dfeb}
-.airportTemperature small{font:10px var(--font-ibm-mono),monospace;letter-spacing:0;color:#789eaf}
-.airportComparison{font-size:11px;color:#b9d2e0}
+.airportStale .airportTemperature,.runwayWest.airportStale .airportTemperature{color:#a79f8f}
+.airportTemperature{font-size:22px;font-weight:500;letter-spacing:-.04em;line-height:1.15;color:#85dfeb}
+.airportTemperature small{font:10px var(--font-ibm-mono),monospace;letter-spacing:0;color:#a9d6e2}
 .airportWind{display:flex;align-items:center;gap:3px;color:#c3d6e6}
 .inlineArrow{flex-shrink:0;width:14px;height:14px;color:#85dfeb}
 .inlineArrow.arrowStale{color:#edbf74}
@@ -55,11 +62,12 @@
   .readings th,.readings td{padding:8px 6px}
   .readings tbody th,.readings td{white-space:normal}
   .readings tbody th{min-width:72px}
-  .airport{width:94px;padding:6px 4px;font-size:9.5px;border-radius:8px;box-shadow:0 0 0 2px #0c172699}
-  .airportName{font-size:8.5px}
-  .airportTemperature{font-size:19px}
+  .runwayCard{padding:3px 5px;font-size:9.5px;border-radius:6px;box-shadow:0 0 0 2px #0c172699}
+  .runwayEast{transform:translate(4px,-50%)}
+  .runwayWest{transform:translate(calc(-100% + 1px),9px)}
+  .runwayEnd,.runwayAirport{font-size:8px}
+  .airportTemperature{font-size:17px}
   .airportTemperature small{font-size:8px}
-  .airportComparison{font-size:9.5px}
   .inlineArrow{width:11px;height:11px}
   .airportWind{gap:2px}
   .arrowNote,.heightNote{font-size:10px}
@@ -72,7 +80,8 @@
 @media(max-width:345px){
   .map{--aspect:1.3;--marker:24px}
   .label{max-width:72px}
-  .airport{width:88px;padding:5px 3px}
-  .airportTemperature{font-size:17px}
+  .airportTemperature{font-size:15px}
+  .runwayCard{font-size:9px}
+  .runwayWest{transform:translate(calc(-100% + 3px),10px)}
   .innerRing{display:none}
 }
