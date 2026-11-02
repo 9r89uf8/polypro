@@ -405,6 +405,23 @@ crons.cron(
   {},
 );
 
+// KMA API Hub one-minute readings for the stations around RKSI. Nothing is
+// requested unless KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED is exactly "true" and
+// KMA_APIHUB_AUTH_KEY is set. Retention only deletes, so it runs regardless.
+crons.cron(
+  "seoul_nearby_stations_every_minute",
+  "* * * * *",
+  internal.seoulNearbyStations.queueScheduledRefresh,
+  { stationIcao: "RKSI" },
+);
+
+crons.cron(
+  "seoul_nearby_stations_retention",
+  "27 * * * *",
+  internal.seoulNearbyStations.pruneExpired,
+  { stationIcao: "RKSI" },
+);
+
 // Retains a cadence-tagged five-minute snapshot of every AMOS display row for
 // auditing and fallback; the live chart prefers the one-minute 15L series.
 crons.cron(

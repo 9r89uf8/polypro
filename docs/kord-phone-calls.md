@@ -2,6 +2,10 @@
 
 This document covers the KORD phone-call temperature workflow shown on `/kord/today`.
 
+The November 2 Seoul nearby-station change adds
+`seoul_nearby_stations_every_minute` (every minute, gated by its own KMA approval
+flag) and `seoul_nearby_stations_retention` (hourly at `:27`). They leave KORD phone
+calls unchanged. See [Seoul sources](./seoul.md#stations-around-the-airport--november-2-2026).
 The October 31 Seoul nowcast crons, `seoul_temperature_nowcast_scoring` (every
 minute) and `seoul_temperature_nowcast_retention` (hourly), were removed from
 `convex/crons.js` on November 2 with the nowcast. Removing them leaves KORD

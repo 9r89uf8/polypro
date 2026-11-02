@@ -1,5 +1,172 @@
 # RKSI: fastest current-temperature source
 
+## Stations around the airport — November 2, 2026
+
+The [around-the-airport panel](./seoul-pages.md#around-the-airport-panel--november-2-2026-kst)
+shows RKSI in the middle and KMA's four nearest stations at their true direction
+and distance. The collector, schema and schedules are built and tested behind a
+new approval flag. **It ships with the flag and key absent. No request has been made
+to the API and no station reading has been stored or shown.** The owner still has
+to choose the source and confirm approval.
+
+### Stations, as checked
+
+| Station | KMA ID | From RKSI | Height | Coordinates |
+| --- | ---: | --- | ---: | --- |
+| Wangsan 왕산 | 508 | 7.1 km W (276°) | 141 m | 37.46649, 126.36093 |
+| Muui-do 무의도 | 665 | 7.9 km S (190°) | 28 m | 37.39043, 126.42521 |
+| Yeongjong-do 영종도 | 543 | 10.5 km ENE (66°) | 26 m | 37.49900, 126.54958 |
+| Jangbong-do 장봉도 | 577 | 12.3 km NW (312°) | 9 m | 37.53347, 126.33659 |
+
+Viewing KMA's public observation page twice on November 2, with its newest rows at
+12:12 and 12:48 KST (Incheon list, 26 stations), confirmed these IDs, coordinates
+and heights. Each of the four, and the possible extras Seosu-do 955 (15.6 km SSW,
+marine) and Incheon 112 (16.4 km E, mainland), carried temperature, wind direction
+and wind speed both times, with no fault flag. These are two moments, not a coverage
+rate, and no value was kept. Apart from those six and station 113, the airport
+itself, the nearest station on that list is Song-do at 19.9 km. The
+extras are left out to keep the map readable. Adding Seosu-do is one row in
+`NEARBY_STATIONS` and one placement in the panel; Incheon, at 16.4 km, also needs a
+larger `MAP_SPAN_KM` because it falls outside the 16 km map. Distances are from
+`AIRPORT` in `convex/lib/seoulNearbyStations.js`, the same point as the page's
+`RKSI_POSITION`. KMA lists station 113 about 0.3 km north of that point at 7 m,
+which is why Wangsan is about 134 m above the airport.
+
+Not established: how quickly readings arrive, how often a station drops wind or
+temperature, whether a live key returns the documented table, and whether these
+stations help predict RKSI. The stored `firstSeenAt` will measure delivery, to
+within a poll, once collection runs. The panel shows raw readings and does not
+claim predictive value.
+
+### Sources and what each needs
+
+The owner chooses the source; the collector is written for the first.
+
+**KMA API Hub `nph-aws2_min` (collector built, recommended).** Documented, keyed,
+1-minute AWS data:
+
+```text
+GET https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-aws2_min
+  ?tm1=YYYYMMDDHHmm&tm2=YYYYMMDDHHmm&stn=508&disp=1&help=0&authKey=KEY
+```
+
+- The [Public Data Portal listing](https://www.data.go.kr/data/15139433/openapi.do)
+  gives the licence as Public Nuri Type 1 (attribution), free, from KMA's National
+  Climate Data Center (+82-42-481-7480).
+- [API Hub usage](https://apihub.kma.go.kr/apiInfo.do) auto-approves general
+  members, allows 20,000 calls and 5 GB a day, and treats keys as personal. Hub
+  questions go to `kmadatahub@korea.kr`. KMA's specification also lists a 403
+  for a key whose account has not applied for this API (활용신청).
+- [API Hub terms](https://apihub.kma.go.kr/policy.do) (effective February 6, 2023)
+  leave questions the licence does not settle. Article 11(5) item 12 bars automated
+  programs and periodic or continuous connections that overload KMA's systems, in
+  connection with using the portal service. It does not say whether steady API
+  polling counts. Article 5(3) allows one key per application, Article 13(2) warns
+  that data can include third-party rights, and Article 13(3) requires KMA's
+  approval to use or pass on the service's intellectual property. The terms do not
+  address commercial use or redistribution of observations. They mention storing
+  data only in Article 11(5) item 15, which bars using several IDs to extract and
+  store it.
+- An [older listing of AWS data](https://www.data.go.kr/data/15057084/openapi.do)
+  says that route is only for public institutions doing disaster-weather work and
+  marks third-party rights. It is another route to similar data, and it conflicts
+  with the Type 1 listing unless KMA says otherwise.
+
+**KMA's public observation JSON (no collector).**
+`https://www.weather.go.kr/w/observation/land/aws-obs-data.do?db=MINDB_01M&tm=&stnId=0&sidoCode=2800000000&sort=&config=full`
+needs no key and carries `awsTmp`, `awsWd10` and `awsWs10`, but it is undocumented
+and shows no licence mark. It gives direction as a 16-point compass word rather than
+the degrees the API specification lists. Its newest row was 6 minutes old on the
+second viewing, in line with the 5–6 minutes behind AMOS in the
+[earlier comparison](#kma-weather-station-113-json). KMA's
+[copyright policy](https://www.kma.go.kr/kmadev/guide/copyright.jsp) requires prior
+consultation for unmarked material, and permits plain viewing. The contacts are
+`webmasterkma@korea.kr` and the Information and Communications Technology Division,
+02-2181-0432. Recheck both contacts before writing, because they can change.
+
+### Approval
+
+```text
+KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED=true
+KMA_APIHUB_AUTH_KEY=<the owner's key>
+```
+
+Only the exact string `true` approves. A missing, empty, `false` or different
+value fails closed, and a key alone enables nothing. The approving authority is
+KMA (`kmadatahub@korea.kr`, National Climate Data Center). The scope to confirm is
+automated polling of four stations every minute (5,760 calls a day), 48-hour
+storage, and display on this public page used for trading decisions, given the
+terms and listings above. Set the flag only after the owner confirms this.
+No approval evidence or key belongs in this repository. A KMA fallback is not
+built, and any other source needs its own gate. Code is deployed with both values
+absent. Convex goes first, because the page's query has no error boundary and
+today's whole page fails if the function is missing:
+
+```text
+npx convex env set KMA_APIHUB_AUTH_KEY <key> --deployment-name striped-chipmunk-763
+npx convex env set KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED true --deployment-name striped-chipmunk-763
+npx convex env remove KMA_APIHUB_AWS_MINUTE_ACCESS_APPROVED --deployment-name striped-chipmunk-763
+```
+
+While the flag is absent, the queue returns `approval_required` without writing or
+scheduling, the worker makes no request, the storage mutations write nothing, and
+the query returns no station reading or collector state without reading those
+tables. The airport's AMOS readings are not gated and stay visible. Removing the
+flag stops new work and hides stored rows; the running worker rechecks it through a
+fresh query immediately before its requests, and the storage mutations check again
+after them. With the flag set but no key, the panel says `setup required`.
+
+Protected entry points, all in `convex/seoulNearbyStations.js`:
+`queueScheduledRefresh` (cron), `collectionAccess` and `collectLatest` (worker),
+`storeReadings` and `finishRun` (writes), and `getDashboard` (public read). There
+is no manual or browser-triggered collection. `pruneExpired` only deletes and runs
+regardless. Behaviour with the flag absent is tested by
+`test/seoul-nearby-stations-backend.test.mjs`; verify it again in production after
+deploying and before activation. Tests cover the main flag-on path but not yet lock
+expiry, the redirect and timeout options, or a run where only some stations return
+rows. Add those before activation.
+
+### Collector
+
+`seoul_nearby_stations_every_minute` queues `collectLatest`, with one run per
+minute and a two-minute lock. The worker requests each station once with the last
+15 minutes (`tm1`, `tm2`). That is longer than the panel's 10-minute stale limit, so
+a lagging feed is still stored and a missed poll is filled in. It makes 5,760 calls
+a day against the 20,000 limit. Requests run in parallel with a ten-second timeout
+and no redirects. Errors stored or shown never include the key. The poll second is
+not tuned: choose one from measured `firstSeenAt` delay.
+
+`convex/lib/seoulNearbyStations.js` parses the response by its header names, from
+[KMA's specification](https://apihub.kma.go.kr/getAttachFile.do?fileName=AWS%EB%A7%A4%EB%B6%84%EC%9E%90%EB%A3%8C%EC%A1%B0%ED%9A%8C_API%EB%AA%85%EC%84%B8%EC%84%9C.pdf).
+It reads `YYMMDDHHMI` (twelve digits, KST), `STN`, `TA` (one-minute temperature),
+`WD10` and `WS10` (ten-minute wind, m/s). Per the specification, a value of −50 or
+below means no observation or an error, and is stored as missing. A row with none
+of the three is dropped. A response without `#START7777`, without those columns,
+naming another station, or whose rows all fail to fit the table is refused, and the
+collector records a `format` error rather than storing it. A 401 or 403 in the
+response body gets the same label as that HTTP status. A `WD10` of exactly 360 with
+speed above zero is shown as north: KMA's legend lists 360 as calm for `WD1` only,
+so recheck this against the first live rows. The tests use KMA's published layout
+with synthetic values; no live response has been parsed.
+
+### Schema and schedule
+
+- `seoulNearbyStationObservations`: one row per station and observation minute, with
+  `tempC`, `windDirDeg`, `windSpeedMs`, the raw line, immutable `firstSeenAt` and
+  `updatedAt`. A revised minute keeps its `firstSeenAt`. Indexes `by_station_obs_ts`
+  and `by_obs_ts`. Rows older than 48 hours are deleted on each write and by
+  `seoul_nearby_stations_retention` (hourly at `:27`).
+- `seoulNearbyCollectorStatus`: one row with the run lock, last attempt and success,
+  per-station results, an error code and a bounded error. The public query returns
+  only the status, the times and the code.
+
+The airport row comes from `seoulAmosObservations`, picking the 15L and 16L rows by
+the chart's rule: the newest minute with a temperature, one-minute rows over
+five-minute, then the newer revision. `ws_avg` is in knots: on November 2 the 15L row was within 0.6 kt of the METAR
+speed on average across 26 routine reports. `wd_avg` differed from the METAR
+direction by about 14° on average, and the feed does not state its averaging period,
+so it is shown as a separate reading from the METAR's wind.
+
 ## Short-horizon temperature nowcast removed — November 2, 2026
 
 The [15L minute-temperature nowcast](./seoul-temperature-nowcast.md) added on

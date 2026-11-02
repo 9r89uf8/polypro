@@ -1,0 +1,78 @@
+.layout{display:grid;grid-template-columns:minmax(420px,600px) minmax(620px,1fr);gap:22px;align-items:start;margin:0 0 16px}
+.mapColumn{min-width:0}
+.map{--aspect:1;--marker:40px;container-type:inline-size;position:relative;width:100%;aspect-ratio:1/var(--aspect);border:1px solid #23364d;border-radius:12px;background:radial-gradient(circle at center,#14283c,#0c1726 74%);overflow:hidden;font-variant-numeric:tabular-nums}
+.rings{position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:#2c4259;stroke-width:1}
+.rings circle,.rings path{vector-effect:non-scaling-stroke;stroke-dasharray:3 4}
+.north{position:absolute;left:50%;top:7px;transform:translateX(-50%);padding:0 5px;background:#0e1b2c;border-radius:4px;font:10px var(--font-ibm-mono),monospace;color:#a9bfd2}
+.ringLabel{position:absolute;left:calc(50% + var(--x)*50%);top:calc(50% + var(--y)*50%/var(--aspect));transform:translate(-50%,-50%);padding:0 3px;background:#0f1d2e;border-radius:3px;font:9px var(--font-ibm-mono),monospace;color:#7f97ad;white-space:nowrap}
+.node{position:absolute;left:calc(50% + var(--x)*50%);top:calc(50% + var(--y)*50%/var(--aspect));width:0;height:0}
+.marker{position:absolute;left:0;top:0;width:var(--marker);height:var(--marker);transform:translate(-50%,-50%);display:grid;place-items:center;border:1px solid #4a6d86;border-radius:50%;background:#0f2133;color:#85dfeb}
+.arrow{display:block;width:72%;height:72%;color:inherit}
+.arrowStale{color:#edbf74}
+.nodeStale .marker{border-style:dashed;border-color:#8a734a}
+.nodeMissing .marker{border-style:dashed;border-color:#40566d;color:#7f97ad}
+.label{position:absolute;display:flex;flex-direction:column;gap:1px;width:max-content;max-width:150px;line-height:1.25;font-size:11px;color:#a9bed1}
+.placeLeft .label{right:calc(var(--marker)/2 + 6px);top:0;max-width:calc(50cqw + var(--x)*50cqw - var(--marker)/2 - 9px);transform:translateY(-50%);align-items:flex-end;text-align:right}
+.placeAbove .label{bottom:calc(var(--marker)/2 + 5px);left:0;transform:translateX(-50%);align-items:center;text-align:center}
+.placeBelow .label{top:calc(var(--marker)/2 + 5px);left:0;transform:translateX(-50%);align-items:center;text-align:center}
+.name{font-size:12px;font-weight:500;color:#dbe8f3}
+.temperature{font-size:22px;font-weight:500;letter-spacing:-.04em;line-height:1.1;color:#e8f1f9}
+.nodeStale .temperature{color:#a79f8f}
+.windText{color:#c3d6e6}
+.age{font-size:10px;color:#8fa7bd}
+.staleText{color:#edbf74;font-size:10px}
+.none{font-size:10px;color:#8fa7bd}
+.heightTag{display:inline-block;padding:0 4px;border:1px solid #5c4c33;border-radius:4px;background:#302a21;color:#edc88b;font-size:9px;line-height:1.5}
+.narrowOnly{display:none}
+.airport{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:1px;width:136px;padding:9px 8px;border:1px solid #3f6f80;border-radius:10px;background:#10293a;text-align:center;line-height:1.25;font-size:11px;color:#b9d2e0;box-shadow:0 0 0 4px #0c172699}
+.airportStale{border-style:dashed;border-color:#8a734a}
+.airportStale .airportTemperature{color:#a79f8f}
+.airportName{font:10px var(--font-ibm-mono),monospace;letter-spacing:.1em;color:#a9d6e2}
+.airportTemperature{font-size:27px;font-weight:500;letter-spacing:-.04em;line-height:1.15;color:#85dfeb}
+.airportTemperature small{font:10px var(--font-ibm-mono),monospace;letter-spacing:0;color:#789eaf}
+.airportComparison{font-size:11px;color:#b9d2e0}
+.airportWind{display:flex;align-items:center;gap:3px;color:#c3d6e6}
+.inlineArrow{flex-shrink:0;width:14px;height:14px;color:#85dfeb}
+.inlineArrow.arrowStale{color:#edbf74}
+.arrowNote,.heightNote{margin:10px 0 0;font-size:11px;line-height:1.55;color:#a9bed1}
+.arrowNote strong,.heightNote strong{font-weight:500;color:#dbe8f3}
+.heightNote{color:#d8c49f}
+.readings{max-height:none;margin:0}
+.windCell{display:inline-flex;align-items:center;gap:5px;white-space:normal;min-width:118px}
+.statusCell{color:#9fb3c8}
+.todayLink{color:#9adbe3;text-decoration:none}
+.todayLink:hover{text-decoration:underline}
+@media(max-width:1200px){.layout{grid-template-columns:minmax(0,1fr)}.mapColumn{width:100%;max-width:600px;margin:0 auto}}
+@media(max-width:600px){
+  .layout{gap:14px}
+  .map{--aspect:1.18;--marker:30px;border-radius:10px}
+  .label{max-width:92px;font-size:10px}
+  .name{font-size:10.5px}
+  .temperature{font-size:17px}
+  .age,.staleText,.none{font-size:9px}
+  .heightTag{font-size:8px;padding:0 3px}
+  .placeLeft .label{right:calc(var(--marker)/2 + 3px);max-width:calc(50cqw + var(--x)*50cqw - var(--marker)/2 - 5px)}
+  .readings th,.readings td{padding:8px 6px}
+  .readings tbody th,.readings td{white-space:normal}
+  .readings tbody th{min-width:72px}
+  .airport{width:94px;padding:6px 4px;font-size:9.5px;border-radius:8px;box-shadow:0 0 0 2px #0c172699}
+  .airportName{font-size:8.5px}
+  .airportTemperature{font-size:19px}
+  .airportTemperature small{font-size:8px}
+  .airportComparison{font-size:9.5px}
+  .inlineArrow{width:11px;height:11px}
+  .airportWind{gap:2px}
+  .arrowNote,.heightNote{font-size:10px}
+  .wideOnly{display:none}
+  .narrowOnly{display:inline}
+  .windCell{min-width:84px}
+  .north{font-size:9px;top:4px}
+  .ringLabel{font-size:8px}
+}
+@media(max-width:345px){
+  .map{--aspect:1.3;--marker:24px}
+  .label{max-width:72px}
+  .airport{width:88px;padding:5px 3px}
+  .airportTemperature{font-size:17px}
+  .innerRing{display:none}
+}

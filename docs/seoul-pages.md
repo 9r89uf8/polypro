@@ -1,5 +1,58 @@
 # Seoul RKSI live-temperature page
 
+## Around the airport panel — November 2, 2026 KST
+
+Directly below the temperature chart, “Nearby live readings” puts RKSI in the
+middle and KMA's four nearest stations around it. It reads
+`seoulNearbyStations:getDashboard` on today's route only. The browser never calls
+KMA and never receives the key. Source, approval and collector details are in
+[seoul.md](./seoul.md#stations-around-the-airport--november-2-2026). KMA access is
+not approved yet, so the page shows the approval state, not station readings.
+
+- **Map.** North up, with the same scale in every direction and rings at 5, 10 and
+  15 km. Each marker sits at the station's true bearing and distance from `AIRPORT`
+  in `convex/lib/seoulNearbyStations.js`. Labels sit beside the markers.
+- **Each station.** Name, temperature, wind arrow and text, and age. The table
+  beside the map (below it from 1200 px down) repeats each reading with the distance,
+  bearing, height, degrees, original m/s and observation time. On a phone it drops
+  the distance and height columns, and its own container scrolls if it must.
+- **Middle card.** The latest AMOS 15L reading as the reference with its wind and
+  age, then 16L as the onsite comparison. It comes from the same query, needs no KMA
+  approval, and picks rows by the temperature chart's rule.
+- **Wind.** The arrow shows where the air is going and the text where it comes from,
+  so “from NW” points toward the SE. The panel says so under the map. Zero speed
+  shows “Calm” with a ring and no direction. A missing part says so, and no arrow is
+  drawn without a direction. Speeds are in knots: AMOS reports knots and KMA m/s.
+  Stations use the ten-minute average; AMOS does not state its period.
+- **Raw only.** Nothing is blended, interpolated, adjusted for height or differenced
+  against the airport. Wangsan carries a “134 m above RKSI” tag (“+134 m” on a phone)
+  and a note under the map, because its sensor is 141 m up.
+- **Stale or missing.** Age comes from the page's own clock, every 15 seconds. A
+  station is stale after 10 minutes, a first choice to review once KMA's delay is
+  measured. The airport is stale after 3 minutes, the page's existing limit. A stale
+  reading keeps its value, dimmed, with a dashed outline, “Stale · 25 min” on the map
+  and the full age in the table. No reading says “No reading”, and a missing
+  temperature says “No temperature”.
+- **States.** The badge reads `Live`, `Delayed` when no station is recent or the
+  airport's reading is old or missing, `Some missing`, `Refresh failed` (with KMA's
+  error in plain words and the last stored readings), `Waiting`, `Setup required` or
+  `Approval required`. Once a check has run, `Waiting` says it returned no readings. Without approval the
+  markers are empty and say “Not collected”, the table says “Not collected: approval
+  required”, and the airport stays live.
+- **Past and future dates.** No query runs and no reading appears. The card, badged
+  `Today only`, says the panel only shows the latest live readings, and links to
+  today. Retained rows last 48 hours and are not used to rebuild a past map.
+- **Refresh.** Reactive only. The page's Refresh button and page entry do not start
+  a nearby-station request; only the cron does.
+- **Widths.** Checked with labelled synthetic readings from 1440 down to 320 px in
+  Live, mixed, failed and approval states, and with the real 15L reading and no
+  station readings inside the real page at 1440 and 375 px. There was no horizontal
+  page scroll and no label overlap or clipping; between about 600 and 700 px the
+  table scrolls inside its own container. Below 345 px the 5 km ring label is
+  hidden. Afterwards the map's stale label was shortened and the phone map made
+  slightly taller, because very old readings with long wind text could clip at the
+  map's edge. That last change was not measured again.
+
 ## Hourly sky and rain strip — November 2, 2026 KST
 
 The “Temperature through the day” chart has a strip above its plot, on the same
@@ -435,7 +488,9 @@ retention, scheduled jobs, and approval gates are unchanged by this UI work.
 ## Current data and refresh behavior
 
 `seoul:getDayStationRows` supplies reactive AMOS and METAR observations.
-On today's route, `seoulGk2a:getSolarHeatingDashboard` supplies the compact
+On today's route, `seoulNearbyStations:getDashboard` supplies the
+[around-the-airport panel](#around-the-airport-panel--november-2-2026-kst), and
+`seoulGk2a:getSolarHeatingDashboard` supplies the compact
 sunlight trend and `seoulGk2aClouds:getCloudTrendDashboard` supplies the rapid
 satellite cloud trend. Both pass `{ stationIcao: "RKSI", date }` and are read
 subscriptions; neither requests a download. They are skipped for archived and

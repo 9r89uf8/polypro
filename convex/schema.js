@@ -7,6 +7,7 @@ import { seoulGoci2Tables } from "./lib/seoulGoci2Schema.js";
 import { seoulNowcastTables } from "./lib/seoulNowcastSchema.js";
 import { seoulAnalogPeakTables } from "./lib/seoulAnalogPeakSchema.js";
 import { seoulProviderForecastTables } from "./lib/seoulProviderForecastSchema.js";
+import { seoulNearbyTables } from "./lib/seoulNearbySchema.js";
 
 const seoulForecastStatus = v.union(
   v.literal("ok"),
@@ -193,6 +194,7 @@ export default defineSchema({
   ...seoulNowcastTables,
   ...seoulAnalogPeakTables,
   ...seoulProviderForecastTables,
+  ...seoulNearbyTables,
   notes: defineTable({
     stationIcao: v.optional(v.string()),
     title: v.optional(v.string()),
