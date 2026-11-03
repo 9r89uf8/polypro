@@ -10,6 +10,15 @@ export function formatSeoulTime(time, { seconds = false } = {}) {
   return (seconds ? seoulClock : seoulTime).format(time);
 }
 
+const seoulDate = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Seoul", month: "short", day: "numeric",
+});
+
+export function formatSeoulDateTime(time) {
+  if (typeof time !== "number" || !Number.isFinite(time)) return "—";
+  return `${seoulDate.format(time)}, ${seoulTime.format(time)}`;
+}
+
 export function formatDayMinute(minute, { compact = false, nextDay = false } = {}) {
   if (typeof minute !== "number" || !Number.isFinite(minute)) return "—";
   const rounded = Math.max(0, Math.min(1440, Math.round(minute)));

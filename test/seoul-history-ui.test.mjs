@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildForecastHistory, buildMarketHistory, priceSegments } from "../app/seoul/day/[date]/historyData.js";
-import { formatDayMinute, formatSeoulTime } from "../app/seoul/day/[date]/displayTime.js";
+import { buildForecastProviders, buildMarketHistory, priceSegments } from "../app/seoul/day/[date]/historyData.js";
+import { formatDayMinute, formatSeoulDateTime, formatSeoulTime } from "../app/seoul/day/[date]/displayTime.js";
 
 const DATE = "2026-10-29";
 const at = (time, date = DATE) => Date.parse(`${date}T${time}+09:00`);
@@ -15,11 +15,13 @@ const market = (fields = {}) => ({
     url: "https://polymarket.com/event/highest-temperature-in-seoul-on-october-29-2026" },
   series: series([point("08:04:00", 0), point("13:29:00", 1)]), ...fields,
 });
-const forecast = (values, fields = {}) => ({
-  stationIcao: "RKSI", date: DATE, today: DATE, approved: true, status: "ok", source: "kma_amo_airport",
-  history: values.map(([time, highTempC]) => ({ capturedAt: at(time), highTempC, status: highTempC === null ? "error" : "ok" })),
-  ...fields,
+const provider = (changes, fields = {}) => ({
+  id: "weathercom", label: "Weather.com", sourceUrl: "https://weather.com/kr/incheon/airport/incheon-international-airport/tenday",
+  access: "approved", status: "ok", lastCheckAt: NOW - 60_000, truncated: false,
+  location: { name: "Incheon International Airport", icaoCode: "RKSI", distanceKm: 1.3, verifiedAt: NOW - 60_000 },
+  changes: changes.map(([highC, firstSeenAt, lastSeenAt = firstSeenAt]) => ({ highC, firstSeenAt, lastSeenAt })), ...fields,
 });
+const forecastProviders = (row, date = DATE, now = NOW) => buildForecastProviders({ stationIcao: "RKSI", date, providers: [row] }, date, now).providers[0];
 
 test("all visible Seoul clocks use AM/PM across midnight, noon and next-day chart endpoints", () => {
   assert.equal(formatSeoulTime(at("00:00:00")), "12:00 AM");
@@ -29,6 +31,8 @@ test("all visible Seoul clocks use AM/PM across midnight, noon and next-day char
   assert.equal(formatDayMinute(780, { compact: true }), "1 PM");
   assert.equal(formatDayMinute(785), "1:05 PM");
   assert.equal(formatSeoulTime(null), "—");
+  assert.equal(formatSeoulDateTime(at("21:15:00", "2026-10-28")), "Oct 28, 9:15 PM");
+  assert.equal(formatSeoulDateTime(null), "—");
 });
 
 test("market history keeps old captured values, converts cents, and exposes partial retention", () => {
@@ -79,44 +83,70 @@ test("archived quotes remain historical and future dates do not display prices",
   assert.deepEqual(buildMarketHistory(market({ date: "2026-10-30" }), "2026-10-30", NOW).series, []);
 });
 
-test("forecast changes preserve reversals and group repeated checks without changing capture times", () => {
-  const result = buildForecastHistory(forecast([
-    ["08:00:00", 30], ["09:00:00", 30], ["10:00:00", 31], ["11:00:00", 29], ["13:00:00", 30],
-  ]), DATE, NOW);
-  assert.deepEqual(result.changes.map((row) => row.highC), [30, 31, 29, 30]);
-  assert.deepEqual(result.changes.map((row) => row.deltaC), [null, 1, -2, 1]);
-  assert.equal(result.first.capturedAt, at("08:00:00"));
-  assert.equal(result.latest.capturedAt, at("13:00:00"));
-  assert.equal(result.captureCount, 5);
-  assert.equal(result.deltaC, 0);
+test("each provider shows its latest high and when it last changed, keeping reversals and earlier days", () => {
+  const row = forecastProviders(provider([
+    [16, at("21:15:00", "2026-10-28"), at("23:45:00", "2026-10-28")], [17, at("08:02:00"), at("09:02:00")],
+    [16.4, at("09:17:00")], [17, at("11:02:00"), at("13:17:00")],
+  ]));
+  assert.equal(row.highC, 17);
+  assert.deepEqual(row.changes.map((point) => point.deltaC), [null, 1, -0.6, 0.6]);
+  assert.deepEqual(row.changes.map((point) => point.seenLabel), ["Oct 28, 9:15 PM", "8:02 AM", "9:17 AM", "11:02 AM"]);
+  assert.deepEqual(row.changes.map((point) => point.afterLabel), [null, "Oct 28, 11:45 PM", "9:02 AM", "9:17 AM"]);
+  assert.deepEqual(row.changes.map((point) => point.deltaLabel), [null, "+1°C", "-0.6°C", "+0.6°C"]);
+  assert.equal(row.note, "+0.6°C at 11:02 AM");
+  assert.equal(row.warning, false);
+  assert.equal(row.checkedLabel, "Oct 29, 1:29 PM");
+  assert.equal(row.airportNote, "Airport confirmed: Incheon International Airport · RKSI · 1.3 km from the RKSI reference point.");
 });
 
-test("forecast gaps and truncated records never imply a complete day or a prior-day starting high", () => {
-  const result = buildForecastHistory(forecast([
-    ["08:00:00", 30], ["09:00:00", null], ["13:00:00", 31],
-  ], { truncated: true, previousDayBaseline: { highTempC: 28, capturedAt: at("23:00:00", "2026-10-28") } }), DATE, NOW);
-  assert.equal(result.deltaC, null);
-  assert.equal(result.first.highC, 30);
-  assert.equal(result.hasGaps, true);
-  assert.equal(result.changes[1].gapBefore, true);
-  assert.equal(result.truncated, true);
+test("a provider whose high has not changed says since when, and repeated rows from a backfill join up", () => {
+  const row = forecastProviders(provider([[17, at("00:02:00"), at("05:00:00")], [17, at("05:15:00"), at("13:17:00")]]));
+  assert.equal(row.changes.length, 1);
+  assert.equal(row.changes[0].lastSeenAt, at("13:17:00"));
+  assert.equal(row.note, "No change since 12:02 AM");
 });
 
-test("forecast history hides revoked or wrong-source captures and retains known values after errors", () => {
-  const values = [["08:00:00", 30], ["13:00:00", null]];
-  assert.equal(buildForecastHistory(forecast(values, { status: "error" }), DATE, NOW).latest.highC, 30);
-  for (const fields of [{ approved: false }, { approved: "true" }, { status: "approval_required" },
-    { stationIcao: "KORD" }, { date: "2026-10-28" }, { source: "weathercom" }]) {
-    assert.deepEqual(buildForecastHistory(forecast(values, fields), DATE, NOW).changes, []);
+test("providers without data say why, and unusable or future rows are ignored", () => {
+  const empty = (fields) => forecastProviders(provider([], fields));
+  assert.equal(empty({ access: "approval_required", location: undefined }).note, "Approval required");
+  assert.equal(empty({ access: "approval_required", location: undefined }).airportNote, null);
+  assert.equal(empty({ access: "setup_required" }).note, "API key needed");
+  assert.equal(empty({ status: "location_unverified", location: null }).note, "Airport location not confirmed");
+  assert.equal(empty({ status: "location_unverified", location: null }).airportNote, "Airport location not confirmed yet.");
+  assert.equal(empty({ status: "error" }).note, "Check failed");
+  assert.equal(empty({ status: "no_data" }).note, "No forecast captured for this date");
+  const row = forecastProviders(provider([[17, at("08:00:00")], [18, at("14:00:00")], [null, at("09:00:00")], [19, "soon"]]));
+  assert.deepEqual(row.changes.map((point) => point.highC), [17]);
+});
+
+test("a live provider warns when its last check failed, moved off the airport or went quiet, but keeps its high", () => {
+  const changes = [[17, at("08:00:00"), at("13:17:00")]];
+  assert.equal(forecastProviders(provider(changes, { status: "error" })).note, "No change since 8:00 AM · last check failed");
+  assert.equal(forecastProviders(provider(changes, { status: "location_unverified" })).note, "No change since 8:00 AM · airport not confirmed");
+  const stale = forecastProviders(provider([[17, at("07:00:00")]]));
+  assert.equal(stale.note, "No change since 7:00 AM · older forecast");
+  for (const row of [forecastProviders(provider(changes, { status: "error" })), stale]) {
+    assert.equal(row.highC, 17);
+    assert.equal(row.warning, true);
   }
+  const archived = forecastProviders(provider([[17, at("07:00:00")]], { status: "error" }), DATE, at("13:30:00", "2026-10-30"));
+  assert.equal(archived.note, "No change since 7:00 AM", "a finished day is not late");
+  assert.equal(archived.warning, false);
+  const future = forecastProviders(provider([[17, at("07:00:00")]]), "2026-10-30", NOW);
+  assert.equal(future.note, "No change since Oct 29, 7:00 AM · older forecast");
 });
 
-test("forecast history rejects future and other-day records and distinguishes single from repeated checks", () => {
-  const input = forecast([["08:00:00", 30], ["08:05:00", 30], ["15:00:00", 31]]);
-  input.history.push({ capturedAt: at("23:00:00", "2026-10-28"), highTempC: 28, status: "ok" });
-  const result = buildForecastHistory(input, DATE, NOW);
-  assert.equal(result.changes.length, 1);
-  assert.equal(result.captureCount, 2);
-  assert.equal(result.latest.capturedAt, at("08:05:00"));
-  assert.equal(buildForecastHistory(forecast([["08:00:00", 30]]), DATE, NOW).captureCount, 1);
+test("a provider's attribution appears only with its data", () => {
+  const attribution = { logoUrl: "https://developer.accuweather.com/logo.svg", href: "https://www.accuweather.com" };
+  assert.deepEqual(forecastProviders(provider([[18, at("08:00:00")]], { attribution })).attribution, attribution);
+  assert.equal(forecastProviders(provider([], { attribution })).attribution, null);
+});
+
+test("the provider list refuses another station or date and exposes a cut-short history", () => {
+  assert.equal(buildForecastProviders(undefined, DATE, NOW).status, "loading");
+  for (const fields of [{ stationIcao: "KORD" }, { date: "2026-10-28" }, { providers: null }]) {
+    const result = buildForecastProviders({ stationIcao: "RKSI", date: DATE, providers: [provider([])], ...fields }, DATE, NOW);
+    assert.deepEqual([result.status, result.providers], ["unavailable", []], JSON.stringify(fields));
+  }
+  assert.equal(forecastProviders(provider([[17, at("08:00:00")]], { truncated: true })).truncated, true);
 });

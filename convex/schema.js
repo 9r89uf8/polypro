@@ -8,6 +8,7 @@ import { seoulNowcastTables } from "./lib/seoulNowcastSchema.js";
 import { seoulAnalogPeakTables } from "./lib/seoulAnalogPeakSchema.js";
 import { seoulProviderForecastTables } from "./lib/seoulProviderForecastSchema.js";
 import { seoulNearbyTables } from "./lib/seoulNearbySchema.js";
+import { forecastHighLocation, seoulForecastHighTables } from "./lib/seoulForecastHighsSchema.js";
 
 const seoulForecastStatus = v.union(
   v.literal("ok"),
@@ -195,6 +196,7 @@ export default defineSchema({
   ...seoulAnalogPeakTables,
   ...seoulProviderForecastTables,
   ...seoulNearbyTables,
+  ...seoulForecastHighTables,
   notes: defineTable({
     stationIcao: v.optional(v.string()),
     title: v.optional(v.string()),
@@ -1491,6 +1493,8 @@ export default defineSchema({
     status: seoulForecastStatus,
     weathercomStatus: seoulProviderStatus,
     weathercomError: v.optional(v.string()),
+    weathercomLocation: v.optional(forecastHighLocation),
+    weathercomLocationError: v.optional(v.string()),
     weathercomForecastDays: v.array(
       v.object({
         date: v.string(),

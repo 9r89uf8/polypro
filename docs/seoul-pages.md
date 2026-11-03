@@ -1,5 +1,21 @@
 # Seoul RKSI live-temperature page
 
+## Forecast high by provider — November 3, 2026 KST
+
+The Forecast high card keeps KMA's large number and peak hours, and below them lists a
+row each for KMA, Weather.com and AccuWeather, replacing the KMA-only captured-high
+history. A row shows the provider's high for the selected date and its latest change, such
+as `+1°C at 9:17 AM` or `No change since 12:05 AM`, with an amber note when its last check
+failed, its airport location couldn't be confirmed, or a live high has gone six hours
+without a sighting. Opening a row lists every value with when we first saw it, what it
+changed by and the check it changed after, plus the airport evidence, the last check and a
+link to the provider's forecast. Times on another day include the date, because a day's
+history starts days ahead of it. AccuWeather reads `Approval required` or `API key needed`
+until it is activated, and then shows its logo, linked to its site, in place of its name.
+The rows read the new `seoulForecastHighs:getProviderHighs` subscription, which requests
+nothing; the page's Refresh and `Check KMA now` still only reach KMA. Sources, clocks,
+terms and activation are in the [forecast highs specification](./seoul-forecast-highs.md).
+
 ## Forecast high check button — November 3, 2026 KST
 
 The Forecast high card has a `Check KMA now` button on today and future dates, and
@@ -257,7 +273,7 @@ until `OPEN_METEO_FORECAST_ACCESS_APPROVED` is set; KMA does the same without
 its flag. See the [lock specification](./seoul-provider-forecasts.md).
 
 This document describes the streamlined RKSI dashboard: Seoul time, KMA
-forecast maximum, captured high revisions and peak times, the official
+forecast maximum, each provider's high and its changes, peak times, the official
 routine-METAR maximum, observed cloud cover and its trend, the daily
 temperature chart, and Seoul Polymarket price history with today's quotes. Collector and
 approval documentation remains below; the former diagnostic dashboard is
@@ -424,20 +440,15 @@ clock remains an actual current clock, not a simulated historical clock.
    high, identify the hourly value and its times separately. Those times are
    not an asserted time of the daily maximum. Missing daily or hourly guidance
    remains missing, and stale stored guidance stays visibly stale.
-   The same card includes a compact captured-high history for the selected
-   KST day, with the first and latest captured daily high and their difference.
-   Expandable captured values show each distinct high in sequence and when it
-   was first captured. Repeated identical captures are grouped; a return to an
-   earlier high remains a new change. Missing or failed captures remain
-   explicit gaps. This is the published daily high for that target date, not
-   the hourly peak, observed maximum, or a model's revision history.
-   Times are labeled `Captured` or collection time. The stored `capturedAt`
-   is set before the HTTP request; it is not an exact receipt or provider
-   issuance time. `pageReportedAt` belongs to the current-conditions header
-   and is not relabeled as forecast issuance. A separately returned prior-day
-   baseline is never folded into the same-day first-to-latest change. If the
-   query truncates that day's captures, the overall change is unavailable
-   rather than claiming a full-day delta from a retained tail.
+   The same card lists [each provider's high and when it changed](./seoul-forecast-highs.md).
+   Repeated identical captures are grouped; a return to an earlier high remains
+   a new change. A failed check keeps the last good high with a note. This is the
+   published daily high for that target date, not the hourly peak, observed
+   maximum, or a model's revision history. Times are when we first saw a value:
+   the stored `capturedAt` is set before the HTTP request, so it is not an exact
+   receipt or provider issuance time. `pageReportedAt` belongs to the
+   current-conditions header and is not relabeled as forecast issuance. If the
+   query cuts a list short, its first row reads `First retained`.
 3. **Official high so far.** Compute the maximum from the selected day's
    routine METAR observations, explicitly excluding reports identified as
    `SPECI`. Label this boundary `Routine reports`. This is distinct from the
@@ -579,8 +590,14 @@ flag from `weathercomHourlyDiagnostics` for the hourly strip, are presented.
 Reusing that existing read endpoint does not make its legacy prediction or other
 Weather.com fields current UI features.
 
+`seoulForecastHighs:getProviderHighs({ stationIcao: "RKSI", date })` supplies the
+Forecast high card's provider rows. It checks each provider's approval before reading
+that provider's rows, makes no external request and queues no work. See the
+[forecast highs specification](./seoul-forecast-highs.md#when-a-forecast-changes).
+
 `seoulDashboardHistory:getForecastHighHistory({ stationIcao: "RKSI", date })`
-supplies the inline daily-high revision history from immutable
+is no longer read by the page and stays deployed for bundles already open. It
+builds a KMA daily-high revision history from immutable
 `seoulKmaForecastCaptures`. It first requires
 `KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED === "true"`; absent or revoked
 approval returns no history, first/latest values, or prior-day baseline before
@@ -1004,8 +1021,9 @@ history rows from being backdated to the start of the collector run. They are
 optional so captures created before this history layer continue to validate.
 Optional legacy fields remain for compatibility. Legacy backend selectors
 retain these captures for their secondary comparisons and conservative veto;
-the streamlined page shows Weather.com only in the 9 AM lock card and the hourly
-strip, not in the former secondary comparison panels.
+the streamlined page shows Weather.com only in the Forecast high card's provider
+rows, the 9 AM lock card and the hourly strip, not in the former secondary
+comparison panels.
 
 ### `seoulHourlyForecastPredictions`
 
@@ -1111,7 +1129,8 @@ though the redesigned page no longer renders the diagnostic table.
   rows and stops every protected entry point before another request or write.
 - KMA condition phrases and ceilings remain categorical/separate. Missing KMA
   fields stay missing; no percentage is fabricated. On the streamlined page
-  Weather.com appears only in the 9 AM lock card and the hourly strip, where its
+  Weather.com appears only as a labeled row in the Forecast high card, in the 9 AM
+  lock card and in the hourly strip, where its
   words fill a sky column with no KMA row, can raise a forecast hour's dashed
   rain pill, and appear in the readout, named as Weather.com. Otherwise it is
   retained for legacy backend diagnostics.

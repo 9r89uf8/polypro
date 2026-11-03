@@ -1,5 +1,20 @@
 # RKSI: fastest current-temperature source
 
+## Forecast highs by provider — November 3, 2026
+
+The [forecast highs specification](./seoul-forecast-highs.md) adds Weather.com and
+AccuWeather beside KMA's daily high and records when each changes, in
+`seoulForecastHighChanges` and `seoulForecastHighStatus`. KMA and Weather.com use their
+existing collectors; Weather.com gains a location request on every run, and its high is
+recorded only while that request resolves to the airport. AccuWeather is a new external
+source through its official API, for the airport's own location `3602_poi`, behind the
+new `ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED` flag and `ACCUWEATHER_RKSI_API_KEY`, with
+crons `seoul_accuweather_forecast_every_15_min` and
+`seoul_accuweather_forecast_retention`. Its terms limit kept data to two weeks, require
+its logo and restrict the cheapest plan to non-commercial use, so the owner must confirm
+the scope before activation. KMA remains the canonical high and peak time; neither other
+provider feeds any model.
+
 ## Stations around the airport — November 2, 2026
 
 The [around-the-airport panel](./seoul-pages.md#around-the-airport-panel--november-2-2026-kst)
@@ -1271,7 +1286,8 @@ condition, or ceiling, and it is never blended with KMA. A fresh Weather.com
 remaining high at or above the target is only a conservative veto against the
 strongest threshold decision. This is the same source hierarchy used by the
 Wellington research: an official aviation source stays canonical while
-Weather.com remains an unofficial helper.
+Weather.com remains an unofficial helper. Its daily high also appears as its own
+labeled row in the page's [Forecast high card](./seoul-forecast-highs.md).
 
 The one display exception is the day page's
 [hourly sky strip](./seoul-pages.md#hourly-sky-and-rain-strip--november-2-2026-kst).
@@ -1702,8 +1718,11 @@ stays missing rather than being carried forward with a newer capture time.
 
 ### Captured daily-high history
 
+The day page now reads [`seoulForecastHighs:getProviderHighs`](./seoul-forecast-highs.md#when-a-forecast-changes)
+instead; this query stays deployed for bundles already open.
+
 `seoulDashboardHistory:getForecastHighHistory({ stationIcao: "RKSI", date })`
-provides the daily page's compact KMA high-revision history. This read-only
+provides a compact KMA high-revision history. This read-only
 query uses the existing `seoulKmaForecastCaptures` table and
 `by_station_capturedAt` index; it adds no fetch, schema, schedule, approval
 flag, or collection trigger. Invalid, future, and dates outside its rolling

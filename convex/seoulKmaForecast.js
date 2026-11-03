@@ -2,6 +2,7 @@ import { internalMutationGeneric, mutationGeneric } from "convex/server";
 import { v } from "convex/values";
 
 import { internal } from "./_generated/api.js";
+import { recordForecastCheck } from "./lib/seoulForecastHighs.js";
 
 const KMA_AMO_APPROVAL_FLAG =
   "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED";
@@ -119,6 +120,24 @@ export const storeForecastCapture = internalMutationGeneric({
       ...args,
       createdAt: Date.now(),
     });
+    if (args.status !== "approval_required") {
+      await recordForecastCheck(ctx, {
+        provider: "kma",
+        capturedAt: args.capturedAt,
+        status: args.status,
+        error: args.error,
+        // The parser accepts only a page that displays RKSI.
+        location:
+          args.status === "ok"
+            ? {
+                name: args.stationName,
+                icaoCode: args.stationIcao,
+                verifiedAt: args.capturedAt,
+              }
+            : undefined,
+        rows: args.dailyRows,
+      });
+    }
     return await ctx.db.get(captureId);
   },
 });

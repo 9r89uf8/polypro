@@ -9,7 +9,7 @@ import AnalogPeak from "./AnalogPeak";
 import NearbyStations from "./NearbyStations";
 import ProviderForecasts from "./ProviderForecasts";
 import MarketChart from "./MarketChart";
-import { buildForecastHistory, buildMarketHistory } from "./historyData";
+import { buildForecastProviders, buildMarketHistory } from "./historyData";
 import { formatDayMinute, formatSeoulTime } from "./displayTime";
 import { buildHourlySky, buildTemperatureSeries, chartPeakHours, forecastCheckResult, forecastCheckStatus, summarizeClouds, summarizeForecast, summarizeSatelliteCloudTrend, summarizeSeoulMarket, summarizeSunlight } from "./dashboardData";
 import { buildProviderForecastState } from "./providerForecastState";
@@ -77,33 +77,25 @@ function ForecastCheck({ capturedAt, now }) {
   </div>;
 }
 
-function ForecastHistory({ history, currentHighC }) {
-  if (!history.first) return <p className={styles.forecastHistoryEmpty} role="status">{history.message}</p>;
-  const { first, latest, changes, deltaC, truncated } = history;
-  const count = changes.length - 1;
-  const amount = (value) => `${value > 0 ? "+" : ""}${Number(value.toFixed(2))}°C`;
-  const matches = Number.isFinite(currentHighC) && Math.abs(currentHighC - latest.highC) < 0.001;
-  const headline = truncated ? "Partial forecast history"
-    : count === 0 ? history.captureCount > 1 ? "No change in captured highs" : "First forecast capture"
-      : deltaC === 0 ? `Back to ${temperature(first.highC)}C`
-        : `${deltaC > 0 ? "Raised" : "Lowered"} ${amount(Math.abs(deltaC)).replace("+", "")}`;
-  return <div className={styles.forecastHistory}>
-    <strong className={styles.forecastChange}>{headline}</strong>
-    <p>{count > 0 ? <>{temperature(first.highC)}C → {temperature(latest.highC)}C <span>since {timeLabel(first.capturedAt)}</span></>
-      : <>Captured {timeLabel(first.capturedAt)} <span>KST</span></>}
-      {!matches ? <span> · recorded history</span> : null}</p>
-    <details className={styles.forecastDetails}>
-      <summary>Captured highs{count ? ` · ${count} ${count === 1 ? "change" : "changes"}` : ""}</summary>
-      <ol>{changes.map((point, index) => <li key={point.capturedAt}>
-        <time dateTime={new Date(point.capturedAt).toISOString()}>{timeLabel(point.capturedAt)}</time>
-        <strong>{temperature(point.highC)}C</strong><span>{index === 0 ? truncated ? "First retained" : "First captured" : amount(point.deltaC)}</span>
-      </li>)}</ol>
-      <p>Collection times in KST; the change may have occurred between checks.</p>
-      {history.hasGaps ? <p>Some checks had no usable high.</p> : null}
-      {truncated ? <p>Earlier captures are missing; a full-day change cannot be calculated.</p> : null}
-    </details>
-    <span className={styles.forecastLastCheck}>Last usable capture {timeLabel(latest.capturedAt)} KST</span>
-  </div>;
+function ForecastProviders({ forecast }) {
+  if (!forecast.providers.length) return <p className={styles.forecastHistoryEmpty} role="status">{forecast.message}</p>;
+  return <div className={styles.forecastProviders}>{forecast.providers.map((provider) => <details key={provider.id} className={styles.forecastProvider}>
+    <summary>
+      <span>{provider.attribution ? <a href={provider.attribution.href} target="_blank" rel="noreferrer"><img src={provider.attribution.logoUrl} alt={provider.label} height="14" /></a> : provider.label}</span>
+      <strong>{temperature(provider.highC)}{provider.highC === null ? null : "C"}</strong>
+      <small className={provider.warning ? styles.stale : undefined}>{provider.note}</small>
+    </summary>
+    <div className={styles.forecastDetails}>
+      {provider.changes.length ? <ol>{provider.changes.map((point, index) => <li key={point.firstSeenAt}>
+        <time dateTime={new Date(point.firstSeenAt).toISOString()}>{point.seenLabel}</time>
+        <strong>{temperature(point.highC)}C</strong><span>{index === 0 ? provider.truncated ? "First retained" : "First captured" : `${point.deltaLabel} · changed after the ${point.afterLabel} check`}</span>
+      </li>)}</ol> : null}
+      {provider.changes.length ? <p>Times are when we first saw each value, in KST.</p> : null}
+      {provider.truncated ? <p>Earlier changes are not shown.</p> : null}
+      {provider.airportNote ? <p>{provider.airportNote}</p> : null}
+      <p>{provider.checkedLabel ? `Last check ${provider.checkedLabel} KST · ` : null}<a href={provider.sourceUrl} target="_blank" rel="noreferrer">{provider.label} forecast ↗</a></p>
+    </div>
+  </details>)}</div>;
 }
 
 function SeoulMarket({ market, history, date, isToday }) {
@@ -157,7 +149,7 @@ export default function SeoulDayPage() {
   const satelliteCloudDashboard = useQuery("seoulGk2aClouds:getCloudTrendDashboard", isToday ? { ...STATION, date } : "skip");
   const marketDashboard = useQuery("seoulPolymarket:getDashboard", isToday ? { ...STATION, date } : "skip");
   const marketHistoryDashboard = useQuery("seoulPolymarket:getPriceHistory", dateValid ? { ...STATION, date } : "skip");
-  const forecastHistoryDashboard = useQuery("seoulDashboardHistory:getForecastHighHistory", dateValid ? { ...STATION, date } : "skip");
+  const forecastProvidersDashboard = useQuery("seoulForecastHighs:getProviderHighs", dateValid ? { ...STATION, date } : "skip");
   const analogPeakDashboard = useQuery("seoulAnalogPeak:getDashboard", dateValid ? { ...STATION, date } : "skip");
   const providerForecastDashboard = useQuery("seoulProviderForecasts:getDashboard", dateValid ? { ...STATION, date } : "skip");
   const nearbyDashboard = useQuery("seoulNearbyStations:getDashboard", isToday ? { ...STATION, date } : "skip");
@@ -174,7 +166,7 @@ export default function SeoulDayPage() {
   const satelliteClouds = useMemo(() => summarizeSatelliteCloudTrend(satelliteCloudDashboard, date, now, isToday), [satelliteCloudDashboard, date, now, isToday]);
   const market = useMemo(() => summarizeSeoulMarket(marketDashboard, date, now, isToday), [marketDashboard, date, now, isToday]);
   const marketHistory = useMemo(() => buildMarketHistory(marketHistoryDashboard, date, now), [marketHistoryDashboard, date, now]);
-  const forecastHistory = useMemo(() => buildForecastHistory(forecastHistoryDashboard, date, now), [forecastHistoryDashboard, date, now]);
+  const forecastProviders = useMemo(() => buildForecastProviders(forecastProvidersDashboard, date, now), [forecastProvidersDashboard, date, now]);
   const refresh = useCallback(async (quiet = false) => {
     if (!isToday || refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -212,7 +204,7 @@ export default function SeoulDayPage() {
         <p className={styles.peakTime}>{forecastAvailable ? peakLabel(forecast.peakWindows) : forecastStatus}</p>
         <p className={styles.cardNote}>{forecastAvailable && forecast.peakWindows?.length ? `${peakMatchesHigh ? "Peak hours" : `Hourly forecast peaks at ${temperature(forecast.hourlyPeakC)}C`} · KST` : "Official airport forecast"}</p>
         {!isPast && forecast.status !== "approval_required" ? <ForecastCheck capturedAt={forecast.capturedAt} now={now} /> : null}
-        <ForecastHistory history={forecastHistory} currentHighC={forecast.highC} />
+        <ForecastProviders forecast={forecastProviders} />
         <div className={styles.cardFooter}>{forecast.status === "error" && forecastAvailable ? <span className={styles.stale}>Stored forecast · refresh failed</span> : forecast.status === "stale" ? <span className={styles.stale}>Older forecast</span> : isPast ? "Stored KMA forecast" : "Published daily maximum"}{forecast.capturedAt ? <span>Captured {timeLabel(forecast.capturedAt)}</span> : null}</div>
       </article>
       <article className={styles.card}>

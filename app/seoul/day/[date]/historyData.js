@@ -1,5 +1,8 @@
+import { formatSeoulDateTime, formatSeoulTime } from "./displayTime.js";
+
 const MINUTE = 60_000;
 const DAY = 1440 * MINUTE;
+const FORECAST_STALE_MS = 360 * MINUTE;
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const dateAt = (time) => new Date(time + 9 * 60 * MINUTE).toISOString().slice(0, 10);
 const minuteAt = (time) => ((time + 9 * 60 * MINUTE) % DAY) / MINUTE;
@@ -78,46 +81,50 @@ export function buildMarketHistory(dashboard, date, now) {
   };
 }
 
-export function buildForecastHistory(dashboard, date, now) {
-  const empty = (status, message) => ({
-    status, message, changes: [], first: null, latest: null, deltaC: null,
-    captureCount: 0, hasGaps: false, truncated: false,
-  });
-  if (dashboard === undefined || !finite(now)) return empty("loading", "Checking forecast updates…");
-  if (dashboard?.approved !== true || dashboard.status === "approval_required") return empty("approval_required", "Forecast history unavailable.");
-  if (dashboard.stationIcao !== "RKSI" || dashboard.date !== date || dashboard.today !== dateAt(now) ||
-      dashboard.source !== "kma_amo_airport") return empty("unavailable", "Forecast history unavailable.");
-  const rows = Array.isArray(dashboard.history) ? dashboard.history : [];
-  const byTime = new Map();
-  let hasGaps = false;
-  for (const row of rows) {
-    if (!finite(row?.capturedAt) || row.capturedAt > now || dateAt(row.capturedAt) !== date) continue;
-    const highC = row.status === "ok" && finite(row.highTempC) ? row.highTempC : null;
-    const previous = byTime.get(row.capturedAt);
-    byTime.set(row.capturedAt, { capturedAt: row.capturedAt, highC: previous && previous.highC !== highC ? null : highC });
-  }
-  const ordered = [...byTime.values()].sort((a, b) => a.capturedAt - b.capturedAt);
+const signedDegrees = (value) => `${value > 0 ? "+" : ""}${Number(value.toFixed(2))}°C`;
+
+function airportNote(location) {
+  if (!location) return "Airport location not confirmed yet.";
+  const distance = finite(location.distanceKm) ? `${location.distanceKm} km from the RKSI reference point` : null;
+  return `Airport confirmed: ${[location.name, location.icaoCode, distance].filter(Boolean).join(" · ")}.`;
+}
+
+function forecastProvider(raw, date, live, now) {
+  const when = (time) => (dateAt(time) === date ? formatSeoulTime(time) : formatSeoulDateTime(time));
   const changes = [];
-  let latest = null;
-  let captureCount = 0;
-  let gapBefore = false;
-  for (const point of ordered) {
-    if (point.highC === null) { hasGaps = true; gapBefore = true; continue; }
-    captureCount += 1;
+  for (const row of Array.isArray(raw?.changes) ? raw.changes : []) {
+    if (!finite(row?.highC) || !finite(row.firstSeenAt) || !finite(row.lastSeenAt) || row.firstSeenAt > now) continue;
     const previous = changes.at(-1);
-    if (!previous || point.highC !== previous.highC) {
-      changes.push({ ...point, deltaC: previous ? point.highC - previous.highC : null, gapBefore });
-    }
-    latest = point;
-    gapBefore = false;
+    if (previous?.highC === row.highC) { previous.lastSeenAt = Math.max(previous.lastSeenAt, row.lastSeenAt); continue; }
+    const deltaC = previous ? Math.round((row.highC - previous.highC) * 1e6) / 1e6 : null;
+    changes.push({
+      highC: row.highC, firstSeenAt: row.firstSeenAt, lastSeenAt: row.lastSeenAt, deltaC, seenLabel: when(row.firstSeenAt),
+      deltaLabel: previous ? signedDegrees(deltaC) : null, afterLabel: previous ? when(previous.lastSeenAt) : null,
+    });
   }
-  if (!changes.length) return empty("no_data", date > dashboard.today ? "Updates appear as this day progresses." : "No forecast high captured for this day.");
-  const first = changes[0];
+  const latest = changes.at(-1) ?? null;
+  const failed = raw?.status === "error", unverified = raw?.status === "location_unverified";
+  const stale = Boolean(live && latest && now - latest.lastSeenAt > FORECAST_STALE_MS);
+  const warning = !latest || !live ? null : unverified ? "airport not confirmed" : failed ? "last check failed" : stale ? "older forecast" : null;
+  const empty = raw?.access === "approval_required" ? "Approval required" : raw?.access === "setup_required" ? "API key needed"
+    : unverified ? "Airport location not confirmed" : failed ? "Check failed" : "No forecast captured for this date";
+  const summary = !latest ? empty : changes.length > 1 ? `${latest.deltaLabel} at ${latest.seenLabel}` : `No change since ${latest.seenLabel}`;
   return {
-    status: "ok", message: "KMA daily high, grouped by the first capture of each distinct value.",
-    first, latest, changes, deltaC: dashboard.truncated === true ? null : latest.highC - first.highC, captureCount,
-    hasGaps, truncated: dashboard.truncated === true,
+    id: raw?.id, label: raw?.label, sourceUrl: raw?.sourceUrl, access: raw?.access, highC: latest?.highC ?? null, changes,
+    attribution: latest ? raw?.attribution ?? null : null,
+    note: warning ? `${summary} · ${warning}` : summary, warning: Boolean(warning), truncated: raw?.truncated === true,
+    checkedLabel: finite(raw?.lastCheckAt) ? formatSeoulDateTime(raw.lastCheckAt) : null,
+    airportNote: raw?.access === "approval_required" ? null : airportNote(raw?.location),
   };
+}
+
+/** The card's per-provider highs for one date, with each value's first and last sighting and when it changed. */
+export function buildForecastProviders(dashboard, date, now) {
+  const empty = (status, message) => ({ status, message, providers: [] });
+  if (dashboard === undefined || !finite(now)) return empty("loading", "Checking forecast providers…");
+  if (dashboard?.stationIcao !== "RKSI" || dashboard.date !== date || !Array.isArray(dashboard.providers)) return empty("unavailable", "Provider forecasts unavailable.");
+  const live = date >= dateAt(now);
+  return { status: "ok", message: "", providers: dashboard.providers.map((row) => forecastProvider(row, date, live, now)) };
 }
 
 export function priceSegments(points, maximumGapMinutes = 11) {

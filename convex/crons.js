@@ -538,6 +538,25 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
+// AccuWeather's forecast for the airport's own location. Nothing is requested
+// unless ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED is exactly "true" and
+// ACCUWEATHER_RKSI_API_KEY is set.
+crons.cron(
+  "seoul_accuweather_forecast_every_15_min",
+  "7,22,37,52 * * * *",
+  internal.seoulAccuweatherForecast.collectAirportForecast,
+  {},
+);
+
+// AccuWeather's terms limit keeping its data to two weeks. This only deletes, so
+// it runs regardless of the flag.
+crons.cron(
+  "seoul_accuweather_forecast_retention",
+  "12 * * * *",
+  internal.seoulAccuweatherForecast.pruneExpired,
+  {},
+);
+
 // Re-evaluates the Seoul-local day's likely 15L maximum against live AMOS
 // observations. Mutable confirmation advances every run; immutable revisions
 // are written only when the decision, ceiling, margin, or blockers change.

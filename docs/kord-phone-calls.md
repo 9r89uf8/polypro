@@ -2,6 +2,11 @@
 
 This document covers the KORD phone-call temperature workflow shown on `/kord/today`.
 
+The November 3 Seoul forecast-high change adds
+`seoul_accuweather_forecast_every_15_min` (`:07`, `:22`, `:37` and `:52`, gated by its
+own approval flag and key) and `seoul_accuweather_forecast_retention` (hourly at `:12`).
+They leave KORD phone calls unchanged, and the new `ACCUWEATHER_RKSI_API_KEY` is separate
+from KORD's `ACCUWEATHER_API_KEY`. See [Seoul forecast highs](./seoul-forecast-highs.md).
 The November 3 Seoul forecast change replaces
 `seoul_kma_amo_airport_forecast_every_30_min` with
 `seoul_kma_amo_airport_forecast_every_10_min` (`:01`, `:11`, `:21`, `:31`, `:41` and

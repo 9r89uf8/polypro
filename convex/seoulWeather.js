@@ -24,6 +24,11 @@ import {
   normalizeDecisionTargetC,
   planActiveDecisionTargetRegistration,
 } from "./seoulHighPredictionModel.js";
+import {
+  recordForecastCheck,
+  verifyWeathercomLocation,
+} from "./lib/seoulForecastHighs.js";
+import { forecastHighLocation } from "./lib/seoulForecastHighsSchema.js";
 
 const SEOUL_TIMEZONE = "Asia/Seoul";
 const KMA_AMO_APPROVAL_FLAG = "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED";
@@ -32,6 +37,7 @@ const KMA_AMO_AIRPORT_FORECAST_URL =
 const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
 const WEATHERCOM_DAILY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/daily/5day`;
 const WEATHERCOM_HOURLY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/hourly/10day`;
+const WEATHERCOM_LOCATION_POINT_URL = `${WEATHERCOM_API_BASE_URL}/v3/location/point`;
 const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
 const WEATHERCOM_FALLBACK_API_KEY = "71f92ea9dd2f4790b92ea9dd2f779061";
 const RKSI_REPRESENTATIVE_RUNWAY_NO = "2";
@@ -474,6 +480,32 @@ async function fetchWeatherComHourlyForecast({
   return rows;
 }
 
+// Confirms that the icaoCode the forecasts are requested with still resolves to
+// the airport. Its result decides whether the daily high reaches the day page.
+async function fetchWeatherComAirportLocation({ icaoCode, language, apiKey }) {
+  const url = new URL(WEATHERCOM_LOCATION_POINT_URL);
+  url.searchParams.set("icaoCode", icaoCode);
+  url.searchParams.set("language", language);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("apiKey", apiKey);
+
+  const response = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+      "Cache-Control": "no-cache",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Weather.com location failed (${response.status}): ${text.slice(0, 220)}`,
+    );
+  }
+
+  return verifyWeathercomLocation(await response.json(), Date.now());
+}
+
 export const getDayPageWeather = actionGeneric({
   args: {
     date: v.string(),
@@ -550,6 +582,8 @@ export const storeForecastCapture = internalMutationGeneric({
       v.literal(WEATHER_STATUS.ERROR),
     ),
     weathercomError: v.optional(v.string()),
+    weathercomLocation: v.optional(forecastHighLocation),
+    weathercomLocationError: v.optional(v.string()),
     weathercomForecastDays: v.array(forecastDayValidator),
     weathercomHourlyStatus: v.union(
       v.literal(WEATHER_STATUS.OK),
@@ -593,6 +627,19 @@ export const storeForecastCapture = internalMutationGeneric({
         createdAt,
       });
     }
+    await recordForecastCheck(ctx, {
+      provider: "weathercom",
+      capturedAt: args.capturedAt,
+      status:
+        args.weathercomStatus !== WEATHER_STATUS.OK
+          ? "error"
+          : args.weathercomLocation
+            ? "ok"
+            : "location_unverified",
+      error: args.weathercomError ?? args.weathercomLocationError,
+      location: args.weathercomLocation,
+      rows: args.weathercomForecastDays,
+    });
     return await ctx.db.get(captureId);
   },
 });
@@ -618,7 +665,20 @@ export const collectForecastSnapshot = internalActionGeneric({
     );
     const captureDate = formatDateInTimezone(capturedAt, SEOUL_TIMEZONE);
     const apiKey = getWeatherComApiKey();
-    const [weathercomDaily, weathercomHourly] = await Promise.all([
+    const [weathercomLocation, weathercomDaily, weathercomHourly] = await Promise.all([
+      (async () => {
+        try {
+          return {
+            location: await fetchWeatherComAirportLocation({
+              icaoCode: stationIcao,
+              language: DEFAULT_WEATHERCOM_LANGUAGE,
+              apiKey,
+            }),
+          };
+        } catch (error) {
+          return { error: formatErrorMessage(error) };
+        }
+      })(),
       (async () => {
         try {
           const rows = await fetchWeatherComDailyForecast({
@@ -710,6 +770,9 @@ export const collectForecastSnapshot = internalActionGeneric({
       ...(weathercomDaily.error
         ? { weathercomError: weathercomDaily.error }
         : {}),
+      ...(weathercomLocation.location
+        ? { weathercomLocation: weathercomLocation.location }
+        : { weathercomLocationError: weathercomLocation.error }),
       weathercomForecastDays: weathercomDaily.rows,
       weathercomHourlyStatus: weathercomHourly.status,
       ...(weathercomHourly.error
