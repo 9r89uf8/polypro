@@ -1,5 +1,26 @@
 # Seoul RKSI live-temperature page
 
+## Peak hours band and one-degree axis — November 3, 2026 KST
+
+The “Temperature through the day” chart shades KMA's forecast peak hours in orange
+across the plot, with a line at each end, “Peak hours” (or “Peak”, or nothing, as
+the band narrows) at its top, and the hours in the legend. No new query is involved:
+the page already reads both sources. `chartPeakHours` in `dashboardData.js` chooses
+the hours.
+
+- **Which hours.** The same “Peak hours” as the Forecast high card, the hours when
+  KMA's hourly forecast is at its highest. Tied hours that are not adjacent get
+  separate bands, and a single hour gets a band an hour wide around it.
+- **Later in the day.** KMA's table drops past hours, so the latest forecast's peak
+  shrinks and then moves to the hours that are left. The band follows the latest
+  forecast only while the table still lists an hour before the peak. After that it
+  uses the KMA row of the 9 AM lock, and the legend adds “9 AM forecast”. With no
+  lock there is no band. The Forecast high card still shows the latest forecast, so
+  the two can differ later in the day.
+- **Axis.** The temperature axis has a tick at every whole degree around the day's
+  observed and forecast values, with stronger lines every 5°. If a day's range would
+  put labels under 12 px apart, every second degree is labelled.
+
 ## Around the airport panel — November 2, 2026 KST
 
 Directly below the temperature chart, “Nearby live readings” puts RKSI's 15L and

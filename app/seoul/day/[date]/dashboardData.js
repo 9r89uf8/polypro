@@ -1,5 +1,5 @@
 import { formatSeoulTime } from "./displayTime.js";
-import { skyPercentRange } from "./providerForecastState.js";
+import { formatPeakHours, skyPercentRange } from "./providerForecastState.js";
 
 const MINUTE_MS = 60_000;
 const KST_OFFSET_MS = 9 * 60 * MINUTE_MS;
@@ -111,6 +111,45 @@ function emptyForecast(status) {
   return { highC: null, hourlyPeakC: null, peakWindows: [], capturedAt: null, status, hourly: [] };
 }
 
+function windowsFromHours(hours) {
+  const windows = [];
+  for (const hour of hours) {
+    const previous = windows.at(-1);
+    if (previous && hour === previous.endHour + 1) previous.endHour = hour;
+    else windows.push({ startHour: hour, endHour: hour });
+  }
+  return windows;
+}
+
+/**
+ * The hours to mark on the temperature chart. KMA's table drops past hours through
+ * the day, so the latest forecast's peak is only whole while an earlier hour is still
+ * listed. After that the hours come from the 9 AM lock. With no lock nothing is
+ * marked, rather than a window that shrinks or moves to the hours that are left.
+ */
+export function chartPeakHours(forecast, lockedPeakHours) {
+  const latest = forecast?.peakWindows ?? [];
+  const firstMinute = finite(forecast?.hourly?.[0]?.minute);
+  if (latest.length && firstMinute !== null && firstMinute < latest[0].startHour * 60) {
+    const hours = latest.flatMap(({ startHour, endHour }) => Array.from({ length: endHour - startHour + 1 }, (_, index) => startHour + index));
+    return { windows: latest, label: formatPeakHours(hours), fromLock: false };
+  }
+  if (!lockedPeakHours?.length) return null;
+  return { windows: windowsFromHours(lockedPeakHours), label: formatPeakHours(lockedPeakHours), fromLock: true };
+}
+
+/** The temperature chart's axis: a tick at every whole degree around the day's values. */
+export function temperatureDomain(series) {
+  const values = series.flatMap((rows) => rows.map((row) => row.tempC));
+  if (!values.length) return { low: 0, high: 30, ticks: [0, 10, 20, 30] };
+  const lowest = Math.min(...values);
+  const highest = Math.max(...values);
+  const padding = Math.max(1, (highest - lowest) * 0.12);
+  const low = Math.floor(lowest - padding);
+  const high = Math.ceil(highest + padding);
+  return { low, high, ticks: Array.from({ length: high - low + 1 }, (_, index) => low + index) };
+}
+
 export function summarizeForecast(dashboard, date, nowMs) {
   if (dashboard === undefined) return emptyForecast("loading");
   if (dashboard?.kmaAccess?.approved !== true) return emptyForecast("approval_required");
@@ -139,13 +178,7 @@ export function summarizeForecast(dashboard, date, nowMs) {
   }
   const hourly = [...byTime.values()].sort((left, right) => left.time - right.time);
   const hourlyPeakC = hourly.length ? Math.max(...hourly.map((row) => row.tempC)) : null;
-  const peakWindows = [];
-  for (const row of hourly.filter((point) => point.tempC === hourlyPeakC)) {
-    const hour = row.minute / 60;
-    const previous = peakWindows.at(-1);
-    if (previous && hour === previous.endHour + 1) previous.endHour = hour;
-    else peakWindows.push({ startHour: hour, endHour: hour });
-  }
+  const peakWindows = windowsFromHours(hourly.filter((point) => point.tempC === hourlyPeakC).map((row) => row.minute / 60));
   const hasData = highC !== null || hourly.length > 0;
   const historical = finite(nowMs) !== null && date < seoulDate(nowMs);
   const freshnessMs = finite(forecast.staleAfterMinutes) !== null && forecast.staleAfterMinutes > 0

@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildTemperatureSeries,
+  chartPeakHours,
   summarizeClouds,
   summarizeForecast,
   summarizeSatelliteCloudTrend,
   summarizeSeoulMarket,
   summarizeSunlight,
+  temperatureDomain,
 } from "../app/seoul/day/[date]/dashboardData.js";
 
 const solar = (state = "increasing", fields = {}) => ({
@@ -331,6 +333,35 @@ test("forecast preserves daily published high and every separate tied peak windo
 test("forecast peak ties are exact and missing intervening hours are not bridged", () => {
   const result = summarizeForecast(forecast([[13, 12.9], [14, 12.899], [15, 12.9], [17, 12.9]]), DATE, at(9));
   assert.deepEqual(result.peakWindows, [13, 15, 17].map((hour) => ({ startHour: hour, endHour: hour })));
+});
+
+test("the chart marks the latest forecast's peak hours while the table still lists earlier hours", () => {
+  const morning = summarizeForecast(forecast([[11, 14], [12, 15], [13, 16], [14, 16], [15, 16], [16, 16], [17, 15]]), DATE, at(10));
+  assert.deepEqual(chartPeakHours(morning, [14, 15]), { windows: [{ startHour: 13, endHour: 16 }], label: "1–4 PM", fromLock: false });
+  const ties = summarizeForecast(forecast([[10, 12], [12, 13], [14, 12], [16, 13]]), DATE, at(9));
+  assert.deepEqual(chartPeakHours(ties, null), { windows: [{ startHour: 12, endHour: 12 }, { startHour: 16, endHour: 16 }], label: "12 PM · 4 PM", fromLock: false });
+});
+
+test("the chart falls back to the 9 AM lock once peak hours leave KMA's table, and marks nothing without one", () => {
+  // At 2 PM the table starts at 3 PM, so its peak is cut off and would shrink to 3–4 PM.
+  const shrinking = summarizeForecast(forecast([[15, 16], [16, 16], [17, 15]]), DATE, at(14));
+  assert.deepEqual(chartPeakHours(shrinking, [13, 14, 15, 16]), { windows: [{ startHour: 13, endHour: 16 }], label: "1–4 PM", fromLock: true });
+  assert.equal(chartPeakHours(shrinking, null), null);
+  assert.equal(chartPeakHours(shrinking, []), null);
+  // In the evening the remaining hours' high is not the day's peak.
+  const evening = summarizeForecast(forecast([[20, 13], [21, 12]]), DATE, at(19));
+  assert.deepEqual(chartPeakHours(evening, [13, 15]), { windows: [{ startHour: 13, endHour: 13 }, { startHour: 15, endHour: 15 }], label: "1 PM · 3 PM", fromLock: true });
+  assert.equal(chartPeakHours(summarizeForecast(undefined, DATE, at(9)), undefined), null);
+});
+
+test("the temperature axis ticks every whole degree around the day's values", () => {
+  const rows = (...values) => values.map((tempC) => ({ tempC }));
+  const day = temperatureDomain([rows(6.2, 13.8), rows(16)]);
+  assert.deepEqual([day.low, day.high], [5, 18]);
+  assert.deepEqual(day.ticks, [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+  assert.deepEqual(temperatureDomain([rows(-2.5, 1)]).ticks, [-4, -3, -2, -1, 0, 1, 2]);
+  assert.deepEqual(temperatureDomain([rows(10)]).ticks, [9, 10, 11]);
+  assert.deepEqual(temperatureDomain([[], []]).ticks, [0, 10, 20, 30]);
 });
 
 test("forecast fails closed without approval and never uses observed highs or Weather.com aliases", () => {

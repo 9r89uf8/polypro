@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { temperatureDomain } from "./dashboardData";
 import { formatDayMinute } from "./displayTime";
 import { cloudColor } from "./providerForecastState";
 
@@ -13,6 +14,9 @@ const MOON_COLOR = "#c8d6e8";
 const CLOUD_COLOR = "#b8cce0";
 const BACK_CLOUD_COLOR = "#6f859e";
 const RAIN_COLOR = "#6b9cf7";
+const PEAK_COLOR = "#ff9d5c";
+// Pixels per degree below which the axis labels every second degree, so they stay apart.
+const MIN_DEGREE_SPACING = 12;
 // Hour columns print their own values from this width; narrower charts label every third hour,
 // or every fourth below THIRD_HOUR_COLUMN_WIDTH, where "CAVOK" would touch its neighbour.
 const HOURLY_COLUMN_WIDTH = 34;
@@ -46,26 +50,6 @@ function clock(minute) {
   return formatDayMinute(minute);
 }
 
-function temperatureDomain(series) {
-  const values = series.flatMap((rows) => rows.map((row) => row.tempC));
-  if (!values.length) return { low: 0, high: 30, ticks: [0, 10, 20, 30] };
-  const lowest = Math.min(...values);
-  const highest = Math.max(...values);
-  const padding = Math.max(1, (highest - lowest) * 0.12);
-  const roughStep = (highest - lowest + 2 * padding) / 5;
-  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
-  const step =
-    [1, 2, 2.5, 5, 10].find((candidate) => candidate * magnitude >= roughStep) *
-    magnitude;
-  const low = Math.floor((lowest - padding) / step) * step;
-  const high = Math.ceil((highest + padding) / step) * step;
-  const ticks = [];
-  for (let tick = low; tick <= high + step / 10; tick += step) {
-    ticks.push(Number(tick.toFixed(4)));
-  }
-  return { low, high, ticks };
-}
-
 function splitAtGaps(rows, maximumGapMinutes) {
   const groups = [];
   for (const row of rows) {
@@ -92,15 +76,17 @@ function nearestReading(rows, minute, maximumDistance) {
   return distance <= maximumDistance ? nearest : null;
 }
 
-function LegendItem({ color, children, dotted = false, point = false }) {
+function LegendItem({ color, children, dotted = false, point = false, band = false }) {
   return (
     <span className="legend-item">
       <span
         aria-hidden="true"
         style={
-          point
-            ? { width: 7, height: 7, borderRadius: "50%", background: color }
-            : { width: 20, borderTop: `2px ${dotted ? "dashed" : "solid"} ${color}` }
+          band
+            ? { width: 16, height: 10, background: `${color}33`, borderLeft: `1px solid ${color}`, borderRight: `1px solid ${color}` }
+            : point
+              ? { width: 7, height: 7, borderRadius: "50%", background: color }
+              : { width: 20, borderTop: `2px ${dotted ? "dashed" : "solid"} ${color}` }
         }
       />
       {children}
@@ -239,6 +225,7 @@ export default function TemperatureChart({
   metar = [],
   forecast = [],
   sky = null,
+  peak = null,
   date,
   isToday = false,
   nowMinute,
@@ -277,6 +264,15 @@ export default function TemperatureChart({
   const y = (tempC) =>
     plot.bottom - ((tempC - domain.low) / (domain.high - domain.low)) * (plot.bottom - plot.top);
   const line = (rows) => rows.map((row, index) => `${index ? "L" : "M"}${x(row.minute)},${y(row.tempC)}`).join(" ");
+  const labelEvery = (plot.bottom - plot.top) / (domain.high - domain.low) >= MIN_DEGREE_SPACING ? 1 : 2;
+  // A single peak hour is a point on the forecast line, so it gets an hour's width around it.
+  const peakBands = (peak?.windows ?? []).map(({ startHour, endHour }) => {
+    const pad = startHour === endHour ? 30 : 0;
+    const left = x(Math.max(0, startHour * 60 - pad));
+    return { left, width: x(Math.min(DAY_MINUTES, endHour * 60 + pad)) - left };
+  });
+  const peakLabelBand = peakBands.reduce((widest, band) => (!widest || band.width > widest.width ? band : widest), null);
+  const peakLabelText = !peakLabelBand ? "" : peakLabelBand.width >= 64 ? "Peak hours" : peakLabelBand.width >= 28 ? "Peak" : "";
   const timeTicks = narrow ? [0, 360, 720, 1080, 1440] : [0, 180, 360, 540, 720, 900, 1080, 1260, 1440];
   const defaultMinute = Math.max(
     0,
@@ -317,6 +313,7 @@ export default function TemperatureChart({
         <LegendItem color={AMOS_COLOR}>AMOS 15L · 0.1°C</LegendItem>
         <LegendItem color={METAR_COLOR} point>Official METAR · whole °C</LegendItem>
         {predicted.length > 0 && <LegendItem color={FORECAST_COLOR} dotted>KMA hourly forecast</LegendItem>}
+        {peak && <LegendItem color={PEAK_COLOR} band>KMA peak hours · {peak.label}{peak.fromLock ? " · 9 AM forecast" : ""}</LegendItem>}
         <span className="legend-zone">KST · UTC+9</span>
       </div>
       {skyNote && <p className="sky-note">{skyNote}</p>}
@@ -336,6 +333,7 @@ export default function TemperatureChart({
         <desc id={`${id}-description`}>
           AMOS 15L minute observations are a cyan line. Official METAR reports are warm white points.
           {predicted.length > 0 ? " Dashed lines show the KMA hourly forecast." : ""}
+          {peak ? ` An orange band marks KMA's forecast peak hours, ${peak.label}.` : ""}
           {" "}Missing observations are not filled. Use the time slider below to inspect readings.
           {sky ? " Above the plot, a strip shows each hour's sky and rain: observed for past hours, forecast for later ones. Night hours are shaded, with calculated sunrise and sunset times." : ""}
         </desc>
@@ -352,10 +350,18 @@ export default function TemperatureChart({
         <text x={plot.left - 9} y={plot.top - 14} fill="#a4b4ca" fontSize="11" textAnchor="end">°C</text>
         {domain.ticks.map((tick) => (
           <g key={tick}>
-            <line x1={plot.left} x2={plot.right} y1={y(tick)} y2={y(tick)} stroke="#26364d" strokeOpacity="0.65" />
-            <text x={plot.left - 10} y={y(tick) + 4} fill="#a4b4ca" fontSize="11" textAnchor="end">{tick}</text>
+            <line x1={plot.left} x2={plot.right} y1={y(tick)} y2={y(tick)} stroke="#26364d" strokeOpacity={tick % 5 === 0 ? 0.8 : 0.4} />
+            {tick % labelEvery === 0 && <text x={plot.left - 10} y={y(tick) + 4} fill="#a4b4ca" fontSize="11" textAnchor="end">{tick}</text>}
           </g>
         ))}
+        {peakBands.map((band) => (
+          <g key={band.left} pointerEvents="none">
+            <rect x={band.left} y={plot.top} width={band.width} height={plot.bottom - plot.top} fill={PEAK_COLOR} fillOpacity="0.13" />
+            <line x1={band.left} x2={band.left} y1={plot.top} y2={plot.bottom} stroke={PEAK_COLOR} strokeOpacity="0.6" />
+            <line x1={band.left + band.width} x2={band.left + band.width} y1={plot.top} y2={plot.bottom} stroke={PEAK_COLOR} strokeOpacity="0.6" />
+          </g>
+        ))}
+        {peakLabelText && <text x={peakLabelBand.left + peakLabelBand.width / 2} y={plot.top + 13} fill={PEAK_COLOR} fontSize={narrow ? 9 : 10} textAnchor="middle" pointerEvents="none">{peakLabelText}</text>}
         {timeTicks.map((minute) => (
           <g key={minute}>
             <line x1={x(minute)} x2={x(minute)} y1={sky ? STRIP.rule : plot.top} y2={plot.bottom} stroke="#24344b" strokeOpacity="0.35" pointerEvents="none" />
