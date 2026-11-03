@@ -1,5 +1,23 @@
 # Seoul RKSI live-temperature page
 
+## Scrolling temperature chart — November 3, 2026 KST
+
+The “Temperature through the day” plot and its sky and rain strip now scroll sideways
+inside their own container, so the page itself gains no sideways scroll. Each hour is
+80 px wide, or 44 px when the chart's container is under 560 px, and it widens to fill
+a container too large to need scrolling. Every hour is labelled along the bottom,
+every hour column shows its own sky, cloud and rain, and sunrise and sunset use their
+names at every width.
+
+- **Fixed axis.** The °C labels and the “Sky” and “Rain” row names sit in their own
+  column and stay in place while the plot scrolls.
+- **Opening position.** Today opens with the current time a third of the way across,
+  so recent readings and the hours ahead both show. Other dates open centred on 1 PM.
+  This happens once per date, so live updates never move the reader's position.
+- **Inspection.** Hover and tap still inspect the point under them, and a touch drag
+  now scrolls the chart instead of moving the cursor. The slider below still covers
+  the whole day, and it scrolls the chart when the chosen time would be off-screen.
+
 ## Peak hours band and one-degree axis — November 3, 2026 KST
 
 The “Temperature through the day” chart shades KMA's forecast peak hours in orange
@@ -124,8 +142,8 @@ before. `buildHourlySky` in `dashboardData.js` builds the columns.
   (see [the AMOS notes](./seoul.md#1-fastest-measured-amo-mobile-amos-json)). A
   rise across a gap of more than 15 minutes that crosses into a new hour prints in
   the hour the rows resume, and the readout says “since” the last reading, or
-  “since midnight” when the date's first reading already holds a total. On a
-  desktop-width chart, a pill with only a drop means METAR reported precipitation
+  “since midnight” when the date's first reading already holds a total. A pill
+  with only a drop means METAR reported precipitation
   but the gauge did not rise that hour or had no reading. A thin line means the
   gauge read the hour as dry; with no reading the row stays empty and the readout
   says “Gauge unavailable”. A thunderstorm group with no precipitation (`TS`) gets
@@ -153,20 +171,18 @@ before. `buildHourlySky` in `dashboardData.js` builds the columns.
   an hour with no words at all shows “—”. When KMA approval is missing, its rows
   are already empty, so the forecast hours show Weather.com alone.
 - **Sunrise and sunset.** Calculated for RKSI from NOAA's solar equations and
-  labelled above the plot, with arrows at phone width. The note above the chart
-  says the times are calculated and, on a phone, what the arrows mean. Night hours
-  are shaded behind the strip and plot, and use moon icons rather than sun icons.
+  labelled above the plot. The note above the chart says the times are calculated.
+  Night hours are shaded behind the strip and plot, and use moon icons rather than
+  sun icons.
 - **Inspection.** The hover, tap and slider readout adds “Sky” and “Rain” for the
   hour under the cursor, named observed or forecast with the report or capture
   time, and each column has a native tooltip with the same text. The slider's
   spoken value includes them. From 900 px down, every hour gets the same readout
   rows, so the slider below barely moves.
-- **Widths.** Below 34 px per hour, icons and text appear every third hour (every
-  fourth below 10 px per hour, on the narrowest phones), while the cloud shading
-  and rain marks stay hourly: the amount alone at tablet width, a drop alone on a
-  phone, with the millimetres in the readout. From 10 mm the pill prints whole
-  millimetres. The strip shares the chart's width, so it adds no sideways scroll
-  to the page.
+- **Widths.** The strip scrolls with the plot (see
+  [Scrolling temperature chart](#scrolling-temperature-chart--november-3-2026-kst)),
+  so every hour shows its icon, text, shading and rain mark at every width. From
+  10 mm the pill prints whole millimetres.
 
 ## Minute-temperature nowcast removed — November 2, 2026 KST
 

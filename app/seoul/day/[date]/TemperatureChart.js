@@ -17,10 +17,19 @@ const RAIN_COLOR = "#6b9cf7";
 const PEAK_COLOR = "#ff9d5c";
 // Pixels per degree below which the axis labels every second degree, so they stay apart.
 const MIN_DEGREE_SPACING = 12;
-// Hour columns print their own values from this width; narrower charts label every third hour,
-// or every fourth below THIRD_HOUR_COLUMN_WIDTH, where "CAVOK" would touch its neighbour.
-const HOURLY_COLUMN_WIDTH = 34;
-const THIRD_HOUR_COLUMN_WIDTH = 10;
+// The plot scrolls sideways at these widths per hour, or fills a container wider than that.
+const WIDE_HOUR_WIDTH = 80;
+const NARROW_HOUR_WIDTH = 44;
+// The °C column stays put beside the scrolling plot.
+const AXIS_WIDTH = 36;
+const PLOT_PAD_LEFT = 6;
+const PLOT_PAD_RIGHT = 17;
+const HOUR_TICKS = Array.from({ length: 25 }, (_, hour) => hour * 60);
+// Other dates open here, around the usual time of the high.
+const OPENING_MINUTE = 13 * 60;
+const STRIP_FONT_SIZE = 10;
+const STRIP_ICON_SIZE = 20;
+const DROP_WIDTH = 8;
 // Capitals at 9 px with their letter spacing, and the room a section label leaves before the next one.
 const SECTION_LABEL_CHARACTER_WIDTH = 6.2;
 const SECTION_LABEL_MARGIN = 3;
@@ -133,14 +142,9 @@ function SkyIcon({ icon, isDay, x, y, size }) {
   return <g transform={`translate(${x} ${y}) scale(${size / 24})`} aria-hidden="true">{(SKY_SHAPES[icon] ?? SKY_SHAPES.unknown)(isDay)}</g>;
 }
 
-function SkyStrip({ sky, x, plot, narrow, selectedHour }) {
+function SkyStrip({ sky, x, plot, selectedHour }) {
   const hourWidth = (plot.right - plot.left) / 24;
-  const roomy = hourWidth >= HOURLY_COLUMN_WIDTH;
-  const stride = roomy ? 1 : hourWidth >= THIRD_HOUR_COLUMN_WIDTH ? 3 : 4;
-  const fontSize = narrow ? 9 : 10;
-  const iconSize = narrow ? 17 : 20;
-  const gap = narrow ? 1 : 2;
-  const cell = (hour) => ({ x: x(hour * 60) + gap / 2, width: hourWidth - gap });
+  const cell = (hour) => ({ x: x(hour * 60) + 1, width: hourWidth - 2 });
   const rainMiddle = STRIP.rain + RAIN_HEIGHT / 2;
   const sectionLabel = (word, short, sources, width) =>
     [sources ? `${word} · ${sources}` : "", word, short].find((text) => text && text.length * SECTION_LABEL_CHARACTER_WIDTH + SECTION_LABEL_MARGIN <= width) ?? "";
@@ -158,8 +162,7 @@ function SkyStrip({ sky, x, plot, narrow, selectedHour }) {
   }
   const dryRunX = dryRun ? x(dryRun.start * 60) : 0;
   const dryRunWidth = dryRun ? (dryRun.end - dryRun.start + 1) * hourWidth : 0;
-  const sunLabel = (minute, name) => `${narrow ? (name === "Sunrise" ? "↑" : "↓") : name} ${formatDayMinute(minute)}`;
-  const dropScale = hourWidth < 12 ? 0.8 : 1;
+  const sunLabel = (minute, name) => `${name} ${formatDayMinute(minute)}`;
 
   return (
     <g>
@@ -168,26 +171,21 @@ function SkyStrip({ sky, x, plot, narrow, selectedHour }) {
           <rect x={plot.left} y={STRIP.rule} width={x(sky.sunriseMinute) - plot.left} height={plot.bottom - STRIP.rule} fill="#0a1321" opacity="0.5" />
           <rect x={x(sky.sunsetMinute)} y={STRIP.rule} width={plot.right - x(sky.sunsetMinute)} height={plot.bottom - STRIP.rule} fill="#0a1321" opacity="0.5" />
           <line x1={x(sky.sunriseMinute)} x2={x(sky.sunsetMinute)} y1={STRIP.sun + 4} y2={STRIP.sun + 4} stroke={SUN_COLOR} strokeOpacity="0.55" strokeWidth="1.5" strokeLinecap="round" />
-          <text x={x(sky.sunriseMinute) - 5} y={STRIP.sun + 7} fill="#b6a98f" fontSize={fontSize} textAnchor="end">{sunLabel(sky.sunriseMinute, "Sunrise")}</text>
-          <text x={x(sky.sunsetMinute) + 5} y={STRIP.sun + 7} fill="#b6a98f" fontSize={fontSize}>{sunLabel(sky.sunsetMinute, "Sunset")}</text>
+          <text x={x(sky.sunriseMinute) - 5} y={STRIP.sun + 7} fill="#b6a98f" fontSize={STRIP_FONT_SIZE} textAnchor="end">{sunLabel(sky.sunriseMinute, "Sunrise")}</text>
+          <text x={x(sky.sunsetMinute) + 5} y={STRIP.sun + 7} fill="#b6a98f" fontSize={STRIP_FONT_SIZE}>{sunLabel(sky.sunsetMinute, "Sunset")}</text>
         </g>
       )}
       {observedLabel && <text x={plot.left + 1} y={STRIP.sources} fill="#a4b4ca" fontSize="9" letterSpacing=".05em">{observedLabel}</text>}
       {forecastLabel && <text x={forecastStart + 1} y={STRIP.sources} fill="#a4b4ca" fontSize="9" letterSpacing=".05em">{forecastLabel}</text>}
       {sky.observedEndHour !== null && <line x1={plot.left} x2={observedEnd - 1} y1={STRIP.rule} y2={STRIP.rule} stroke={AMOS_COLOR} strokeOpacity="0.7" />}
       {forecastStart !== null && <line x1={forecastStart + 1} x2={plot.right} y1={STRIP.rule} y2={STRIP.rule} stroke={FORECAST_COLOR} strokeOpacity="0.7" strokeDasharray="5 6" />}
-      <text x={plot.left - 9} y={STRIP.icon + iconSize / 2 + 3} fill="#a4b4ca" fontSize="10" textAnchor="end">Sky</text>
-      <text x={plot.left - 9} y={rainMiddle + 3.5} fill="#a4b4ca" fontSize="10" textAnchor="end">Rain</text>
       {selectedHour !== null && <rect {...cell(selectedHour)} y={STRIP.rule + 2} height={STRIP.rain + RAIN_HEIGHT - STRIP.rule - 1} rx="3" fill="#e3ebf7" opacity="0.08" />}
       {sky.hours.map((row) => {
         const bounds = cell(row.hour);
-        const showAmount = hourWidth >= 20 && row.rain.mm > 0;
-        const showDrop = roomy || !showAmount;
-        const dropWidth = showDrop ? 8 * dropScale : 0;
+        const showAmount = row.rain.mm > 0;
         // Whole millimetres fit a column from 10 mm up; the readout keeps the decimal.
         const amount = row.rain.mm >= 10 ? Math.round(row.rain.mm) : row.rain.mm;
-        const amountWidth = showAmount ? String(amount).length * 5.6 : 0;
-        const rainLeft = bounds.x + (bounds.width - dropWidth - amountWidth - (showDrop && showAmount ? 4 : 0)) / 2;
+        const rainLeft = bounds.x + (bounds.width - DROP_WIDTH - (showAmount ? String(amount).length * 5.6 + 4 : 0)) / 2;
         return (
           <g key={row.hour}>
             <title>{`${formatDayMinute(row.hour * 60, { compact: true })} · ${row.kind === "observed" ? "Observed" : row.kind === "forecast" ? "Forecast" : "No data"}\nSky: ${row.skyLabel}${row.skyDetail ? ` · ${row.skyDetail}` : ""}\nRain: ${row.rain.label}${row.rain.detail ? ` · ${row.rain.detail}` : ""}`}</title>
@@ -197,20 +195,20 @@ function SkyStrip({ sky, x, plot, narrow, selectedHour }) {
             {row.rain.state === "wet" ? (
               <g>
                 <rect {...bounds} y={STRIP.rain} height={RAIN_HEIGHT} rx="4" fill={row.kind === "observed" ? "#22416f" : "none"} stroke={row.kind === "observed" ? "none" : RAIN_COLOR} strokeOpacity="0.75" strokeDasharray={row.kind === "observed" ? undefined : "3 3"} />
-                {showDrop && <path d={DROP_PATH} fill={RAIN_COLOR} transform={`translate(${rainLeft} ${rainMiddle - 5.5 * dropScale}) scale(${dropScale})`} />}
-                {showAmount && <text x={rainLeft + dropWidth + (showDrop ? 4 : 0)} y={rainMiddle + 3.5} fill="#e4eefc" fontSize={fontSize}>{amount}</text>}
+                <path d={DROP_PATH} fill={RAIN_COLOR} transform={`translate(${rainLeft} ${rainMiddle - 5.5})`} />
+                {showAmount && <text x={rainLeft + DROP_WIDTH + 4} y={rainMiddle + 3.5} fill="#e4eefc" fontSize={STRIP_FONT_SIZE}>{amount}</text>}
               </g>
             ) : row.rain.state === "dry" && row.kind === "observed" && row.rain.mm !== null ? <line x1={bounds.x} x2={bounds.x + bounds.width} y1={rainMiddle} y2={rainMiddle} stroke="#3a4c64" /> : null}
           </g>
         );
       })}
-      {sky.hours.filter((row) => row.hour % stride === 0).map((row) => {
+      {sky.hours.map((row) => {
         const left = x(row.hour * 60) + 1;
         return (
           <g key={row.hour} pointerEvents="none">
-            <text x={left} y={STRIP.time} fill="#91a3bd" fontSize={fontSize}>{formatDayMinute(row.hour * 60, { compact: true })}</text>
-            {row.icon ? <SkyIcon icon={row.icon} isDay={row.isDay} x={left} y={STRIP.icon} size={iconSize} /> : <text x={left + 2} y={STRIP.icon + iconSize / 2 + 3} fill="#7f92ad" fontSize={fontSize}>—</text>}
-            {row.cloudText && <text x={left} y={STRIP.cloudText} fill="#c4d2e3" fontSize={fontSize}>{row.cloudText}</text>}
+            <text x={left} y={STRIP.time} fill="#91a3bd" fontSize={STRIP_FONT_SIZE}>{formatDayMinute(row.hour * 60, { compact: true })}</text>
+            {row.icon ? <SkyIcon icon={row.icon} isDay={row.isDay} x={left} y={STRIP.icon} size={STRIP_ICON_SIZE} /> : <text x={left + 2} y={STRIP.icon + STRIP_ICON_SIZE / 2 + 3} fill="#7f92ad" fontSize={STRIP_FONT_SIZE}>—</text>}
+            {row.cloudText && <text x={left} y={STRIP.cloudText} fill="#c4d2e3" fontSize={STRIP_FONT_SIZE}>{row.cloudText}</text>}
           </g>
         );
       })}
@@ -231,7 +229,9 @@ export default function TemperatureChart({
   nowMinute,
 }) {
   const hostRef = useRef(null);
-  const [width, setWidth] = useState(800);
+  const scrollRef = useRef(null);
+  const openedDate = useRef(null);
+  const [measuredWidth, setMeasuredWidth] = useState(null);
   const [selectedMinute, setSelectedMinute] = useState(null);
   const id = useId().replaceAll(":", "");
   const observed = useMemo(() => cleanSeries(amos), [amos]);
@@ -247,7 +247,7 @@ export default function TemperatureChart({
   useEffect(() => {
     const element = hostRef.current;
     if (!element) return;
-    const resize = () => setWidth(Math.max(240, element.clientWidth));
+    const resize = () => setMeasuredWidth(Math.max(240, element.clientWidth));
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element);
@@ -256,14 +256,35 @@ export default function TemperatureChart({
 
   useEffect(() => setSelectedMinute(null), [date]);
 
+  const width = measuredWidth ?? 800;
   const narrow = width < 560;
+  const hourWidth = Math.max(narrow ? NARROW_HOUR_WIDTH : WIDE_HOUR_WIDTH, (width - AXIS_WIDTH - PLOT_PAD_LEFT - PLOT_PAD_RIGHT) / 24);
+  const chartWidth = PLOT_PAD_LEFT + 24 * hourWidth + PLOT_PAD_RIGHT;
   const plotTop = sky ? STRIP.plotTop : 28;
   const height = plotTop + (narrow ? 252 : 302);
-  const plot = { left: 42, right: width - 17, top: plotTop, bottom: height - 35 };
+  const plot = { left: PLOT_PAD_LEFT, right: chartWidth - PLOT_PAD_RIGHT, top: plotTop, bottom: height - 35 };
   const x = (minute) => plot.left + (minute / DAY_MINUTES) * (plot.right - plot.left);
   const y = (tempC) =>
     plot.bottom - ((tempC - domain.low) / (domain.high - domain.low)) * (plot.bottom - plot.top);
   const line = (rows) => rows.map((row, index) => `${index ? "L" : "M"}${x(row.minute)},${y(row.tempC)}`).join(" ");
+
+  // Today opens with the current time a third of the way in, so recent readings and the
+  // hours ahead both show. This runs once per date, so it never fights the reader's scrolling.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || measuredWidth === null || openedDate.current === date) return;
+    openedDate.current = date;
+    const live = isToday && Number.isFinite(nowMinute);
+    element.scrollLeft = x(live ? nowMinute : OPENING_MINUTE) - element.clientWidth * (live ? 1 / 3 : 1 / 2);
+  });
+
+  function revealMinute(minute) {
+    const element = scrollRef.current;
+    if (!element) return;
+    const position = x(minute);
+    if (position < element.scrollLeft + 40 || position > element.scrollLeft + element.clientWidth - 40) element.scrollLeft = position - element.clientWidth / 2;
+  }
+
   const labelEvery = (plot.bottom - plot.top) / (domain.high - domain.low) >= MIN_DEGREE_SPACING ? 1 : 2;
   // A single peak hour is a point on the forecast line, so it gets an hour's width around it.
   const peakBands = (peak?.windows ?? []).map(({ startHour, endHour }) => {
@@ -273,7 +294,6 @@ export default function TemperatureChart({
   });
   const peakLabelBand = peakBands.reduce((widest, band) => (!widest || band.width > widest.width ? band : widest), null);
   const peakLabelText = !peakLabelBand ? "" : peakLabelBand.width >= 64 ? "Peak hours" : peakLabelBand.width >= 28 ? "Peak" : "";
-  const timeTicks = narrow ? [0, 360, 720, 1080, 1440] : [0, 180, 360, 540, 720, 900, 1080, 1260, 1440];
   const defaultMinute = Math.max(
     0,
     Math.min(DAY_MINUTES, isToday && Number.isFinite(nowMinute) ? nowMinute : observed.at(-1)?.minute ?? official.at(-1)?.minute ?? predicted[0]?.minute ?? 720),
@@ -289,7 +309,7 @@ export default function TemperatureChart({
   const skyNote = [
     Number.isFinite(sky?.observedEndHour) ? "Past hours are observed: routine METAR sky, AMOS rain gauge in mm." : "",
     Number.isFinite(sky?.forecastStartHour) ? `${sky.observedEndHour === null ? "Hours" : "Later hours"} are forecast: ${sky.forecastSources}. The stored forecasts have no rain chance, so none is shown.` : "",
-    Number.isFinite(sky?.sunriseMinute) ? `${narrow ? "↑ Sunrise and ↓ sunset" : "Sunrise and sunset"} are calculated.` : "",
+    Number.isFinite(sky?.sunriseMinute) ? "Sunrise and sunset are calculated." : "",
   ].filter(Boolean).join(" ");
   const skyAtCursor = sky?.hours[cursorHour] ?? null;
   const skyHourName = skyAtCursor ? `${formatDayMinute(cursorHour * 60, { compact: true })}${{ observed: " observed", forecast: " forecast" }[skyAtCursor.kind] ?? ""}` : "";
@@ -302,7 +322,7 @@ export default function TemperatureChart({
   function inspectPointer(event) {
     const bounds = event.currentTarget.getBoundingClientRect();
     if (!bounds.width) return;
-    const localX = ((event.clientX - bounds.left) / bounds.width) * width;
+    const localX = ((event.clientX - bounds.left) / bounds.width) * chartWidth;
     const minute = ((localX - plot.left) / (plot.right - plot.left)) * DAY_MINUTES;
     setSelectedMinute(Math.max(0, Math.min(DAY_MINUTES, Math.round(minute))));
   }
@@ -317,9 +337,23 @@ export default function TemperatureChart({
         <span className="legend-zone">KST · UTC+9</span>
       </div>
       {skyNote && <p className="sky-note">{skyNote}</p>}
+      <div className="chart-frame">
+      <svg className="chart-axis" width={AXIS_WIDTH} height={height} aria-hidden="true">
+        {sky && (
+          <g fill="#a4b4ca" fontSize="10" textAnchor="end">
+            <text x={AXIS_WIDTH - 3} y={STRIP.icon + STRIP_ICON_SIZE / 2 + 3}>Sky</text>
+            <text x={AXIS_WIDTH - 3} y={STRIP.rain + RAIN_HEIGHT / 2 + 3.5}>Rain</text>
+          </g>
+        )}
+        <text x={AXIS_WIDTH - 3} y={plot.top - 14} fill="#a4b4ca" fontSize="11" textAnchor="end">°C</text>
+        {domain.ticks.filter((tick) => tick % labelEvery === 0).map((tick) => (
+          <text key={tick} x={AXIS_WIDTH - 4} y={y(tick) + 4} fill="#a4b4ca" fontSize="11" textAnchor="end">{tick}</text>
+        ))}
+      </svg>
+      <div className="chart-scroll" ref={scrollRef} role="region" aria-label="Temperature chart, scrolls sideways" tabIndex={0}>
       <svg
-        viewBox={`0 0 ${width} ${height}`}
-        width="100%"
+        viewBox={`0 0 ${chartWidth} ${height}`}
+        width={chartWidth}
         height={height}
         role="img"
         aria-labelledby={`${id}-title ${id}-description`}
@@ -327,7 +361,7 @@ export default function TemperatureChart({
         onPointerMove={(event) => {
           if (event.pointerType === "mouse" || event.buttons) inspectPointer(event);
         }}
-        style={{ display: "block", touchAction: "pan-y" }}
+        style={{ display: "block", maxWidth: "none", touchAction: "pan-x pan-y" }}
       >
         <title id={`${id}-title`}>{`RKSI temperatures for ${date}, midnight to midnight KST`}</title>
         <desc id={`${id}-description`}>
@@ -346,13 +380,9 @@ export default function TemperatureChart({
             <rect x={plot.left - 4} y={plot.top - 4} width={plot.right - plot.left + 8} height={plot.bottom - plot.top + 8} />
           </clipPath>
         </defs>
-        {sky && <SkyStrip sky={sky} x={x} plot={plot} narrow={narrow} selectedHour={selectedMinute === null ? null : cursorHour} />}
-        <text x={plot.left - 9} y={plot.top - 14} fill="#a4b4ca" fontSize="11" textAnchor="end">°C</text>
+        {sky && <SkyStrip sky={sky} x={x} plot={plot} selectedHour={selectedMinute === null ? null : cursorHour} />}
         {domain.ticks.map((tick) => (
-          <g key={tick}>
-            <line x1={plot.left} x2={plot.right} y1={y(tick)} y2={y(tick)} stroke="#26364d" strokeOpacity={tick % 5 === 0 ? 0.8 : 0.4} />
-            {tick % labelEvery === 0 && <text x={plot.left - 10} y={y(tick) + 4} fill="#a4b4ca" fontSize="11" textAnchor="end">{tick}</text>}
-          </g>
+          <line key={tick} x1={plot.left} x2={plot.right} y1={y(tick)} y2={y(tick)} stroke="#26364d" strokeOpacity={tick % 5 === 0 ? 0.8 : 0.4} />
         ))}
         {peakBands.map((band) => (
           <g key={band.left} pointerEvents="none">
@@ -362,7 +392,7 @@ export default function TemperatureChart({
           </g>
         ))}
         {peakLabelText && <text x={peakLabelBand.left + peakLabelBand.width / 2} y={plot.top + 13} fill={PEAK_COLOR} fontSize={narrow ? 9 : 10} textAnchor="middle" pointerEvents="none">{peakLabelText}</text>}
-        {timeTicks.map((minute) => (
+        {HOUR_TICKS.map((minute) => (
           <g key={minute}>
             <line x1={x(minute)} x2={x(minute)} y1={sky ? STRIP.rule : plot.top} y2={plot.bottom} stroke="#24344b" strokeOpacity="0.35" pointerEvents="none" />
             <text x={x(minute)} y={height - 12} fill="#91a3bd" fontSize="11" textAnchor={minute === 0 ? "start" : minute === DAY_MINUTES ? "end" : "middle"}>{formatDayMinute(minute, { compact: true })}</text>
@@ -395,8 +425,10 @@ export default function TemperatureChart({
           )}
         </g>
         {sky && selectedMinute !== null && <line x1={x(cursorMinute)} x2={x(cursorMinute)} y1={STRIP.rule + 2} y2={plot.top} stroke="#e3ebf7" strokeOpacity="0.4" strokeDasharray="3 4" pointerEvents="none" />}
-        {!hasData && <text x={(plot.left + plot.right) / 2} y={(plot.top + plot.bottom) / 2} fill="#a4b4ca" fontSize="13" textAnchor="middle">No temperature points available</text>}
+        {!hasData && <text x={x(OPENING_MINUTE)} y={(plot.top + plot.bottom) / 2} fill="#a4b4ca" fontSize="13" textAnchor="middle">No temperature points available</text>}
       </svg>
+      </div>
+      </div>
       <div className="inspection" aria-live="polite" aria-atomic="true">
         <span className="inspection-time">{clock(cursorMinute)} <small>KST</small></span>
         <div className="readings">
@@ -414,7 +446,7 @@ export default function TemperatureChart({
           ))}
         </div>
       </div>
-      <label className="slider-label" htmlFor={`${id}-time`}>Inspect time <span>Hover, tap, or use arrow keys</span></label>
+      <label className="slider-label" htmlFor={`${id}-time`}>Inspect time <span>Hover, tap, or use arrow keys · scroll the chart sideways</span></label>
       <input
         id={`${id}-time`}
         className="time-slider"
@@ -424,13 +456,20 @@ export default function TemperatureChart({
         step="1"
         value={Math.round(cursorMinute)}
         aria-valuetext={accessibleValue}
-        onChange={(event) => setSelectedMinute(Number(event.target.value))}
+        onChange={(event) => {
+          setSelectedMinute(Number(event.target.value));
+          revealMinute(Number(event.target.value));
+        }}
       />
       <style jsx>{`
         .temperature-chart { min-width: 0; width: 100%; color: #dce7f5; font-variant-numeric: tabular-nums; }
         .legend { display: flex; flex-wrap: wrap; gap: 12px 22px; margin-bottom: 10px; color: #b6c6d9; font-size: 11px; line-height: 1.5; }
         .legend-zone { margin-left: auto; color: #7e91ab; font-size: 10px; white-space: nowrap; }
         .sky-note { margin: -4px 0 12px; color: #8b9eb8; font-size: 10px; line-height: 1.5; }
+        .chart-frame { display: flex; width: 100%; min-width: 0; margin-bottom: 6px; }
+        .chart-axis { display: block; flex: none; }
+        .chart-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #35506d transparent; }
+        .chart-scroll:focus-visible { outline: 2px solid #49d8ec; outline-offset: 2px; border-radius: 4px; }
         .inspection { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; min-height: 62px; padding: 12px 14px; border: 1px solid #23364d; border-radius: 10px; background: #0b1728; }
         .inspection-time { font-size: 16px; font-weight: 650; }
         .inspection-time small { color: #8195af; font-size: 10px; font-weight: 500; }
