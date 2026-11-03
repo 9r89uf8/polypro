@@ -150,7 +150,11 @@ npx convex env remove ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED --deployment-nam
 ```
 
 For a Convex production target the same commands use `--prod`. Neither command has been
-run, and this release has not been deployed.
+run.
+
+**Deployed** to `striped-chipmunk-763` on November 3, 2026 at 12:18 KST with the flag and
+key absent. `collectAirportForecast` then returned `approval_required` without a request,
+and `getProviderHighs` returned AccuWeather as `approval_required` with no data.
 
 ## Weather.com
 
