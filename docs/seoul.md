@@ -1572,8 +1572,8 @@ Every protected entry point uses the same current flag:
   directly.
 - `seoulKmaForecast:queueScheduledAirportForecastRefresh` is the internal
   mutation invoked by cron
-  `seoul_kma_amo_airport_forecast_every_30_min` at minutes `:05` and `:35`.
-  It uses the same queue as manual requests.
+  `seoul_kma_amo_airport_forecast_every_10_min` at minutes `:01`, `:11`, `:21`,
+  `:31`, `:41` and `:51`. It uses the same queue as manual requests.
 - `seoulKmaForecastNode:collectQueuedAirportForecast` is the internal-only Node fetch
   worker. `seoulKmaForecast:claimQueuedAirportForecast` atomically verifies its
   run ID immediately before protected work, and
@@ -1634,16 +1634,43 @@ Because the public route is unauthenticated, a caller can deliberately consume
 the one global slot every ten minutes, for a hard ceiling of 144 KMA requests
 per day; a scheduled attempt inside that cooldown is skipped. Provider
 approval must therefore cover public manual initiation and that maximum
-request cadence, not only the twice-hourly cron.
+request cadence.
 Approval record: on 2026-07-29, the project owner confirmed that KMA/AMO
 approved the production RKSI integration for public on-demand initiation at
 the documented global limit of one request per ten minutes, in addition to the
 scheduled collection. No private approval correspondence or credentials are
 stored in the repository.
-The maximum-outlook header exposes this path as `Collect KMA now` on current
-and future forecast dates, reports queued/success/error state, and shows the
+The Forecast high card exposes this path as `Check KMA now` on current and
+future forecast dates, reports queued, captured and error states, and shows the
 remaining cooldown. Historical dates omit it because the current AMO page
 cannot backfill an archived forecast.
+
+**Ten-minute schedule — November 3, 2026.** At the owner's request the cron moved
+from `:05` and `:35` to every ten minutes from `:01`, which is the approved limit.
+The owner first asked for five minutes and chose ten after being told that five
+exceeds this approval. A faster pace would need KMA's agreement first.
+
+- **Why `:01`.** In the 200 captures from October 30 to November 3, `pageReportedAt`
+  was always `:00` or `:30`. All 56 content changes arrived with a new stamp, and the
+  13 consecutive captures that shared a stamp were identical, though that is a small
+  sample. New content was already visible at 08:02 and 11:01 KST on November 3, so
+  the `:01` and `:31` runs should usually catch an update within about two minutes,
+  against about six before. The other runs catch an update that lands later than that.
+- **Scheduled runs and the limit.** The schedule fills every slot, so a manual
+  request is normally inside the cooldown and only gets the remaining wait. It runs
+  only when the schedule has missed a slot. A manual request that does run delays
+  the next scheduled run, which can put a half-hour update up to about ten minutes
+  later. Scheduled runs get a 15-second allowance for timing drift, so one is not
+  skipped for arriving a moment early; manual requests get none. A manual request
+  just after a missed slot can therefore leave a gap up to 15 seconds under ten
+  minutes before the next scheduled run.
+- **Storage and reads.** Captures have no retention and are about 19 KB each, so this
+  stores about 2.7 MB a day, against about 1 MB before. `getHighPredictionDashboard`
+  now ends its read of the newest 112 captures at the selected date, so a past date
+  keeps its own stored forecast however many captures came later. Dates older than
+  about two days, which had aged out of that window, now show theirs too.
+  `getForecastHighHistory` reads only the previous day's newest 24 captures for its
+  baseline.
 
 ### Capture and provenance
 

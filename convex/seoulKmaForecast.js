@@ -1,7 +1,7 @@
 import { internalMutationGeneric, mutationGeneric } from "convex/server";
 import { v } from "convex/values";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/api.js";
 
 const KMA_AMO_APPROVAL_FLAG =
   "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED";
@@ -10,6 +10,8 @@ const APPROVAL_REQUIRED_MESSAGE =
 const KMA_SOURCE = "kma_amo_airport";
 const COLLECTION_LOCK_TIMEOUT_MS = 15 * 60 * 1_000;
 const MIN_COLLECTION_INTERVAL_MS = 10 * 60 * 1_000;
+// Scheduled runs are ten minutes apart, so a little timing drift must not skip one.
+const SCHEDULE_DRIFT_ALLOWANCE_MS = 15 * 1_000;
 
 const SEOUL_STATION = {
   stationIcao: "RKSI",
@@ -157,17 +159,20 @@ async function queueAirportForecastCollection(
       collectionInFlightSince: existing.collectionInFlightSince,
     };
   }
+  const minimumInterval =
+    collectionTrigger === "scheduled"
+      ? MIN_COLLECTION_INTERVAL_MS - SCHEDULE_DRIFT_ALLOWANCE_MS
+      : MIN_COLLECTION_INTERVAL_MS;
   if (
     Number.isFinite(existing?.collectionQueuedAt) &&
-    now - existing.collectionQueuedAt < MIN_COLLECTION_INTERVAL_MS
+    now - existing.collectionQueuedAt < minimumInterval
   ) {
     return {
       queued: false,
       status: "cooldown",
       stationIcao,
       retryAfterSeconds: Math.ceil(
-        (MIN_COLLECTION_INTERVAL_MS - (now - existing.collectionQueuedAt)) /
-          1_000,
+        (minimumInterval - (now - existing.collectionQueuedAt)) / 1_000,
       ),
     };
   }

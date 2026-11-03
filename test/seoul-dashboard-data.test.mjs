@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   buildTemperatureSeries,
   chartPeakHours,
+  forecastCheckResult,
+  forecastCheckStatus,
   summarizeClouds,
   summarizeForecast,
   summarizeSatelliteCloudTrend,
@@ -333,6 +335,30 @@ test("forecast preserves daily published high and every separate tied peak windo
 test("forecast peak ties are exact and missing intervening hours are not bridged", () => {
   const result = summarizeForecast(forecast([[13, 12.9], [14, 12.899], [15, 12.9], [17, 12.9]]), DATE, at(9));
   assert.deepEqual(result.peakWindows, [13, 15, 17].map((hour) => ({ startHour: hour, endHour: hour })));
+});
+
+test("the forecast check button says what happened and when it can run again", () => {
+  const idle = forecastCheckStatus(null, at(10), at(11));
+  assert.deepEqual(idle, { disabled: false, label: "Check KMA now", message: "" });
+  assert.deepEqual(forecastCheckStatus({ kind: "sending" }, at(10), at(11)), { disabled: true, label: "Checking…", message: "" });
+
+  // Too soon: the wait is rounded, never to zero, and the button returns when it is over.
+  const waiting = forecastCheckResult({ status: "cooldown", retryAfterSeconds: 250 }, at(11));
+  assert.deepEqual(forecastCheckStatus(waiting, at(10), at(11)), { disabled: true, label: "Next check in 4 min", message: "KMA allows one check every 10 minutes, including scheduled ones." });
+  assert.equal(forecastCheckStatus(waiting, at(10), at(11) + 240_000).label, "Next check in 1 min");
+  assert.deepEqual(forecastCheckStatus(waiting, at(10), at(11) + 251_000), idle);
+
+  // Accepted: it waits for a capture newer than the request, and says so if none comes.
+  const checking = forecastCheckResult({ status: "queued", requestedAt: at(11), cooldownSeconds: 600 }, at(11) + 500);
+  const during = forecastCheckStatus(checking, at(10), at(11) + 30_000);
+  assert.deepEqual([during.disabled, during.label, during.message], [true, "Next check in 10 min", "Checking KMA…"]);
+  assert.match(forecastCheckStatus(checking, at(11) + 40_000, at(11) + 60_000).message, /^Captured at /);
+  assert.match(forecastCheckStatus(checking, at(10), at(11) + 3 * 60_000).message, /No new capture arrived/);
+  assert.equal(forecastCheckStatus(checking, at(11) + 40_000, at(11) + 11 * 60_000).disabled, false);
+
+  assert.match(forecastCheckStatus(forecastCheckResult({ status: "already_running" }, at(11)), at(10), at(11)).message, /already running/);
+  assert.match(forecastCheckStatus(forecastCheckResult({ status: "approval_required" }, at(11)), at(10), at(11)).message, /approval is required/);
+  assert.match(forecastCheckStatus(forecastCheckResult(null, at(11)), at(10), at(11)).message, /could not be requested/);
 });
 
 test("the chart marks the latest forecast's peak hours while the table still lists earlier hours", () => {

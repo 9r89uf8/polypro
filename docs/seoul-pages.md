@@ -1,5 +1,18 @@
 # Seoul RKSI live-temperature page
 
+## Forecast high check button — November 3, 2026 KST
+
+The Forecast high card has a `Check KMA now` button on today and future dates, and
+none on past dates or while KMA approval is missing. It calls the same public queue
+as the page's Refresh button, `seoulKmaForecast:requestAirportForecastRefresh`. The
+forecast is now captured every ten minutes (see
+[the schedule notes](./seoul.md#capture-and-provenance)), and KMA's approval allows
+one request every ten minutes across scheduled and manual checks together. So a
+press usually can't run: the button then reads `Next check in N min` and says why.
+If a check does run, the note says `Checking KMA…`, then the capture time, or that
+no new capture arrived after two minutes. The wait comes from the server and counts
+down with the page's 15-second clock.
+
 ## Scrolling temperature chart — November 3, 2026 KST
 
 The “Temperature through the day” plot and its sky and rain strip now scroll sideways
@@ -686,7 +699,8 @@ The public queue is unauthenticated, so a caller can intentionally occupy its
 single global slot every ten minutes: at most 144 KMA requests per day.
 Scheduled attempts that land inside that cooldown are skipped. KMA/AMO
 approval must explicitly cover public manual initiation and this maximum
-cadence in addition to the normal twice-hourly schedule.
+cadence in addition to the scheduled runs, which have run at that same ten-minute
+limit since November 3, 2026.
 On 2026-07-29, the project owner confirmed that KMA/AMO granted that production
 scope: public on-demand RKSI collection at the documented global ten-minute
 limit plus scheduled collection. The repository records only the authority,
@@ -749,8 +763,8 @@ npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
   is not missed. The legacy manual GK2A entry point uses the same gate; the streamlined
   page does not expose or invoke it. A separate database-only
   cleanup runs every 30 minutes; it does not contact NMSC.
-- `seoul_kma_amo_airport_forecast_every_30_min` runs at minutes `:05` and
-  `:35` and invokes the internal
+- `seoul_kma_amo_airport_forecast_every_10_min` runs at minutes `:01`, `:11`,
+  `:21`, `:31`, `:41` and `:51` and invokes the internal
   `seoulKmaForecast:queueScheduledAirportForecastRefresh`. The public
   `seoulKmaForecast:requestAirportForecastRefresh` mutation used by the streamlined refresh
   enters the same queue. Both paths share the ten-minute interval and

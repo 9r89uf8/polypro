@@ -11,7 +11,7 @@ import ProviderForecasts from "./ProviderForecasts";
 import MarketChart from "./MarketChart";
 import { buildForecastHistory, buildMarketHistory } from "./historyData";
 import { formatDayMinute, formatSeoulTime } from "./displayTime";
-import { buildHourlySky, buildTemperatureSeries, chartPeakHours, summarizeClouds, summarizeForecast, summarizeSatelliteCloudTrend, summarizeSeoulMarket, summarizeSunlight } from "./dashboardData";
+import { buildHourlySky, buildTemperatureSeries, chartPeakHours, forecastCheckResult, forecastCheckStatus, summarizeClouds, summarizeForecast, summarizeSatelliteCloudTrend, summarizeSeoulMarket, summarizeSunlight } from "./dashboardData";
 import { buildProviderForecastState } from "./providerForecastState";
 import styles from "./dashboard.module.css";
 
@@ -56,6 +56,24 @@ function CloudVisual({ minimum, maximum, label }) {
       <path d="M37 76a12 12 0 0 1-1-24 18 18 0 0 1 34-7 15 15 0 0 1 18 16 8 8 0 0 1-3 15Z" fill={known && maximum > 0 ? "#b8cce0" : "none"} fillOpacity={known ? Math.max(0.16, maximum / 8) : 0} stroke={known ? "#b8cce0" : "#72849b"} strokeWidth="2" strokeDasharray={known ? undefined : "4 4"} />
       {!known ? <text x="61" y="67" textAnchor="middle" fill="#c1cddd" fontSize="23" fontFamily="sans-serif">?</text> : null}
     </svg><span>{known ? `${minimum === maximum ? minimum : `${minimum}–${maximum}`} / 8 sky cover` : "Coverage unknown"}</span>
+  </div>;
+}
+
+function ForecastCheck({ capturedAt, now }) {
+  const requestCheck = useMutation("seoulKmaForecast:requestAirportForecastRefresh");
+  const [request, setRequest] = useState(null);
+  const status = forecastCheckStatus(request, capturedAt, now);
+  async function check() {
+    setRequest({ kind: "sending" });
+    try {
+      setRequest(forecastCheckResult(await requestCheck(STATION), Date.now()));
+    } catch {
+      setRequest({ kind: "failed" });
+    }
+  }
+  return <div className={styles.forecastCheck}>
+    <button type="button" className={styles.forecastCheckButton} disabled={status.disabled} onClick={check}>{status.label}</button>
+    <span role="status">{status.message}</span>
   </div>;
 }
 
@@ -193,6 +211,7 @@ export default function SeoulDayPage() {
         <div className={styles.bigNumber}>{forecastDashboard === undefined ? "…" : temperature(forecast.highC)}{forecastAvailable ? <span>C</span> : null}</div>
         <p className={styles.peakTime}>{forecastAvailable ? peakLabel(forecast.peakWindows) : forecastStatus}</p>
         <p className={styles.cardNote}>{forecastAvailable && forecast.peakWindows?.length ? `${peakMatchesHigh ? "Peak hours" : `Hourly forecast peaks at ${temperature(forecast.hourlyPeakC)}C`} · KST` : "Official airport forecast"}</p>
+        {!isPast && forecast.status !== "approval_required" ? <ForecastCheck capturedAt={forecast.capturedAt} now={now} /> : null}
         <ForecastHistory history={forecastHistory} currentHighC={forecast.highC} />
         <div className={styles.cardFooter}>{forecast.status === "error" && forecastAvailable ? <span className={styles.stale}>Stored forecast · refresh failed</span> : forecast.status === "stale" ? <span className={styles.stale}>Older forecast</span> : isPast ? "Stored KMA forecast" : "Published daily maximum"}{forecast.capturedAt ? <span>Captured {timeLabel(forecast.capturedAt)}</span> : null}</div>
       </article>

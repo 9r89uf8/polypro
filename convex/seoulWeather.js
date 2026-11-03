@@ -4481,11 +4481,15 @@ export const getHighPredictionDashboard = queryGeneric({
             .order("desc")
             .take(MAX_DASHBOARD_REVISIONS)
         : Promise.resolve([]),
+      // Ending at the selected date keeps a past date's own captures in reach,
+      // however many came after it.
       kmaAccessApproved
         ? ctx.db
             .query("seoulKmaForecastCaptures")
             .withIndex("by_station_capturedAt", (query) =>
-              query.eq("stationIcao", stationIcao),
+              query
+                .eq("stationIcao", stationIcao)
+                .lt("capturedAt", nextMidnightUtc),
             )
             .order("desc")
             .take(MAX_FORECAST_CAPTURES_FOR_DAY)

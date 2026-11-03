@@ -245,6 +245,6 @@ test("forecast query uses bounded capture-date ranges and reports truncation wit
     assert.equal(result.deltaC, null);
     assert.equal(result.previousDayBaseline.highTempC, 9);
     assert.equal(result.latest.highTempC, 26);
-    assert.deepEqual(h.calls.limits.sort((a, b) => a - b), [1, 161, 161]);
+    assert.deepEqual(h.calls.limits.sort((a, b) => a - b), [1, 25, 161]);
   });
 });

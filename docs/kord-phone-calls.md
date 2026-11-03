@@ -2,6 +2,11 @@
 
 This document covers the KORD phone-call temperature workflow shown on `/kord/today`.
 
+The November 3 Seoul forecast change replaces
+`seoul_kma_amo_airport_forecast_every_30_min` with
+`seoul_kma_amo_airport_forecast_every_10_min` (`:01`, `:11`, `:21`, `:31`, `:41` and
+`:51`). It leaves KORD phone calls unchanged. See
+[Seoul forecast capture](./seoul.md#capture-and-provenance).
 The November 2 Seoul nearby-station change adds
 `seoul_nearby_stations_every_minute` (every minute, gated by its own KMA approval
 flag) and `seoul_nearby_stations_retention` (hourly at `:27`). They leave KORD phone

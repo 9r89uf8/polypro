@@ -7,6 +7,8 @@ import { compareNormalizedDecimals, normalizePolymarketDecimal } from "../mexico
 
 export const SEOUL_HISTORY_SAMPLE_MS = 5 * 60_000;
 export const SEOUL_FORECAST_HISTORY_LIMIT = 160;
+// The previous day only supplies its last usable high, so its full rows need not all be read.
+export const SEOUL_FORECAST_BASELINE_LIMIT = 24;
 export const SEOUL_FORECAST_STALE_MS = 6 * 60 * 60_000;
 export const SEOUL_FORECAST_APPROVAL_FLAG = "KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED";
 export const SEOUL_FORECAST_SOURCE = "kma_amo_airport";

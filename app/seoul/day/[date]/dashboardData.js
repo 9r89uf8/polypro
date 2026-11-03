@@ -111,6 +111,38 @@ function emptyForecast(status) {
   return { highC: null, hourlyPeakC: null, peakWindows: [], capturedAt: null, status, hourly: [] };
 }
 
+/** What a press of the Forecast high card's button came back with. */
+export function forecastCheckResult(result, sentAt) {
+  switch (result?.status) {
+    case "queued": return { kind: "checking", sentAt, requestedAt: result.requestedAt, nextAt: sentAt + result.cooldownSeconds * 1000 };
+    case "cooldown": return { kind: "waiting", nextAt: sentAt + result.retryAfterSeconds * 1000 };
+    case "already_running": return { kind: "running" };
+    case "approval_required": return { kind: "approval" };
+    default: return { kind: "failed" };
+  }
+}
+
+const FORECAST_CHECK_PATIENCE_MS = 2 * 60 * 1000;
+
+/** The button's label and note. `capturedAt` is the newest stored forecast. */
+export function forecastCheckStatus(request, capturedAt, now) {
+  const waitMs = finite(request?.nextAt) !== null && finite(now) !== null ? request.nextAt - now : 0;
+  // Rounded rather than up: the page's clock can lag by 15 seconds, which would read as 11 minutes.
+  const label = waitMs > 0 ? `Next check in ${Math.max(1, Math.round(waitMs / 60_000))} min` : "Check KMA now";
+  const status = (message) => ({ disabled: waitMs > 0, label, message });
+  switch (request?.kind) {
+    case "sending": return { disabled: true, label: "Checking…", message: "" };
+    case "checking":
+      if (finite(capturedAt) !== null && capturedAt >= request.requestedAt) return status(`Captured at ${formatSeoulTime(capturedAt)}.`);
+      return status(finite(now) !== null && now - request.sentAt > FORECAST_CHECK_PATIENCE_MS ? "No new capture arrived. KMA may be unavailable." : "Checking KMA…");
+    case "waiting": return status(waitMs > 0 ? "KMA allows one check every 10 minutes, including scheduled ones." : "");
+    case "running": return status("A check is already running.");
+    case "approval": return status("KMA approval is required.");
+    case "failed": return status("The check could not be requested. Try again.");
+    default: return status("");
+  }
+}
+
 function windowsFromHours(hours) {
   const windows = [];
   for (const hour of hours) {

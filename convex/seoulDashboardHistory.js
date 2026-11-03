@@ -2,7 +2,7 @@ import { queryGeneric } from "convex/server";
 import { v } from "convex/values";
 import { seoulMarketDate } from "./lib/seoulPolymarket.js";
 import {
-  SEOUL_FORECAST_APPROVAL_FLAG, SEOUL_FORECAST_HISTORY_LIMIT, SEOUL_FORECAST_SOURCE,
+  SEOUL_FORECAST_APPROVAL_FLAG, SEOUL_FORECAST_BASELINE_LIMIT, SEOUL_FORECAST_HISTORY_LIMIT, SEOUL_FORECAST_SOURCE,
   SEOUL_FORECAST_URL, buildSeoulForecastHighHistory, seoulHistoryDay,
 } from "./lib/seoulDashboardHistory.js";
 
@@ -21,18 +21,19 @@ export const getForecastHighHistory = queryGeneric({
     if (!approved) return { ...empty, status: "approval_required" };
     const day = seoulHistoryDay(date, now);
     if (!day) return { ...empty, status: "out_of_range" };
-    const read = (start, end) => ctx.db.query("seoulKmaForecastCaptures")
+    const read = (start, end, limit) => ctx.db.query("seoulKmaForecastCaptures")
       .withIndex("by_station_capturedAt", (q) => q.eq("stationIcao", stationIcao).gte("capturedAt", start).lt("capturedAt", end))
-      .order("desc").take(SEOUL_FORECAST_HISTORY_LIMIT + 1);
+      .order("desc").take(limit + 1);
     const [captures, previousCaptures, collector] = await Promise.all([
-      read(day.start, Math.min(day.end, now + 1)), read(day.start - 86_400_000, day.start),
+      read(day.start, Math.min(day.end, now + 1), SEOUL_FORECAST_HISTORY_LIMIT),
+      read(day.start - 86_400_000, day.start, SEOUL_FORECAST_BASELINE_LIMIT),
       ctx.db.query("seoulKmaForecastCollectorStatus").withIndex("by_station", (q) => q.eq("stationIcao", stationIcao)).first(),
     ]);
     return { ...empty, ...buildSeoulForecastHighHistory({
       captures: captures.slice(0, SEOUL_FORECAST_HISTORY_LIMIT),
-      previousCaptures: previousCaptures.slice(0, SEOUL_FORECAST_HISTORY_LIMIT), date, now, collector,
+      previousCaptures: previousCaptures.slice(0, SEOUL_FORECAST_BASELINE_LIMIT), date, now, collector,
       truncated: captures.length > SEOUL_FORECAST_HISTORY_LIMIT,
-      previousDayTruncated: previousCaptures.length > SEOUL_FORECAST_HISTORY_LIMIT,
+      previousDayTruncated: previousCaptures.length > SEOUL_FORECAST_BASELINE_LIMIT,
     }) };
   },
 });

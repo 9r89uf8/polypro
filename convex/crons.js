@@ -517,12 +517,13 @@ crons.cron(
   { stationIcao: "RKSI" },
 );
 
-// Captures the canonical KMA/AMO RKSI airport forecast twice per hour. The
-// scheduled action fails closed before the external request unless the
+// Captures the canonical KMA/AMO RKSI airport forecast every ten minutes, the
+// limit KMA approved. Its page changes on the half hour, so the runs start at :01.
+// The scheduled action fails closed before the external request unless the
 // dedicated server-side approval flag is exactly true.
 crons.cron(
-  "seoul_kma_amo_airport_forecast_every_30_min",
-  "5,35 * * * *",
+  "seoul_kma_amo_airport_forecast_every_10_min",
+  "1,11,21,31,41,51 * * * *",
   internal.seoulKmaForecast.queueScheduledAirportForecastRefresh,
   { stationIcao: "RKSI" },
 );
