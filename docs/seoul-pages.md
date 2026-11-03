@@ -799,8 +799,11 @@ npx convex env remove KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED --prod
   90 minutes.
 - `seoul_weathercom_forecast_every_15_min` runs at minutes `:02`, `:17`,
   `:32`, and `:47` and stores Weather.com RKSI airport daily and hourly results
-  and errors together. Both requests use the explicit `icaoCode=RKSI`
-  selector. Daily and hourly status/error fields remain independent. The
+  and errors together. Since November 3, 2026, both requests use
+  `geocode=37.469,126.451`, the point on Weather.com's airport page, after
+  `icaoCode=RKSI` proved to resolve 5.8 km from the airport's reference point
+  (see [forecast highs](./seoul-forecast-highs.md#is-each-forecast-for-the-airport)).
+  Daily and hourly status/error fields remain independent. The
   hourly response has its own completion timestamp, and each successful hourly
   value is also appended to query-friendly immutable history. The legacy secondary diagnostic accepted a usable latest capture for at
   most twelve hours. The streamlined page shows only each forecast hour's latest

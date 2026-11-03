@@ -3,13 +3,19 @@
 // checks that a forecast is for the airport rather than the city around it. See
 // docs/seoul-forecast-highs.md.
 import { distanceAndBearing } from "./seoulNearbyStations.js";
-import { KMA_APPROVAL_FLAG, RKSI_POINT, isValidDate, kstDate, tenth } from "./seoulProviderForecastModel.js";
+import { KMA_APPROVAL_FLAG, RKSI_POINT, isValidDate, kstDate, shiftDate, tenth } from "./seoulProviderForecastModel.js";
 
 export const ACCUWEATHER_APPROVAL_FLAG = "ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED";
 export const ACCUWEATHER_KEY_NAME = "ACCUWEATHER_RKSI_API_KEY";
+// A stopgap until an API key exists. AccuWeather's website terms prohibit scraping
+// without a separate written agreement, so setting this is the owner's decision,
+// not AccuWeather's approval.
+export const ACCUWEATHER_PAGE_APPROVAL_FLAG = "ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED";
 // The airport's own AccuWeather location. A geoposition search would return the
 // neighbouring city instead, so the key is fixed and never looked up.
 export const ACCUWEATHER_LOCATION_KEY = "3602_poi";
+export const ACCUWEATHER_PAGE_URL = `https://www.accuweather.com/en/kr/incheon-international-airport/${ACCUWEATHER_LOCATION_KEY}/10-day-weather-forecast/${ACCUWEATHER_LOCATION_KEY}`;
+const ACCUWEATHER_PAGE_ROWS = 5;
 // AccuWeather's API terms allow keeping its data for up to two weeks. The hourly
 // cleanup can run an hour late, so this stays a full day inside that limit.
 export const ACCUWEATHER_RETENTION_MS = 13 * 86_400_000;
@@ -21,7 +27,7 @@ export const MAX_AIRPORT_DISTANCE_KM = 5;
 export const FORECAST_HIGH_PROVIDERS = [
   { id: "kma", label: "KMA", sourceUrl: "https://amo.kma.go.kr/eng/airport.do?icaoCode=RKSI", approvalFlag: KMA_APPROVAL_FLAG },
   { id: "weathercom", label: "Weather.com", sourceUrl: "https://weather.com/kr/incheon/airport/incheon-international-airport/tenday", approvalFlag: null },
-  { id: "accuweather", label: "AccuWeather", sourceUrl: `https://www.accuweather.com/en/kr/incheon-international-airport/${ACCUWEATHER_LOCATION_KEY}/weather-forecast/${ACCUWEATHER_LOCATION_KEY}`, approvalFlag: ACCUWEATHER_APPROVAL_FLAG, keyName: ACCUWEATHER_KEY_NAME,
+  { id: "accuweather", label: "AccuWeather", sourceUrl: `https://www.accuweather.com/en/kr/incheon-international-airport/${ACCUWEATHER_LOCATION_KEY}/weather-forecast/${ACCUWEATHER_LOCATION_KEY}`, approvalFlag: ACCUWEATHER_APPROVAL_FLAG, keyName: ACCUWEATHER_KEY_NAME, pageFlag: ACCUWEATHER_PAGE_APPROVAL_FLAG,
     // AccuWeather's terms require its logo, linked to its site, wherever its data appears.
     attribution: { logoUrl: "https://developer.accuweather.com/brand-assets/horizontal/svg/AW_RGB_Rev_Small_R.svg", href: "https://www.accuweather.com" } },
 ];
@@ -29,6 +35,7 @@ export const forecastHighProviderById = (id) => FORECAST_HIGH_PROVIDERS.find((pr
 
 /** Only the exact string "true" approves. A key is a credential, not approval, so it is checked second. */
 export function forecastHighAccess(provider, env) {
+  if (provider.pageFlag && env?.[provider.pageFlag] === "true") return "approved";
   if (provider.approvalFlag && env?.[provider.approvalFlag] !== "true") return "approval_required";
   return provider.keyName && !env?.[provider.keyName] ? "setup_required" : "approved";
 }
@@ -47,7 +54,7 @@ export class ForecastLocationError extends Error {}
 function distanceFromAirport(label, latitude, longitude) {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new ForecastLocationError(`${label} location has no coordinates.`);
   const distanceKm = Math.round(distanceAndBearing(RKSI_POINT, { latitude, longitude }).distanceKm * 10) / 10;
-  if (distanceKm > MAX_AIRPORT_DISTANCE_KM) throw new ForecastLocationError(`${label} location is ${distanceKm} km from RKSI.`);
+  if (distanceKm > MAX_AIRPORT_DISTANCE_KM) throw new ForecastLocationError(`${label} location (${latitude}, ${longitude}) is ${distanceKm} km from RKSI.`);
   return distanceKm;
 }
 
@@ -85,6 +92,50 @@ export function accuweatherDailyRows(payload) {
     if (maximum?.Unit !== "C" || !Number.isFinite(maximum.Value)) throw new Error("AccuWeather forecast has no Celsius maximum.");
     return { date, maxTempC: tenth(maximum.Value) };
   });
+}
+
+function jsonOrNull(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The airport evidence and daily highs in AccuWeather's server-rendered 10-day page.
+ * The page has no published format, so this is checked against what it returned on
+ * November 3, 2026. Rows carry month/day only and use the page's unit, so both are read.
+ */
+export function accuweatherPageForecast(html, capturedAt) {
+  const key = ACCUWEATHER_LOCATION_KEY;
+  const canonical = /<link\s+rel="canonical"\s+href="([^"]+)"/.exec(html)?.[1] ?? "";
+  if (!canonical.toLowerCase().includes(`/${key}/`)) throw new ForecastLocationError("AccuWeather page is not for the airport location.");
+  const place = [...html.matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g)]
+    .map((match) => jsonOrNull(match[1])).find((row) => row?.["@type"] === "Place");
+  const name = text(place?.name);
+  if (!/incheon/i.test(name ?? "") || !/airport/i.test(name ?? "")) throw new ForecastLocationError(`AccuWeather page names ${name ?? "nothing"}, not the airport.`);
+  if (place?.geo?.addressCountry !== "KR") throw new ForecastLocationError("AccuWeather page is not for South Korea.");
+  const latitude = Number(place?.geo?.latitude), longitude = Number(place?.geo?.longitude);
+  const distanceKm = distanceFromAirport("AccuWeather", latitude, longitude);
+  if (!/"timeZoneName"\s*:\s*"Asia\/Seoul"/.test(html)) throw new Error("AccuWeather page is not in Seoul time.");
+  const unit = /class="header-temp">[^<]*<span class="unit">([CF])<\/span>/.exec(html)?.[1];
+  if (!unit) throw new Error("AccuWeather page does not show its temperature unit.");
+  const today = kstDate(capturedAt);
+  const rows = html.split('class="daily-wrapper"').slice(1, ACCUWEATHER_PAGE_ROWS + 1).flatMap((block) => {
+    const href = /class="daily-forecast-card[^"]*"\s+href="([^"]+)"/.exec(block)?.[1] ?? "";
+    if (!href.toLowerCase().includes(`/${key}/`)) throw new ForecastLocationError("AccuWeather page row does not link to the airport location.");
+    const monthDay = /module-header sub date">\s*(\d{1,2})\/(\d{1,2})\s*</.exec(block);
+    const high = /class="high">\s*(-?\d+)(?:&#xB0;|°)/.exec(block)?.[1];
+    if (!monthDay || high === undefined) return [];
+    const suffix = `-${monthDay[1].padStart(2, "0")}-${monthDay[2].padStart(2, "0")}`;
+    const thisYear = `${today.slice(0, 4)}${suffix}`;
+    // A late-December page lists January dates, which belong to the next year.
+    const date = thisYear < shiftDate(today, -7) ? `${Number(today.slice(0, 4)) + 1}${suffix}` : thisYear;
+    return [{ date, maxTempC: unit === "F" ? tenth(((Number(high) - 32) * 5) / 9) : Number(high) }];
+  });
+  if (!rows.length) throw new Error("AccuWeather page has no daily highs.");
+  return { rows, location: { name, locationKey: key, latitude, longitude, distanceKm, verifiedAt: capturedAt } };
 }
 
 /**

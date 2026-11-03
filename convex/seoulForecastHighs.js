@@ -41,34 +41,31 @@ export const getProviderHighs = queryGeneric({
   },
 });
 
-const BACKFILL_SOURCES = {
-  kma: { table: "seoulKmaForecastCaptures", rows: (capture) => (capture.status === "ok" && capture.source === "kma_amo_airport" ? capture.dailyRows : []) },
-  weathercom: { table: "seoulForecastCaptures", rows: (capture) => (capture.weathercomStatus === "ok" ? capture.weathercomForecastDays : []) },
-};
-const backfillProvider = v.union(v.literal("kma"), v.literal("weathercom"));
-
+// KMA only: Weather.com captures from before November 3, 2026 were requested for a
+// point 5.8 km from the airport's reference point, so they are not replayed.
 export const backfillPage = internalMutationGeneric({
-  args: { provider: backfillProvider, after: v.number(), before: v.number() },
-  handler: async (ctx, { provider, after, before }) => {
-    if (forecastHighAccess(forecastHighProviderById(provider), process.env) !== "approved") return { status: "approval_required" };
-    const source = BACKFILL_SOURCES[provider];
-    const captures = await ctx.db.query(source.table)
+  args: { after: v.number(), before: v.number() },
+  handler: async (ctx, { after, before }) => {
+    if (forecastHighAccess(forecastHighProviderById("kma"), process.env) !== "approved") return { status: "approval_required" };
+    const captures = await ctx.db.query("seoulKmaForecastCaptures")
       .withIndex("by_station_capturedAt", (q) => q.eq("stationIcao", "RKSI").gt("capturedAt", after).lt("capturedAt", before))
       .order("asc").take(BACKFILL_PAGE);
-    for (const capture of captures) await recordForecastHighs(ctx, provider, source.rows(capture), capture.capturedAt);
+    for (const capture of captures) {
+      if (capture.status === "ok" && capture.source === "kma_amo_airport") await recordForecastHighs(ctx, "kma", capture.dailyRows, capture.capturedAt);
+    }
     return { status: captures.length < BACKFILL_PAGE ? "done" : "more", count: captures.length, after: captures.at(-1)?.capturedAt ?? after };
   },
 });
 
-/** Replays stored captures into the change rows, oldest first. Running it again changes nothing. */
+/** Replays stored KMA captures into the change rows, oldest first. Running it again changes nothing. */
 export const backfillChanges = internalActionGeneric({
-  args: { provider: backfillProvider, startDate: v.string(), endDate: v.string() },
-  handler: async (ctx, { provider, startDate, endDate }) => {
+  args: { startDate: v.string(), endDate: v.string() },
+  handler: async (ctx, { startDate, endDate }) => {
     if (!isValidDate(startDate) || !isValidDate(endDate) || endDate < startDate) throw new Error("startDate and endDate must be valid dates, in order");
     const before = Date.parse(`${shiftDate(endDate, 1)}T00:00:00+09:00`);
     let after = Date.parse(`${startDate}T00:00:00+09:00`) - 1, captures = 0;
     for (;;) {
-      const page = await ctx.runMutation(internal.seoulForecastHighs.backfillPage, { provider, after, before });
+      const page = await ctx.runMutation(internal.seoulForecastHighs.backfillPage, { after, before });
       if (page.status === "approval_required") return { status: "approval_required", captures };
       captures += page.count;
       if (page.status === "done") return { status: "done", captures };

@@ -9,7 +9,8 @@ import * as weather from "../convex/seoulWeather.js";
 import { forecastHighsInCapture, verifyAccuweatherLocation, verifyWeathercomLocation } from "../convex/lib/seoulForecastHighs.js";
 
 const MODULES = { seoulForecastHighs: highs, seoulAccuweatherForecast: accuweather, seoulKmaForecast: kma, seoulWeather: weather };
-const ENV_KEYS = ["KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED", "ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED", "ACCUWEATHER_RKSI_API_KEY", "WEATHERCOM_API_KEY"];
+const ENV_KEYS = ["KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED", "ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED", "ACCUWEATHER_RKSI_API_KEY", "ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED", "WEATHERCOM_API_KEY"];
+const WEATHERCOM_PLACE = "f8cd47a1099bb7ec9f00dd29090cac2750323e239121a279973eef1266f45e17";
 const API_KEY = "fixture-accuweather-key";
 const DATE = "2026-11-03", NEXT = "2026-11-04";
 const at = (time, date = DATE) => Date.parse(`${date}T${time.length === 5 ? `${time}:00` : time}+09:00`);
@@ -291,8 +292,12 @@ test("a capture cannot change a finished day, and disagreeing rows for a date ar
 function weathercomApi(h, { high = 17, location = { icaoCode: "RKSI", airportName: "Incheon International Airport", latitude: 37.469, longitude: 126.451 }, locationStatus = 200, dailyStatus = 200 } = {}) {
   const dates = [DATE, NEXT, "2026-11-05", "2026-11-06", "2026-11-07"];
   h.setFetch(async (url) => {
-    assert.equal(url.searchParams.get("icaoCode"), "RKSI");
-    if (url.pathname === "/v3/location/point") return json({ location }, locationStatus);
+    assert.equal(url.searchParams.get("icaoCode"), null);
+    if (url.pathname === "/v3/location/point") {
+      assert.equal(url.searchParams.get("placeid"), WEATHERCOM_PLACE);
+      return json({ location }, locationStatus);
+    }
+    assert.equal(url.searchParams.get("geocode"), "37.469,126.451");
     if (url.pathname === "/v3/wx/forecast/daily/5day") {
       return json({ validTimeLocal: dates.map((date) => `${date}T07:00:00+0900`), calendarDayTemperatureMax: dates.map((_, index) => high - index), calendarDayTemperatureMin: dates.map(() => 7) }, dailyStatus);
     }
@@ -314,6 +319,7 @@ test("Weather.com highs are recorded only while its location record still resolv
   for (const [time, options] of [
     ["09:17", { high: 25, location: { icaoCode: "RKSS", latitude: 37.558, longitude: 126.79 } }],
     ["09:32", { high: 25, location: { icaoCode: "RKSI", latitude: 37.5665, longitude: 126.978 } }],
+    ["09:40", { high: 25, location: { icaoCode: "RKSI", latitude: 37.49, longitude: 126.5 } }], // the 5.8 km case
     ["09:47", { high: 25, locationStatus: 500 }],
   ]) {
     weathercomApi(h, options);
@@ -323,9 +329,10 @@ test("Weather.com highs are recorded only while its location record still resolv
     row = await providerRow(h, "weathercom");
     assert.deepEqual([row.status, row.location], ["location_unverified", null], time);
   }
-  assert.equal(h.tables.seoulForecastCaptures.length, 4, "the capture itself is kept for the backend's existing uses");
+  assert.equal(h.tables.seoulForecastCaptures.length, 5, "the capture itself is kept for the backend's existing uses");
   assert.equal(h.tables.seoulForecastCaptures[1].weathercomForecastDays[0].maxTempC, 25);
   assert.match(h.tables.seoulForecastCaptures[1].weathercomLocationError, /RKSS/);
+  assert.match(h.tables.seoulForecastCaptures[3].weathercomLocationError, /\(37\.49, 126\.5\) is \d+\.\d km from RKSI/, "a refused point is named");
 
   weathercomApi(h, { dailyStatus: 500 });
   h.setNow(at("10:02"));
@@ -379,16 +386,14 @@ test("the query is limited to RKSI and valid dates, and flags a list it had to c
   assert.equal(row.changes.at(-1).firstSeenAt, at("00:00") + 61 * 60_000, "the newest changes are kept");
 });
 
-test("backfill replays stored captures once, joins live rows and respects the KMA flag", async () => {
+test("backfill replays stored KMA captures once, joins live rows and respects the KMA flag", async () => {
   const h = harness();
   h.seed("seoulKmaForecastCaptures", [
     kmaCapture(at("23:00", "2026-11-02"), 15, { captureDate: "2026-11-02" }),
     ...Array.from({ length: 30 }, (_, index) => kmaCapture(at("00:01") + index * 600_000, index < 20 ? 16 : 17)),
     kmaCapture(at("08:00"), 0, { status: "error", dailyRows: [] }),
   ]);
-  h.seed("seoulForecastCaptures", [{ stationIcao: "RKSI", capturedAt: at("01:02"), status: "ok", weathercomStatus: "ok",
-    weathercomForecastDays: [{ date: DATE, maxTempC: 17 }] }, { stationIcao: "RKSI", capturedAt: at("01:17"), status: "error", weathercomStatus: "error", weathercomForecastDays: [] }]);
-  const args = { provider: "kma", startDate: "2026-11-02", endDate: DATE };
+  const args = { startDate: "2026-11-02", endDate: DATE };
   assert.deepEqual(await h.call(highs, "backfillChanges", args), { status: "approval_required", captures: 0 });
   assert.deepEqual(h.tables.seoulForecastHighChanges, []);
   h.env.KMA_AMO_AIRPORT_FORECAST_ACCESS_APPROVED = "true";
@@ -402,15 +407,124 @@ test("backfill replays stored captures once, joins live rows and respects the KM
   assert.deepEqual(h.tables.seoulForecastHighStatus, [], "old captures never overwrite the current status");
   await h.call(highs, "backfillChanges", args);
   assert.deepEqual(changes(h, "kma"), expected, "a second run changes nothing");
-  assert.deepEqual(await h.call(highs, "backfillChanges", { provider: "weathercom", startDate: DATE, endDate: DATE }), { status: "done", captures: 2 });
-  assert.deepEqual(changes(h, "weathercom").map((row) => row.highC), [17]);
-  await assert.rejects(h.call(highs, "backfillChanges", { provider: "weathercom", startDate: NEXT, endDate: DATE }), /in order/);
+  await assert.rejects(h.call(highs, "backfillChanges", { startDate: NEXT, endDate: DATE }), /in order/);
 });
 
 test("AccuWeather's logo and link come with its row, and only its row", async () => {
   const h = approvedAccuweather();
   const { providers } = await h.call(highs, "getProviderHighs", { date: DATE });
   assert.deepEqual(providers.map((row) => [row.id, row.attribution?.href ?? null]), [["kma", undefined ?? null], ["weathercom", null], ["accuweather", "https://www.accuweather.com"]]);
+});
+
+// A synthetic page with the structure AccuWeather's 10-day page had on November 3, 2026.
+const pageCard = (index, monthDay, high, key = "3602_poi") => `<div class="daily-wrapper" data-qa="dailyCard${index}"> <a class="daily-forecast-card " href="/en/kr/incheon-international-airport/${key}/weather-today/${key}"> <div class="info"> <h2 class="date"> <span class="module-header dow date">Tue</span> <span class="module-header sub date">${monthDay}</span> </h2> <div class="temp"> <span class="high">${high}</span> <span class="low">/51&#xB0;</span> </div> </div> </a> </div>`;
+const accuweatherPage = ({ key = "3602_poi", name = "Incheon International Airport, Incheon, South Korea", latitude = "37.469", longitude = "126.451", country = "KR", timeZone = "Asia/Seoul", unit = "F", cards } = {}) => `<html><head>
+  <link rel="canonical" href="https://www.accuweather.com/en/kr/incheon-international-airport/${key}/10-day-weather-forecast/${key}" />
+  <script type="application/ld+json">{ "@context": "https://schema.org", "@type": "Organization", "name": "AccuWeather" }</script>
+  <script type="application/ld+json">{ "@context": "https://schema.org", "@type": "Place", "geo": { "@type": "GeoCoordinates", "latitude": "${latitude}", "longitude": "${longitude}", "addressCountry": "${country}" }, "name": "${name}" }</script>
+  <script>var pageData = {"gmtOffset":9.0,"timeZone":"KST","timeZoneName":"${timeZone}"};</script></head>
+  <body><span class="header-temp">61&#xB0;<span class="unit">${unit}</span></span>
+  ${cards ?? [pageCard(0, "11/3", "65&#xB0;"), pageCard(1, "11/4", "63&#xB0;"), pageCard(2, "11/5", "61&#xB0;"), pageCard(3, "11/6", "49&#xB0;"), pageCard(4, "11/7", "47&#xB0;"), pageCard(5, "11/8", "52&#xB0;")].join("")}
+  </body></html>`;
+const htmlResponse = (body, status = 200) => ({ ok: status < 400, status, text: async () => body, json: async () => { throw new Error("not JSON"); } });
+function pageApproved(page = accuweatherPage()) {
+  const h = harness();
+  h.env.ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED = "true";
+  h.setFetch(async () => htmlResponse(page));
+  h.setNow(at("09:09"));
+  return h;
+}
+const collectPage = (h) => h.call(accuweather, "collectAirportPage");
+
+test("the page reader does nothing unless its own flag is exactly true", async () => {
+  for (const value of [undefined, "", "false", "TRUE"]) {
+    const h = harness();
+    if (value !== undefined) h.env.ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED = value;
+    h.env.ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED = "true"; // the API's approval does not cover the page
+    h.setNow(at("09:09"));
+    assert.deepEqual(await collectPage(h), { status: "approval_required" });
+    assert.deepEqual(h.requests, []);
+    assert.deepEqual(h.tables.seoulForecastHighStatus, []);
+  }
+  const h = harness();
+  h.setNow(at("09:09"));
+  assert.equal((await providerRow(h, "accuweather")).access, "approval_required");
+});
+
+test("the page reader makes one plain, identified request and records the airport's highs in Celsius", async () => {
+  const h = pageApproved();
+  assert.deepEqual(await collectPage(h), { status: "ok" });
+  assert.equal(h.requests.length, 1);
+  const [{ url, options }] = h.requests;
+  assert.equal(url, "https://www.accuweather.com/en/kr/incheon-international-airport/3602_poi/10-day-weather-forecast/3602_poi");
+  assert.equal(options.headers["User-Agent"], "polypro-rksi-forecast/1.0");
+  assert.ok(!options.headers.Authorization, "no credential of any kind");
+  assert.equal(options.redirect, "error");
+  assert.deepEqual(h.tables.seoulForecastHighChanges.map((row) => [row.targetDate, row.highC]),
+    [[DATE, 18.3], [NEXT, 17.2], ["2026-11-05", 16.1], ["2026-11-06", 9.4], ["2026-11-07", 8.3]], "five days, as the API gives");
+  const row = await providerRow(h, "accuweather");
+  assert.deepEqual([row.access, row.status, row.location.locationKey, row.location.distanceKm], ["approved", "ok", "3602_poi", 1.3]);
+  assert.equal(row.attribution.href, "https://www.accuweather.com", "the logo still comes with its data");
+  assert.deepEqual((await providerRow(h, "weathercom")).access, "approved");
+});
+
+test("a page in Celsius is taken as it is, and a page over New Year gets the right year", async () => {
+  const celsius = pageApproved(accuweatherPage({ unit: "C", cards: pageCard(0, "11/3", "18&#xB0;") }));
+  await collectPage(celsius);
+  assert.deepEqual(celsius.tables.seoulForecastHighChanges.map((row) => [row.targetDate, row.highC]), [[DATE, 18]]);
+  const newYear = pageApproved(accuweatherPage({ unit: "C", cards: pageCard(0, "12/31", "1&#xB0;") + pageCard(1, "1/1", "-3&#xB0;") }));
+  newYear.setNow(at("09:09", "2026-12-31"));
+  await collectPage(newYear);
+  assert.deepEqual(newYear.tables.seoulForecastHighChanges.map((row) => [row.targetDate, row.highC]), [["2026-12-31", 1], ["2027-01-01", -3]]);
+});
+
+test("a page that cannot be shown to be the airport records nothing", async () => {
+  const wrong = [
+    { key: "223658" }, { name: "Incheon, South Korea" }, { country: "JP" }, { latitude: "37.5665", longitude: "126.978" },
+    { latitude: "unknown" }, { cards: pageCard(0, "11/3", "65&#xB0;", "223658") },
+  ];
+  for (const fields of wrong) {
+    const h = pageApproved(accuweatherPage(fields));
+    assert.deepEqual(await collectPage(h), { status: "location_unverified" }, JSON.stringify(fields));
+    assert.deepEqual(h.tables.seoulForecastHighChanges, []);
+    const row = await providerRow(h, "accuweather");
+    assert.deepEqual([row.status, row.location], ["location_unverified", null]);
+  }
+});
+
+test("a refused or changed page is a failed check, and a refusal is not retried another way", async () => {
+  const refused = pageApproved();
+  refused.setFetch(async () => htmlResponse("Access Denied", 403));
+  assert.deepEqual(await collectPage(refused), { status: "error" });
+  assert.equal(refused.requests.length, 1);
+  assert.match(refused.tables.seoulForecastHighStatus[0].lastError, /AccuWeather page 403/);
+  for (const page of [accuweatherPage({ timeZone: "Asia/Tokyo" }), accuweatherPage({ unit: "K" }), accuweatherPage({ cards: pageCard(0, "11/3", "--") }), accuweatherPage({ cards: "" }), "<html></html>".padEnd(2_000_001)]) {
+    const h = pageApproved(page);
+    const result = await collectPage(h);
+    assert.notEqual(result.status, "ok", page.slice(0, 40));
+    assert.deepEqual(h.tables.seoulForecastHighChanges, []);
+  }
+});
+
+test("removing the page flag discards a result in flight and hides stored highs; the API takes over once set up", async () => {
+  const revoked = pageApproved();
+  revoked.setFetch(async () => { delete revoked.env.ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED; return htmlResponse(accuweatherPage()); });
+  assert.deepEqual(await collectPage(revoked), { status: "approval_required" });
+  assert.deepEqual(revoked.tables.seoulForecastHighStatus, []);
+
+  const h = pageApproved();
+  await collectPage(h);
+  delete h.env.ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED;
+  const hidden = await providerRow(h, "accuweather");
+  assert.deepEqual([hidden.access, hidden.changes], ["approval_required", []]);
+
+  h.env.ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED = "true";
+  h.env.ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED = "true"; // the API's flag alone, without a key, does not stop the page
+  assert.deepEqual(await collectPage(h), { status: "ok" });
+  h.env.ACCUWEATHER_RKSI_API_KEY = API_KEY;
+  h.requests.length = 0;
+  assert.deepEqual(await collectPage(h), { status: "superseded" });
+  assert.deepEqual(h.requests, []);
 });
 
 test("the airport checks accept the locations seen on the providers' own pages", () => {

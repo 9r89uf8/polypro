@@ -36,7 +36,10 @@ by a later attempt.
   covers 10 AM to 11 PM and has no 9 AM value.
 - **Weather.com:** the newest capture in the same window whose hourly product
   succeeded and whose `weathercomHourlyCapturedAt` (response completion) is not
-  after 09:00, normally the 08:47 capture.
+  after 09:00, normally the 08:47 capture. Captures moved to the point on Weather.com's
+  airport page on November 3, 2026 at 12:51 KST
+  ([why](./seoul-forecast-highs.md#is-each-forecast-for-the-airport)), so locks from
+  November 4 on are for that point and earlier ones are not.
 - **Models:** one Open-Meteo request per model at 09:00 KST with
   `latitude=37.4602&longitude=126.4407&models=<id>&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high&timezone=Asia/Seoul&start_date=<date>&end_date=<date>&timeformat=unixtime`.
   The response does not name its model run, so the model's

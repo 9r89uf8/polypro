@@ -6,14 +6,18 @@ The [forecast highs specification](./seoul-forecast-highs.md) adds Weather.com a
 AccuWeather beside KMA's daily high and records when each changes, in
 `seoulForecastHighChanges` and `seoulForecastHighStatus`. KMA and Weather.com use their
 existing collectors; Weather.com gains a location request on every run, and its high is
-recorded only while that request resolves to the airport. AccuWeather is a new external
-source through its official API, for the airport's own location `3602_poi`, behind the
-new `ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED` flag and `ACCUWEATHER_RKSI_API_KEY`, with
-crons `seoul_accuweather_forecast_every_15_min` and
-`seoul_accuweather_forecast_retention`. Its terms limit kept data to two weeks, require
-its logo and restrict the cheapest plan to non-commercial use, so the owner must confirm
-the scope before activation. KMA remains the canonical high and peak time; neither other
-provider feeds any model.
+recorded only while that request confirms the airport. That check found `icaoCode=RKSI`
+resolves 5.8 km from the reference point, so Weather.com's daily and hourly requests now use
+the point on its airport page. AccuWeather is a new external source through its official
+API, for the airport's own location `3602_poi`, behind the new
+`ACCUWEATHER_RKSI_FORECAST_ACCESS_APPROVED` flag and `ACCUWEATHER_RKSI_API_KEY`, with crons
+`seoul_accuweather_forecast_every_15_min` and `seoul_accuweather_forecast_retention`. Its
+terms limit kept data to two weeks, require its logo and restrict the cheapest plan to
+non-commercial use, so the owner must confirm the scope before activation. A stopgap reader
+for its public page sits behind `ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED` with cron
+`seoul_accuweather_public_page_every_30_min`, deployed off because the website's terms
+prohibit scraping. KMA remains the canonical high and peak time; neither other provider
+feeds any model.
 
 ## Stations around the airport — November 2, 2026
 

@@ -38,6 +38,12 @@ const WEATHERCOM_API_BASE_URL = "https://api.weather.com";
 const WEATHERCOM_DAILY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/daily/5day`;
 const WEATHERCOM_HOURLY_FORECAST_URL = `${WEATHERCOM_API_BASE_URL}/v3/wx/forecast/hourly/10day`;
 const WEATHERCOM_LOCATION_POINT_URL = `${WEATHERCOM_API_BASE_URL}/v3/location/point`;
+// The location on Weather.com's Incheon airport page, whose record names RKSI. Its
+// forecast is for this point; asking for icaoCode=RKSI instead resolved to a point
+// 5.8 km from the airport's reference point.
+const WEATHERCOM_RKSI_PLACE_ID =
+  "f8cd47a1099bb7ec9f00dd29090cac2750323e239121a279973eef1266f45e17";
+const WEATHERCOM_RKSI_GEOCODE = "37.469,126.451";
 const DEFAULT_WEATHERCOM_LANGUAGE = "en-US";
 const WEATHERCOM_FALLBACK_API_KEY = "71f92ea9dd2f4790b92ea9dd2f779061";
 const RKSI_REPRESENTATIVE_RUNWAY_NO = "2";
@@ -342,7 +348,7 @@ function getWeatherComApiKey() {
 }
 
 async function fetchWeatherComDailyForecast({
-  icaoCode,
+  geocode,
   durationDays,
   unit,
   language,
@@ -350,7 +356,7 @@ async function fetchWeatherComDailyForecast({
   timeZone,
 }) {
   const url = new URL(WEATHERCOM_DAILY_FORECAST_URL);
-  url.searchParams.set("icaoCode", icaoCode);
+  url.searchParams.set("geocode", geocode);
   url.searchParams.set("units", toWeatherComUnits(unit));
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
@@ -444,14 +450,14 @@ function normalizeWeatherComHourlyRows(payload, requestedUnit, timeZone) {
 }
 
 async function fetchWeatherComHourlyForecast({
-  icaoCode,
+  geocode,
   unit,
   language,
   apiKey,
   timeZone,
 }) {
   const url = new URL(WEATHERCOM_HOURLY_FORECAST_URL);
-  url.searchParams.set("icaoCode", icaoCode);
+  url.searchParams.set("geocode", geocode);
   url.searchParams.set("units", toWeatherComUnits(unit));
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
@@ -480,11 +486,11 @@ async function fetchWeatherComHourlyForecast({
   return rows;
 }
 
-// Confirms that the icaoCode the forecasts are requested with still resolves to
-// the airport. Its result decides whether the daily high reaches the day page.
-async function fetchWeatherComAirportLocation({ icaoCode, language, apiKey }) {
+// Confirms that the place on Weather.com's airport page is still the airport. Its
+// result decides whether the daily high reaches the day page.
+async function fetchWeatherComAirportLocation({ placeId, language, apiKey }) {
   const url = new URL(WEATHERCOM_LOCATION_POINT_URL);
-  url.searchParams.set("icaoCode", icaoCode);
+  url.searchParams.set("placeid", placeId);
   url.searchParams.set("language", language);
   url.searchParams.set("format", "json");
   url.searchParams.set("apiKey", apiKey);
@@ -670,7 +676,7 @@ export const collectForecastSnapshot = internalActionGeneric({
         try {
           return {
             location: await fetchWeatherComAirportLocation({
-              icaoCode: stationIcao,
+              placeId: WEATHERCOM_RKSI_PLACE_ID,
               language: DEFAULT_WEATHERCOM_LANGUAGE,
               apiKey,
             }),
@@ -682,7 +688,7 @@ export const collectForecastSnapshot = internalActionGeneric({
       (async () => {
         try {
           const rows = await fetchWeatherComDailyForecast({
-            icaoCode: stationIcao,
+            geocode: WEATHERCOM_RKSI_GEOCODE,
             durationDays: 5,
             unit: "metric",
             language: DEFAULT_WEATHERCOM_LANGUAGE,
@@ -701,7 +707,7 @@ export const collectForecastSnapshot = internalActionGeneric({
       (async () => {
         try {
           const rows = await fetchWeatherComHourlyForecast({
-            icaoCode: stationIcao,
+            geocode: WEATHERCOM_RKSI_GEOCODE,
             unit: "metric",
             language: DEFAULT_WEATHERCOM_LANGUAGE,
             apiKey,

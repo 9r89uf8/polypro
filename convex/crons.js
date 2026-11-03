@@ -548,8 +548,18 @@ crons.cron(
   {},
 );
 
+// The stopgap until an AccuWeather key exists. Nothing is requested unless
+// ACCUWEATHER_RKSI_PUBLIC_PAGE_ACCESS_APPROVED is exactly "true", and it stops once
+// the official API above is set up.
+crons.cron(
+  "seoul_accuweather_public_page_every_30_min",
+  "9,39 * * * *",
+  internal.seoulAccuweatherForecast.collectAirportPage,
+  {},
+);
+
 // AccuWeather's terms limit keeping its data to two weeks. This only deletes, so
-// it runs regardless of the flag.
+// it runs regardless of the flags.
 crons.cron(
   "seoul_accuweather_forecast_retention",
   "12 * * * *",
